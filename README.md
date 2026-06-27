@@ -78,6 +78,7 @@ Open **http://127.0.0.1:8000**
 | `/import` | Manual WhatsApp message import |
 | `/activity` | Import history |
 | `/whatsapp` | Create and connect Evolution API WhatsApp instance |
+| `POST /webhook/evolution` | Evolution API webhook receiver (automatic imports) |
 
 ---
 
@@ -100,7 +101,19 @@ Evolution API client module: `evolution_client.py`
 
 ---
 
-## 5. Other CLI tools
+## 5. Automatic imports via webhook (Sprint 18)
+
+1. Keep the dashboard running: `uvicorn app:app --reload`
+2. Register Evolution API to POST to `http://<host>:8000/webhook/evolution`
+3. Send a message in a WhatsApp group your linked account is in
+4. Check the uvicorn console for `[Evolution webhook]` logs
+5. Confirm the import on **http://127.0.0.1:8000/activity**
+
+Full setup (Docker networking, ngrok, curl examples): [docs/evolution_webhook_setup.md](docs/evolution_webhook_setup.md)
+
+---
+
+## 6. Other CLI tools
 
 ```powershell
 python watch_parser.py    # Regex parser
@@ -116,6 +129,7 @@ python search.py          # Search CLI
 MRV4ULT AI/
 ├── app.py                  # FastAPI dashboard
 ├── evolution_client.py     # Evolution API v2 client
+├── evolution_webhook.py    # Evolution webhook → collector
 ├── whatsapp_collector.py   # Collector → ingest pipeline
 ├── ingest.py               # Import pipeline
 ├── search.py               # Search engine
@@ -123,6 +137,7 @@ MRV4ULT AI/
 ├── docker-compose.yml      # Evolution API + Postgres
 ├── docs/
 │   ├── evolution_setup.md
+│   ├── evolution_webhook_setup.md
 │   └── whatsapp_collector_design.md
 └── templates/              # Dashboard UI
 ```
@@ -137,5 +152,4 @@ MRV4ULT AI/
 | QR code never appears | Confirm Evolution API logs; try recreating the instance from `/whatsapp`. |
 | Database provider error | Use `DATABASE_PROVIDER=postgresql` — see [evolution_setup.md](docs/evolution_setup.md). |
 | No activity after import | Apply `import_logs` table from `docs/schema.sql`. |
-
-Webhooks and automatic message import are **not** enabled yet.
+| Webhook not firing | See [evolution_webhook_setup.md](docs/evolution_webhook_setup.md) — URL must be reachable from Docker. |

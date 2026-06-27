@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from evolution_client import (
     get_instance_status,
     get_whatsapp_page_state,
 )
+from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
 from search import (
     _display_value,
@@ -41,6 +43,7 @@ from search import (
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_WHATSAPP_INSTANCE = get_default_instance_name()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MRV4ULT AI Dashboard")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -353,6 +356,34 @@ async def whatsapp_status() -> JSONResponse:
         )
 
     return JSONResponse(state)
+
+
+@app.post("/webhook/evolution")
+async def evolution_webhook(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            {"status": "error", "reason": "invalid JSON"},
+            status_code=400,
+        )
+
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            {"status": "error", "reason": "payload must be a JSON object"},
+            status_code=400,
+        )
+
+    try:
+        result = handle_evolution_webhook(payload)
+    except WebhookProcessingError as exc:
+        logger.warning("Evolution webhook skipped: %s", exc)
+        return JSONResponse({"status": "ignored", "reason": str(exc)}, status_code=200)
+    except Exception as exc:
+        logger.exception("Evolution webhook failed")
+        return JSONResponse({"status": "error", "reason": str(exc)}, status_code=200)
+
+    return JSONResponse(result, status_code=200)
 
 
 @app.get("/activity", response_class=HTMLResponse, name="activity_list")
