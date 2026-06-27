@@ -216,7 +216,8 @@ def ingest_message(
     summary["message_id"] = message["id"]
     summary["import_time"] = message_received_at.isoformat()
 
-    import_status = _import_status(summary, parse_status)
+    import_status, status_reason = _import_status(summary, parse_status, parsed["watches"])
+    summary["status_reason"] = status_reason
     import_log = insert_import_log(
         message_id=message["id"],
         import_time=message_received_at,
@@ -413,14 +414,57 @@ def _parse_status(parsed: dict[str, Any]) -> str:
     return "partial"
 
 
-def _import_status(summary: IngestSummary, parse_status: str) -> str:
+def _watch_missing_fields(watch: dict[str, Any]) -> list[str]:
+    """Return important watch fields missing from a parsed watch (ingest-level check only)."""
+    missing: list[str] = []
+    if not watch.get("brand"):
+        missing.append("brand")
+    if not watch.get("reference"):
+        missing.append("reference")
+    if (
+        watch.get("original_price") is None
+        and watch.get("price") is None
+        and watch.get("usd_price") is None
+    ):
+        missing.append("price")
+    return missing
+
+
+def _import_status(
+    summary: IngestSummary,
+    parse_status: str,
+    watches: list[dict[str, Any]],
+) -> tuple[str, str]:
     if parse_status == "failed":
-        return "error"
+        return "error", "Technical failure during parsing."
+
     if summary["watches_parsed"] == 0:
-        return "warning"
-    if summary["duplicate_offers"] > 0 or parse_status == "partial":
-        return "warning"
-    return "success"
+        return "no_watch_detected", "No watch offer was detected in this message."
+
+    watches_needing_review: list[str] = []
+    for line_index, watch in enumerate(watches, start=1):
+        missing = _watch_missing_fields(watch)
+        if missing:
+            watches_needing_review.append(
+                f"watch {line_index}: missing {', '.join(missing)}"
+            )
+
+    if watches_needing_review:
+        reason = "Important fields are missing — " + "; ".join(watches_needing_review)
+        return "warning", reason
+
+    duplicate_count = summary["duplicate_offers"]
+    if duplicate_count:
+        return (
+            "success",
+            f"Successfully parsed {summary['watches_parsed']} watch offer(s). "
+            f"{duplicate_count} duplicate offer(s) were skipped.",
+        )
+
+    return (
+        "success",
+        f"Successfully parsed {summary['watches_parsed']} watch offer(s).",
+    )
 
 
 def main() -> None:

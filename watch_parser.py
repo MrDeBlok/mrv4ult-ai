@@ -19,12 +19,20 @@ BRAND_ALIASES: dict[str, str] = {
     "ap": "Audemars Piguet",
     "audemars": "Audemars Piguet",
     "audemars piguet": "Audemars Piguet",
+    "vc": "Vacheron Constantin",
+    "vacheron": "Vacheron Constantin",
+    "vacheron constantin": "Vacheron Constantin",
     "richard mille": "Richard Mille",
     "rm": "Richard Mille",
-    "fp journe": "FP Journe",
-    "fpj": "FP Journe",
-    "f.p. journe": "FP Journe",
-    "f p journe": "FP Journe",
+    "fp journe": "F.P. Journe",
+    "fpj": "F.P. Journe",
+    "f.p. journe": "F.P. Journe",
+    "f p journe": "F.P. Journe",
+    "als": "A. Lange & Söhne",
+    "a lange": "A. Lange & Söhne",
+    "a lange & sohne": "A. Lange & Söhne",
+    "a. lange & sohne": "A. Lange & Söhne",
+    "lange": "A. Lange & Söhne",
 }
 
 SUPPORTED_BRANDS = frozenset(BRAND_ALIASES.values())
@@ -39,6 +47,10 @@ DIAL_ABBREVIATIONS: dict[str, str] = {
     "black": "Black",
     "white": "White",
     "purple": "Purple",
+    "grey": "Grey",
+    "gray": "Grey",
+    "rhodium": "Rhodium",
+    "salmon": "Salmon",
 }
 
 DIAL_ABBREV_PATTERN = re.compile(
@@ -53,6 +65,8 @@ DIAL_COLORS = (
     "olive",
     "grey",
     "gray",
+    "colour",
+    "color",
     "rhodium",
     "salmon",
     "silver",
@@ -69,6 +83,11 @@ DIAL_COLORS = (
     "skeleton",
     "smoke",
     "sand",
+    "blue",
+    "green",
+    "black",
+    "white",
+    "purple",
 )
 
 BRACELET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -80,8 +99,13 @@ BRACELET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bunworn\s+complete\b", re.I), "unworn complete"),
-    (re.compile(r"\bwatch\s+only\b", re.I), "watch only"),
+    (re.compile(r"\bbox\s+and\s+papers\b", re.I), "full set"),
     (re.compile(r"\bfull\s+set\b", re.I), "full set"),
+    (re.compile(r"\bwatch\s+only\b", re.I), "watch only"),
+    (re.compile(r"\bbox\s+only\b", re.I), "box only"),
+    (re.compile(r"\bpapers?\s+only\b", re.I), "papers only"),
+    (re.compile(r"\bwith\s+papers\b", re.I), "papers"),
+    (re.compile(r"\bpapers\b", re.I), "papers"),
     (re.compile(r"\bcomplete\b", re.I), "complete"),
     (re.compile(r"\bstickered\b", re.I), "stickered"),
     (re.compile(r"\bunworn\b", re.I), "unworn"),
@@ -100,28 +124,36 @@ OFFER_PATTERN = re.compile(r"\b(fs|for\s+sale|asking|avail(?:able)?|stock)\b", r
 HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*$", re.I)
 
 NEW_CARD_DATE_PATTERN = re.compile(r"\bn(\d{1,2})/(\d{2})\b", re.I)
+NEW_CARD_DATE_MMYyyy_PATTERN = re.compile(r"\bnew\s+(\d{1,2})/(\d{4})\b", re.I)
+CARD_MMYyyy_PATTERN = re.compile(r"\b(\d{1,2})/(\d{4})\b")
 USED_YEAR_PATTERN = re.compile(r"\bused\s+(\d{4})y\b", re.I)
+YEAR_SUFFIX_PATTERN = re.compile(r"\b(19|20)\d{2}\s*y\b", re.I)
 STANDALONE_YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
 
 BRAND_PATTERN = re.compile(
     r"\b("
     r"rolex|rlx|patek(?:\s+philippe)?|pp|audemars(?:\s+piguet)?|ap|"
+    r"vacheron(?:\s+constantin)?|vc|"
+    r"a\.?\s*lange(?:\s*&\s*s[öo]hne)?|als|lange|"
     r"richard\s+mille|rm|fp\s*journe|fpj|f\.?\s*p\.?\s*journe"
     r")\b",
     re.I,
 )
 
 DIAL_PATTERN = re.compile(
-    r"\b(" + "|".join(DIAL_COLORS) + r")\b(?:\s+dial)?",
+    r"\b(" + "|".join(DIAL_COLORS) + r")\b(?:\s+(?:dial|colour|color))?",
     re.I,
 )
 
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
-    (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s]\d{2,3})?)\b", re.I), "Richard Mille"),
+    (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
     (re.compile(r"\b(\d{4}/[0-9A-Z]+)\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{4}[A-Za-z]-\d{3,})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b([12]\d{5}[A-Za-z]{0,4})\b", re.I), "Rolex"),
     (re.compile(r"\b(\d{5}[A-Za-z]{2,4})\b", re.I), "Audemars Piguet"),
+    (re.compile(r"\b(\d{4}[A-Za-z])\b", re.I), None),
+    (re.compile(r"\b([3456]\d{3})\b", re.I), "Patek Philippe"),
+    (re.compile(r"\b(\d{5})\b", re.I), None),
 ]
 
 SUPPORTED_CURRENCIES = frozenset({"USD", "HKD", "EUR", "CHF", "GBP", "SGD", "AED", "JPY"})
@@ -142,6 +174,43 @@ CURRENCY_CODE_PATTERN = r"usd|hkd|eur|chf|gbp|sgd|aed|jpy"
 FPJOURNE_REF_PATTERN = re.compile(
     r"\b(CB|CST|RS|CBPT|Tourbillon\s+Souverain|Chronom[eè]tre\s+Bleu|Octa)\b",
     re.I,
+)
+
+WATCH_MODEL_PATTERN = re.compile(
+    r"\b("
+    r"GMT(?:-Master(?:\s+II)?)?|Submariner|Daytona|Datejust|Day-Date|Explorer|"
+    r"Yacht-Master|Sea-Dweller|Sky-Dweller|Milgauss|Air-King|Nautilus|Aquanaut|"
+    r"Royal Oak|Overseas|World Time|Speedmaster|Reverso"
+    r")\b",
+    re.I,
+)
+
+NICKNAME_STOP_WORDS = frozenset(
+    word.lower()
+    for word in (
+        *DIAL_COLORS,
+        *DIAL_ABBREVIATIONS.keys(),
+        "new",
+        "used",
+        "full",
+        "set",
+        "watch",
+        "only",
+        "box",
+        "papers",
+        "jub",
+        "oys",
+        "oyster",
+        "jubilee",
+        "unworn",
+        "mint",
+        "bnib",
+        "nos",
+        "stickered",
+        "complete",
+        "deal",
+        "bh",
+    )
 )
 
 CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -192,8 +261,8 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
         ),
         None,
     ),
-    (re.compile(r"\b([\d.,]+)\s*(m|M)\b"), None),
-    (re.compile(r"\b([\d.,]+)\s*(k|K)\b"), None),
+    (re.compile(r"\b(\d+(?:\.\d+)?)\s*(m|M)\b"), None),
+    (re.compile(r"\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
 ]
 
 BULLET_PREFIX = re.compile(r"^[-*•]\s*")
@@ -201,13 +270,20 @@ NUMBER_PREFIX = re.compile(r"^\d+[\.)]\s*")
 
 NOTES_REMOVE_PATTERNS = [
     NEW_CARD_DATE_PATTERN,
+    NEW_CARD_DATE_MMYyyy_PATTERN,
+    CARD_MMYyyy_PATTERN,
     USED_YEAR_PATTERN,
+    YEAR_SUFFIX_PATTERN,
     BRAND_PATTERN,
     DIAL_ABBREV_PATTERN,
     DIAL_PATTERN,
     re.compile(r"\b(fs|for\s+sale|obo)\b", re.I),
     re.compile(r"\b(jub(?:ilee)?|oys(?:ter)?|rubber|leather)\b", re.I),
-    re.compile(r"\b(watch\s+only|full\s+set|complete|stickered|unworn|bnib|nos|mint|lnib|worn)\b", re.I),
+    re.compile(
+        r"\b(watch\s+only|full\s+set|box\s+only|papers?\s+only|with\s+papers|papers|"
+        r"complete|stickered|unworn|bnib|nos|mint|lnib|worn)\b",
+        re.I,
+    ),
 ]
 for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS:
     NOTES_REMOVE_PATTERNS.append(pattern)
@@ -221,6 +297,7 @@ def empty_watch() -> WatchDict:
         "brand": None,
         "reference": None,
         "model": None,
+        "nickname": None,
         "dial": None,
         "bracelet": None,
         "condition": None,
@@ -232,7 +309,12 @@ def empty_watch() -> WatchDict:
         "exchange_rate_to_usd": None,
         "production_year": None,
         "card_date": None,
+        "full_set": None,
+        "watch_only": None,
+        "box_only": None,
+        "papers": None,
         "notes": None,
+        "confidence": 0,
     }
 
 
@@ -246,12 +328,10 @@ def parse_message(message: str) -> ParseResult:
     current_brand: str | None = None
     watches: list[WatchDict] = []
 
-    for line in iter_content_lines(text):
-        if brand_only := _is_brand_only_line(line):
-            current_brand = brand_only
-            continue
-        if not _looks_like_watch_line(line):
-            continue
+    blocks, header_brand = _group_offer_lines(iter_content_lines(text))
+    current_brand = header_brand
+
+    for line in blocks:
         if watch := parse_watch_line(line, current_brand=current_brand):
             watches.append(watch)
 
@@ -274,6 +354,87 @@ def classify_message(text: str, watches: list[WatchDict], is_request: bool) -> s
     if len(watches) == 1:
         return "offer"
     return "unknown"
+
+
+def _group_offer_lines(lines: list[str]) -> tuple[list[str], str | None]:
+    """Merge continuation lines into single offer blocks."""
+    blocks: list[str] = []
+    current_brand: str | None = None
+
+    for line in lines:
+        if brand_only := _is_brand_only_line(line):
+            current_brand = brand_only
+            continue
+
+        if not blocks:
+            if _line_begins_offer(line):
+                blocks.append(line)
+            continue
+
+        if _starts_new_watch_block(line, blocks[-1]):
+            blocks.append(line)
+        elif _is_continuation_line(line, blocks[-1]):
+            blocks[-1] = f"{blocks[-1]}\n{line}"
+        elif _looks_like_watch_line(line):
+            blocks.append(line)
+
+    return blocks, current_brand
+
+
+def _line_begins_offer(line: str) -> bool:
+    if _extract_reference(line)[0]:
+        return True
+    if _extract_brand(line) and len(line.split()) >= 2:
+        return True
+    return _looks_like_watch_line(line)
+
+
+def _starts_new_watch_block(line: str, previous_block: str) -> bool:
+    reference = _extract_reference(line)[0]
+    if not reference:
+        return False
+    previous_reference = _extract_reference(previous_block)[0]
+    if not previous_reference:
+        return True
+    return reference != previous_reference
+
+
+def _is_continuation_line(line: str, previous_block: str) -> bool:
+    reference = _extract_reference(line)[0]
+    previous_reference = _extract_reference(previous_block)[0]
+
+    if reference and previous_reference:
+        return reference == previous_reference
+    if reference and not previous_reference:
+        return False
+
+    return _is_continuation_content(line)
+
+
+def _is_continuation_content(line: str) -> bool:
+    if _extract_price(line)[0] is not None:
+        return True
+    if NEW_CARD_DATE_MMYyyy_PATTERN.search(line):
+        return True
+    if NEW_CARD_DATE_PATTERN.search(line):
+        return True
+    if re.search(r"\bnew\b", line, re.I) and CARD_MMYyyy_PATTERN.search(line):
+        return True
+    if USED_YEAR_PATTERN.search(line):
+        return True
+    if _extract_condition(line):
+        return True
+    if re.search(
+        r"\bfull\s+set\b|\bwatch\s+only\b|\bbox\s+only\b|\bpapers\b|\bbh\s+deal\b",
+        line,
+        re.I,
+    ):
+        return True
+    if not _extract_brand(line) and not _extract_reference(line)[0]:
+        stripped = line.strip()
+        if stripped and len(stripped.split()) <= 10:
+            return True
+    return False
 
 
 def iter_content_lines(message: str) -> list[str]:
@@ -332,19 +493,24 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     brand = _extract_brand(text)
     if brand is None:
         brand = current_brand
-    reference, ref_brand = _extract_reference(text)
+    reference, ref_brand = _extract_reference(text, brand_hint=brand)
     if brand is None and ref_brand:
         brand = ref_brand
+    if brand is None and reference and ref_brand is None:
+        brand = _infer_brand_from_reference(reference)
     watch["brand"] = brand
     watch["reference"] = reference
 
-    if brand == "FP Journe" and watch["reference"] is None:
+    if brand == "F.P. Journe" and watch["reference"] is None:
         fpj_match = FPJOURNE_REF_PATTERN.search(text)
         if fpj_match:
             watch["reference"] = fpj_match.group(1)
 
+    watch["model"] = _extract_model(text)
+    watch["nickname"] = _extract_nickname(text, watch.get("reference"))
     watch["dial"] = _extract_dial(text)
     watch["bracelet"] = _extract_bracelet(text)
+    _apply_accessory_fields(watch, text)
 
     card_date, new_condition = _extract_card_date(text)
     watch["card_date"] = card_date
@@ -360,9 +526,106 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
             watch["production_year"] = _extract_standalone_year(text, watch)
 
     _apply_price_fields(watch, text)
-
-    watch["notes"] = _extract_notes(text, watch)
+    watch["notes"] = _extract_dealer_notes(text, watch) or _extract_notes(text, watch)
+    watch["confidence"] = _compute_confidence(watch)
     return watch
+
+
+def _extract_model(text: str) -> str | None:
+    match = WATCH_MODEL_PATTERN.search(text)
+    if not match:
+        return None
+    model = match.group(1)
+    if model.upper().startswith("GMT"):
+        return "GMT"
+    return model.title() if model.islower() else model
+
+
+def _extract_nickname(text: str, reference: str | None) -> str | None:
+    if not reference:
+        return None
+    pattern = re.compile(rf"{re.escape(reference)}\s+([A-Za-z][A-Za-z0-9-]*)", re.I)
+    match = pattern.search(text)
+    if not match:
+        return None
+    word = match.group(1)
+    if word.lower() in NICKNAME_STOP_WORDS:
+        return None
+    return word.lower()
+
+
+def _extract_dealer_notes(text: str, watch: WatchDict) -> str | None:
+    if "\n" not in text:
+        return None
+
+    fragments: list[str] = []
+    for line in text.splitlines():
+        fragment = _line_dealer_note_fragment(line.strip(), watch)
+        if fragment:
+            fragments.append(fragment)
+    if not fragments:
+        return None
+    return " ".join(fragments)
+
+
+def _line_dealer_note_fragment(line: str, watch: WatchDict) -> str | None:
+    if not line:
+        return None
+
+    remaining = line
+    for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS:
+        remaining = pattern.sub(" ", remaining)
+    remaining = BRAND_PATTERN.sub(" ", remaining)
+    remaining = WATCH_MODEL_PATTERN.sub(" ", remaining)
+    if watch.get("reference"):
+        remaining = re.sub(re.escape(watch["reference"]), " ", remaining, flags=re.I)
+    if watch.get("nickname"):
+        remaining = re.sub(
+            rf"\b{re.escape(watch['nickname'])}\b",
+            " ",
+            remaining,
+            flags=re.I,
+        )
+    remaining = NEW_CARD_DATE_MMYyyy_PATTERN.sub(" ", remaining)
+    remaining = NEW_CARD_DATE_PATTERN.sub(" ", remaining)
+    remaining = CARD_MMYyyy_PATTERN.sub(" ", remaining)
+    remaining = re.sub(r"\bnew\b", " ", remaining, flags=re.I)
+    remaining = DIAL_PATTERN.sub(" ", remaining)
+    remaining = DIAL_ABBREV_PATTERN.sub(" ", remaining)
+    remaining = re.sub(r"\s+", " ", remaining).strip(" ,.-")
+    if not remaining or len(remaining) < 2:
+        return None
+    return remaining
+
+
+def _apply_accessory_fields(watch: WatchDict, text: str) -> None:
+    lowered = text.lower()
+    watch["full_set"] = bool(re.search(r"\bfull\s+set\b|\bbox\s+and\s+papers\b", lowered))
+    watch["watch_only"] = bool(re.search(r"\bwatch\s+only\b", lowered))
+    watch["box_only"] = bool(re.search(r"\bbox\s+only\b", lowered))
+    watch["papers"] = bool(
+        re.search(r"\b(?:with\s+)?papers\b|\bpapers?\s+only\b", lowered)
+        and not watch["full_set"]
+    )
+
+
+def _compute_confidence(watch: WatchDict) -> int:
+    score = 0
+    if watch.get("brand"):
+        score += 20
+    if watch.get("reference"):
+        score += 25
+    if watch.get("original_price") is not None or watch.get("price") is not None:
+        score += 20
+    if watch.get("dial"):
+        score += 10
+    if watch.get("condition"):
+        score += 10
+    if watch.get("production_year") is not None or watch.get("card_date"):
+        score += 10
+    if watch.get("bracelet"):
+        score += 5
+    return min(score, 100)
 
 
 def _apply_price_fields(watch: WatchDict, text: str) -> None:
@@ -385,25 +648,38 @@ def _apply_price_fields(watch: WatchDict, text: str) -> None:
     watch["usd_price"] = int(round(original_price * rate)) if rate is not None else None
 
 
+def _normalize_brand_alias(alias: str) -> str:
+    cleaned = alias.lower().replace(".", "").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.replace("ö", "o")
+    return cleaned
+
+
 def _extract_brand(text: str) -> str | None:
     match = BRAND_PATTERN.search(text)
     if not match:
         return None
-    alias = match.group(1).lower().replace(".", "").strip()
-    alias = re.sub(r"\s+", " ", alias)
-    if alias == "ap":
-        return "Audemars Piguet"
-    if alias in ("rm", "richard mille"):
-        return "Richard Mille"
-    if alias in ("pp", "patek", "patek philippe"):
-        return "Patek Philippe"
-    if alias in ("fp journe", "fpj", "f p journe"):
-        return "FP Journe"
-    if alias in ("rlx", "rolex"):
-        return "Rolex"
-    if alias in ("audemars", "audemars piguet"):
-        return "Audemars Piguet"
+    alias = _normalize_brand_alias(match.group(1))
     return BRAND_ALIASES.get(alias)
+
+
+def _infer_brand_from_reference(reference: str) -> str | None:
+    normalized = reference.upper().replace(" ", "")
+    if normalized.startswith("RM"):
+        return "Richard Mille"
+    if "/" in normalized:
+        return "Patek Philippe"
+    if re.fullmatch(r"[12]\d{5}[A-Z]{0,4}", normalized):
+        return "Rolex"
+    if re.fullmatch(r"\d{5}[A-Z]{2,4}", normalized):
+        return "Audemars Piguet"
+    if re.fullmatch(r"\d{4}[A-Z]", normalized):
+        return "Audemars Piguet"
+    if re.fullmatch(r"[3456]\d{3}", normalized):
+        return "Patek Philippe"
+    if re.fullmatch(r"\d{5}", normalized):
+        return "Audemars Piguet"
+    return None
 
 
 def _mask_price_spans(text: str) -> str:
@@ -414,18 +690,34 @@ def _mask_price_spans(text: str) -> str:
     return masked
 
 
-def _extract_reference(text: str) -> tuple[str | None, str | None]:
+def _extract_reference(
+    text: str,
+    *,
+    brand_hint: str | None = None,
+) -> tuple[str | None, str | None]:
     ref_text = _mask_price_spans(text)
     price, _ = _extract_price(text)
-    for pattern, brand_hint in REFERENCE_PATTERNS:
+    for pattern, brand_hint_from_pattern in REFERENCE_PATTERNS:
         match = pattern.search(ref_text)
         if not match:
             continue
         reference = match.group(1).upper().replace("  ", " ").strip()
         if price is not None and reference.isdigit() and int(reference) == price:
             continue
-        return reference, brand_hint
+        if _looks_like_year(reference):
+            continue
+        brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
+        if brand is None and brand_hint:
+            brand = brand_hint
+        return reference, brand
     return None, None
+
+
+def _looks_like_year(value: str) -> bool:
+    if not value.isdigit() or len(value) != 4:
+        return False
+    year = int(value)
+    return 1990 <= year <= 2035
 
 
 def _extract_dial(text: str) -> str | None:
@@ -436,6 +728,8 @@ def _extract_dial(text: str) -> str | None:
     match = DIAL_PATTERN.search(text)
     if match:
         color = match.group(1).lower()
+        if color in ("colour", "color"):
+            return None
         if color in DIAL_ABBREVIATIONS:
             return DIAL_ABBREVIATIONS[color]
         if color == "champagne":
@@ -446,7 +740,7 @@ def _extract_dial(text: str) -> str | None:
             return "Tiffany"
         if color == "olive":
             return "Olive"
-        if color == "grey" or color == "gray":
+        if color in ("grey", "gray"):
             return "Grey"
         return color.title()
     return None
@@ -461,14 +755,29 @@ def _extract_bracelet(text: str) -> str | None:
 
 def _extract_card_date(text: str) -> tuple[str | None, str | None]:
     match = NEW_CARD_DATE_PATTERN.search(text)
-    if not match:
-        return None, None
-    month = int(match.group(1))
-    year_suffix = int(match.group(2))
-    if month < 1 or month > 12:
-        return None, None
-    year = 2000 + year_suffix if year_suffix < 70 else 1900 + year_suffix
-    return f"{month:02d}/{year}", "New"
+    if match:
+        month = int(match.group(1))
+        year_suffix = int(match.group(2))
+        if month < 1 or month > 12:
+            return None, None
+        year = 2000 + year_suffix if year_suffix < 70 else 1900 + year_suffix
+        return f"{month:02d}/{year}", "New"
+
+    match = NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
+    if match:
+        month = int(match.group(1))
+        year = int(match.group(2))
+        if 1 <= month <= 12:
+            return f"{month:02d}/{year}", "New"
+
+    match = CARD_MMYyyy_PATTERN.search(text)
+    if match and re.search(r"\bnew\b", text, re.I):
+        month = int(match.group(1))
+        year = int(match.group(2))
+        if 1 <= month <= 12 and 1990 <= year <= 2035:
+            return f"{month:02d}/{year}", "New"
+
+    return None, None
 
 
 def _extract_used_year(text: str) -> tuple[str | None, int | None]:
@@ -488,7 +797,13 @@ def _extract_condition(text: str) -> str | None:
 def _extract_standalone_year(text: str, watch: WatchDict) -> int | None:
     if watch.get("production_year") is not None:
         return watch["production_year"]
-    if NEW_CARD_DATE_PATTERN.search(text) or USED_YEAR_PATTERN.search(text):
+    if (
+        NEW_CARD_DATE_PATTERN.search(text)
+        or NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
+        or CARD_MMYyyy_PATTERN.search(text)
+        or USED_YEAR_PATTERN.search(text)
+        or YEAR_SUFFIX_PATTERN.search(text)
+    ):
         return None
     for match in STANDALONE_YEAR_PATTERN.finditer(text):
         year = int(match.group(0))

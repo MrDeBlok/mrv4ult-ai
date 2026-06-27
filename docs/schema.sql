@@ -147,8 +147,13 @@ CREATE TABLE import_logs (
     created_at          TIMESTAMPTZ     NOT NULL DEFAULT now(),
 
     CONSTRAINT import_logs_status_check
-        CHECK (status IN ('success', 'warning', 'error'))
+        CHECK (status IN ('success', 'no_watch_detected', 'warning', 'error'))
 );
+
+-- Migration for existing databases (Sprint 19.1):
+-- ALTER TABLE import_logs DROP CONSTRAINT import_logs_status_check;
+-- ALTER TABLE import_logs ADD CONSTRAINT import_logs_status_check
+--     CHECK (status IN ('success', 'no_watch_detected', 'warning', 'error'));
 
 -- ---------------------------------------------------------------------------
 -- Indexes — watches

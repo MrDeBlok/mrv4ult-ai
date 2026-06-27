@@ -241,22 +241,64 @@ def format_timestamp(value: str | None) -> str:
         return value
 
 
+def normalize_import_status(import_log: dict[str, Any]) -> str:
+    """Map stored import status to the current status vocabulary."""
+    status = (import_log.get("status") or "").strip().lower()
+    if status == "warning" and import_log.get("watches_parsed", 0) == 0:
+        return "no_watch_detected"
+    return status
+
+
 def format_import_status(status: str | None) -> str:
+    labels = {
+        "success": "Success",
+        "no_watch_detected": "No watch detected",
+        "warning": "Needs review",
+        "error": "Error",
+    }
     if not status:
         return "Unknown"
-    return status.capitalize()
+    return labels.get(status, status.replace("_", " ").title())
 
 
 def import_status_class(status: str | None) -> str:
     return {
         "success": "success",
+        "no_watch_detected": "info",
         "warning": "warning",
         "error": "danger",
     }.get(status or "", "secondary")
 
 
+def import_status_reason(import_log: dict[str, Any]) -> str:
+    summary = import_log.get("summary") or {}
+    stored_reason = summary.get("status_reason")
+    if isinstance(stored_reason, str) and stored_reason.strip():
+        return stored_reason.strip()
+
+    status = normalize_import_status(import_log)
+    watches_parsed = import_log.get("watches_parsed", 0)
+    duplicate_offers = import_log.get("duplicate_offers", 0)
+
+    if status == "error":
+        return "Technical failure during import."
+    if status == "no_watch_detected":
+        return "No watch offer was detected in this message."
+    if status == "warning":
+        return "Parsed watches are missing important fields such as brand, reference, or price."
+    if duplicate_offers:
+        return (
+            f"Successfully parsed {watches_parsed} watch offer(s). "
+            f"{duplicate_offers} duplicate offer(s) were skipped."
+        )
+    if watches_parsed:
+        return f"Successfully parsed {watches_parsed} watch offer(s)."
+    return "Import completed."
+
+
 def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
     """Format one import log for the activity list."""
+    status = normalize_import_status(import_log)
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
@@ -268,8 +310,8 @@ def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
         "duplicate_offers": import_log.get("duplicate_offers", 0),
         "matched_requests": import_log.get("matched_requests", 0),
         "processing_time": import_log.get("processing_time") or "N/A",
-        "status": format_import_status(import_log.get("status")),
-        "status_class": import_status_class(import_log.get("status")),
+        "status": format_import_status(status),
+        "status_class": import_status_class(status),
     }
 
 
@@ -280,6 +322,7 @@ def build_activity_detail(
     """Format one import log for the detail page."""
     summary = import_log.get("summary") or {}
     message = message or {}
+    status = normalize_import_status(import_log)
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
@@ -292,8 +335,9 @@ def build_activity_detail(
         "duplicate_offers": import_log.get("duplicate_offers", 0),
         "matched_requests": import_log.get("matched_requests", 0),
         "processing_time": import_log.get("processing_time") or "N/A",
-        "status": format_import_status(import_log.get("status")),
-        "status_class": import_status_class(import_log.get("status")),
+        "status": format_import_status(status),
+        "status_class": import_status_class(status),
+        "status_reason": import_status_reason(import_log),
         "raw_message": message.get("raw_text") or "",
         "rows": summary.get("rows") or [],
     }
