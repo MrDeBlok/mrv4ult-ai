@@ -64,3 +64,11 @@ body {
     font-family: inherit;
     font-size: 0.95rem;
 }
+
+.whatsapp-qr {
+    max-width: 320px;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    background: #fff;
+}

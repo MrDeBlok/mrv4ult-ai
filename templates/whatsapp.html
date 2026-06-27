@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}WhatsApp · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <h1 class="h3 mb-1">WhatsApp connection</h1>
+        <p class="text-muted mb-0">
+            Connect Evolution API instance <code>{{ state.instance_name }}</code> to WhatsApp Web.
+        </p>
+    </div>
+</section>
+
+{% if error %}
+<div class="alert alert-danger" role="alert">{{ error }}</div>
+{% endif %}
+
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <h2 class="h5 mb-3">Instance status</h2>
+
+        {% if not state.exists %}
+        <p class="mb-3">No WhatsApp instance exists yet.</p>
+        <form method="post" action="/whatsapp/create">
+            <button type="submit" class="btn btn-primary btn-lg">Create instance</button>
+        </form>
+        {% elif state.connected %}
+        <dl class="row mb-0 import-stats">
+            <dt class="col-sm-4 col-md-3">Connection status</dt>
+            <dd class="col-sm-8 col-md-9">
+                <span class="badge rounded-pill text-bg-success">{{ state.status_label }}</span>
+            </dd>
+
+            <dt class="col-sm-4 col-md-3">Connected phone number</dt>
+            <dd class="col-sm-8 col-md-9">{{ state.phone_number or "N/A" }}</dd>
+
+            {% if state.profile_name %}
+            <dt class="col-sm-4 col-md-3">Profile name</dt>
+            <dd class="col-sm-8 col-md-9">{{ state.profile_name }}</dd>
+            {% endif %}
+
+            <dt class="col-sm-4 col-md-3">Last connection time</dt>
+            <dd class="col-sm-8 col-md-9">{{ state.last_connection_time or "N/A" }}</dd>
+
+            <dt class="col-sm-4 col-md-3">Instance</dt>
+            <dd class="col-sm-8 col-md-9"><code>{{ state.instance_name }}</code></dd>
+        </dl>
+        {% else %}
+        <p class="mb-3">
+            Status:
+            <span class="badge rounded-pill text-bg-warning">{{ state.status_label }}</span>
+        </p>
+        <p class="text-muted">Scan the QR code below with the WhatsApp account used for dealer imports.</p>
+
+        <div id="qr-container" class="text-center my-4">
+            {% if state.qr_base64 %}
+            <img
+                id="qr-image"
+                src="{{ state.qr_base64 }}"
+                alt="WhatsApp QR code"
+                class="whatsapp-qr img-fluid"
+            >
+            {% else %}
+            <div class="alert alert-secondary mb-0" role="status">
+                Waiting for QR code from Evolution API…
+            </div>
+            {% endif %}
+        </div>
+
+        <p class="small text-muted mb-0" id="poll-status">
+            Checking connection every 5 seconds…
+        </p>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% if state.exists and not state.connected %}
+<script>
+    async function refreshWhatsAppStatus() {
+        try {
+            const response = await fetch("/whatsapp/status");
+            const data = await response.json();
+
+            if (data.error) {
+                document.getElementById("poll-status").textContent = data.error;
+                return;
+            }
+
+            if (data.connected) {
+                window.location.reload();
+                return;
+            }
+
+            if (data.qr_base64) {
+                const container = document.getElementById("qr-container");
+                container.innerHTML =
+                    '<img id="qr-image" src="' + data.qr_base64 +
+                    '" alt="WhatsApp QR code" class="whatsapp-qr img-fluid">';
+            }
+        } catch (error) {
+            document.getElementById("poll-status").textContent =
+                "Could not refresh status. Retrying…";
+        }
+    }
+
+    refreshWhatsAppStatus();
+    window.setInterval(refreshWhatsAppStatus, 5000);
+</script>
+{% endif %}
+{% endblock %}

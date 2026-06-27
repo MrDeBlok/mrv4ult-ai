@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -18,6 +19,13 @@ from database import (
     get_message_by_id,
     get_watch_by_id,
     list_import_logs,
+)
+from evolution_client import (
+    EvolutionAPIError,
+    create_instance,
+    get_default_instance_name,
+    get_instance_status,
+    get_whatsapp_page_state,
 )
 from ingest import ingest_message
 from search import (
@@ -32,6 +40,7 @@ from search import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_WHATSAPP_INSTANCE = get_default_instance_name()
 
 app = FastAPI(title="MRV4ULT AI Dashboard")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -285,6 +294,65 @@ def build_activity_detail(
         "raw_message": message.get("raw_text") or "",
         "rows": summary.get("rows") or [],
     }
+
+
+@app.get("/whatsapp", response_class=HTMLResponse, name="whatsapp_page")
+async def whatsapp_page(request: Request, error: str = "") -> HTMLResponse:
+    page_error = error.strip() or None
+    state: dict[str, Any]
+
+    try:
+        state = get_whatsapp_page_state(DEFAULT_WHATSAPP_INSTANCE)
+    except EvolutionAPIError as exc:
+        page_error = str(exc)
+        state = {
+            "instance_name": DEFAULT_WHATSAPP_INSTANCE,
+            "exists": False,
+            "connected": False,
+            "state": "close",
+            "status_label": "Unavailable",
+            "phone_number": None,
+            "profile_name": None,
+            "last_connection_time": None,
+            "qr_base64": None,
+        }
+
+    return templates.TemplateResponse(
+        request,
+        "whatsapp.html",
+        {
+            "state": state,
+            "error": page_error,
+        },
+    )
+
+
+@app.post("/whatsapp/create")
+async def whatsapp_create_instance() -> RedirectResponse:
+    try:
+        create_instance(DEFAULT_WHATSAPP_INSTANCE)
+    except EvolutionAPIError as exc:
+        status = get_instance_status(DEFAULT_WHATSAPP_INSTANCE)
+        if not status["exists"]:
+            return RedirectResponse(
+                url=f"/whatsapp?error={quote(str(exc))}",
+                status_code=303,
+            )
+
+    return RedirectResponse(url="/whatsapp", status_code=303)
+
+
+@app.get("/whatsapp/status")
+async def whatsapp_status() -> JSONResponse:
+    try:
+        state = get_whatsapp_page_state(DEFAULT_WHATSAPP_INSTANCE)
+    except EvolutionAPIError as exc:
+        return JSONResponse(
+            {"error": str(exc), "connected": False, "exists": False},
+            status_code=502,
+        )
+
+    return JSONResponse(state)
 
 
 @app.get("/activity", response_class=HTMLResponse, name="activity_list")
