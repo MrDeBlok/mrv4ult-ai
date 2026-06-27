@@ -103,6 +103,7 @@ def ingest_message(
     group_name: str | None = None,
     dealer_whatsapp: str | None = None,
     dealer_alias: str | None = None,
+    received_at: datetime | None = None,
 ) -> IngestSummary:
     """Parse a message and save it with all offers to Supabase."""
     started_at = time.perf_counter()
@@ -131,12 +132,14 @@ def ingest_message(
         summary_alias = DEFAULT_DEALER_NAME
 
     now = datetime.now(timezone.utc)
+    message_received_at = received_at or now
 
     message = insert_message(
         group_id=group_id,
         dealer_id=dealer_id,
         raw_text=text,
         message_type=parsed["message_type"],
+        received_at=message_received_at,
         parsed_at=now,
         parser_version=PARSER_VERSION,
         parse_status=_parse_status(parsed),
