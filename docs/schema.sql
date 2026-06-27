@@ -129,6 +129,27 @@ CREATE TABLE requests (
         CHECK (status IN ('active', 'matched', 'fulfilled', 'cancelled'))
 );
 
+CREATE TABLE import_logs (
+    id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id          UUID            NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    import_time         TIMESTAMPTZ     NOT NULL,
+    group_name          TEXT            NOT NULL,
+    dealer_whatsapp     TEXT            NOT NULL,
+    dealer_alias        TEXT,
+    watches_parsed      INTEGER         NOT NULL DEFAULT 0,
+    new_offers          INTEGER         NOT NULL DEFAULT 0,
+    duplicate_offers    INTEGER         NOT NULL DEFAULT 0,
+    matched_requests    INTEGER         NOT NULL DEFAULT 0,
+    processing_time     TEXT            NOT NULL,
+    processing_time_ms  INTEGER         NOT NULL DEFAULT 0,
+    status              TEXT            NOT NULL,
+    summary             JSONB           NOT NULL,
+    created_at          TIMESTAMPTZ     NOT NULL DEFAULT now(),
+
+    CONSTRAINT import_logs_status_check
+        CHECK (status IN ('success', 'warning', 'error'))
+);
+
 -- ---------------------------------------------------------------------------
 -- Indexes — watches
 -- ---------------------------------------------------------------------------
@@ -188,6 +209,12 @@ CREATE INDEX idx_messages_message_type
 
 CREATE INDEX idx_messages_received_at
     ON messages (received_at DESC);
+
+CREATE INDEX idx_import_logs_import_time
+    ON import_logs (import_time DESC);
+
+CREATE INDEX idx_import_logs_message_id
+    ON import_logs (message_id);
 
 -- ---------------------------------------------------------------------------
 -- Indexes — requests

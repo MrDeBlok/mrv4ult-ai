@@ -10,6 +10,7 @@ from typing import Any
 from database import (
     find_or_create_watch,
     get_client,
+    insert_import_log,
     insert_message,
     insert_offer,
 )
@@ -134,6 +135,8 @@ def ingest_message(
     now = datetime.now(timezone.utc)
     message_received_at = received_at or now
 
+    parse_status = _parse_status(parsed)
+
     message = insert_message(
         group_id=group_id,
         dealer_id=dealer_id,
@@ -142,7 +145,7 @@ def ingest_message(
         received_at=message_received_at,
         parsed_at=now,
         parser_version=PARSER_VERSION,
-        parse_status=_parse_status(parsed),
+        parse_status=parse_status,
     )
 
     summary: IngestSummary = {
@@ -209,6 +212,28 @@ def ingest_message(
 
     elapsed = time.perf_counter() - started_at
     summary["processing_time"] = _format_processing_time(elapsed)
+    summary["processing_time_ms"] = int(elapsed * 1000)
+    summary["message_id"] = message["id"]
+    summary["import_time"] = message_received_at.isoformat()
+
+    import_status = _import_status(summary, parse_status)
+    import_log = insert_import_log(
+        message_id=message["id"],
+        import_time=message_received_at,
+        group_name=summary_group,
+        dealer_whatsapp=summary_whatsapp,
+        dealer_alias=summary_alias,
+        watches_parsed=summary["watches_parsed"],
+        new_offers=summary["new_offers"],
+        duplicate_offers=summary["duplicate_offers"],
+        matched_requests=summary["matched_requests"],
+        processing_time=summary["processing_time"],
+        processing_time_ms=summary["processing_time_ms"],
+        status=import_status,
+        summary=summary,
+    )
+    summary["import_log_id"] = import_log["id"]
+    summary["status"] = import_status
     return summary
 
 
@@ -386,6 +411,16 @@ def _parse_status(parsed: dict[str, Any]) -> str:
     if parsed["watches"]:
         return "success"
     return "partial"
+
+
+def _import_status(summary: IngestSummary, parse_status: str) -> str:
+    if parse_status == "failed":
+        return "error"
+    if summary["watches_parsed"] == 0:
+        return "warning"
+    if summary["duplicate_offers"] > 0 or parse_status == "partial":
+        return "warning"
+    return "success"
 
 
 def main() -> None:

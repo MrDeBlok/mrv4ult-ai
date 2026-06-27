@@ -299,6 +299,84 @@ def get_active_offers_for_watch(watch_id: str) -> list[Record]:
     return response.data or []
 
 
+def insert_import_log(
+    *,
+    message_id: str,
+    import_time: datetime,
+    group_name: str,
+    dealer_whatsapp: str,
+    dealer_alias: str | None,
+    watches_parsed: int,
+    new_offers: int,
+    duplicate_offers: int,
+    matched_requests: int,
+    processing_time: str,
+    processing_time_ms: int,
+    status: str,
+    summary: Record,
+) -> Record:
+    """Persist a completed import for the activity dashboard."""
+    payload: Record = {
+        "message_id": message_id,
+        "import_time": import_time.isoformat(),
+        "group_name": group_name,
+        "dealer_whatsapp": dealer_whatsapp,
+        "dealer_alias": dealer_alias,
+        "watches_parsed": watches_parsed,
+        "new_offers": new_offers,
+        "duplicate_offers": duplicate_offers,
+        "matched_requests": matched_requests,
+        "processing_time": processing_time,
+        "processing_time_ms": processing_time_ms,
+        "status": status,
+        "summary": summary,
+    }
+    response = get_client().table("import_logs").insert(payload).execute()
+    return _first_row(response.data, "import_logs")
+
+
+def list_import_logs() -> list[Record]:
+    """Return all import logs in reverse chronological order."""
+    response = (
+        get_client()
+        .table("import_logs")
+        .select("*")
+        .order("import_time", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def get_import_log(import_log_id: str) -> Record | None:
+    """Return one import log by id."""
+    response = (
+        get_client()
+        .table("import_logs")
+        .select("*")
+        .eq("id", import_log_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def get_message_by_id(message_id: str) -> Record | None:
+    """Return a message row by id."""
+    response = (
+        get_client()
+        .table("messages")
+        .select("id, raw_text, received_at")
+        .eq("id", message_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
 def _get_watch_by_id(watch_id: str) -> Record:
     watch = get_watch_by_id(watch_id)
     if watch is None:

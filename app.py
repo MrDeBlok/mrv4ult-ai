@@ -11,7 +11,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from database import get_active_offers_for_watch, get_client, get_watch_by_id
+from database import (
+    get_active_offers_for_watch,
+    get_client,
+    get_import_log,
+    get_message_by_id,
+    get_watch_by_id,
+    list_import_logs,
+)
 from ingest import ingest_message
 from search import (
     _display_value,
@@ -210,6 +217,98 @@ def build_watch_display(watch: dict[str, Any]) -> dict[str, str]:
         "dial": _display_value(watch.get("dial")),
         "bracelet": _display_value(watch.get("bracelet")),
     }
+
+
+def format_timestamp(value: str | None) -> str:
+    if not value:
+        return "N/A"
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return timestamp.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
+def format_import_status(status: str | None) -> str:
+    if not status:
+        return "Unknown"
+    return status.capitalize()
+
+
+def import_status_class(status: str | None) -> str:
+    return {
+        "success": "success",
+        "warning": "warning",
+        "error": "danger",
+    }.get(status or "", "secondary")
+
+
+def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
+    """Format one import log for the activity list."""
+    return {
+        "id": import_log["id"],
+        "import_time": format_timestamp(import_log.get("import_time")),
+        "group_name": import_log.get("group_name") or "N/A",
+        "dealer_alias": import_log.get("dealer_alias") or "N/A",
+        "dealer_whatsapp": import_log.get("dealer_whatsapp") or "N/A",
+        "watches_parsed": import_log.get("watches_parsed", 0),
+        "new_offers": import_log.get("new_offers", 0),
+        "duplicate_offers": import_log.get("duplicate_offers", 0),
+        "matched_requests": import_log.get("matched_requests", 0),
+        "processing_time": import_log.get("processing_time") or "N/A",
+        "status": format_import_status(import_log.get("status")),
+        "status_class": import_status_class(import_log.get("status")),
+    }
+
+
+def build_activity_detail(
+    import_log: dict[str, Any],
+    message: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Format one import log for the detail page."""
+    summary = import_log.get("summary") or {}
+    message = message or {}
+    return {
+        "id": import_log["id"],
+        "import_time": format_timestamp(import_log.get("import_time")),
+        "group_name": import_log.get("group_name") or "N/A",
+        "dealer_alias": import_log.get("dealer_alias"),
+        "dealer_whatsapp": import_log.get("dealer_whatsapp") or "N/A",
+        "watches_parsed": import_log.get("watches_parsed", 0),
+        "new_watches": summary.get("new_watches", 0),
+        "new_offers": import_log.get("new_offers", 0),
+        "duplicate_offers": import_log.get("duplicate_offers", 0),
+        "matched_requests": import_log.get("matched_requests", 0),
+        "processing_time": import_log.get("processing_time") or "N/A",
+        "status": format_import_status(import_log.get("status")),
+        "status_class": import_status_class(import_log.get("status")),
+        "raw_message": message.get("raw_text") or "",
+        "rows": summary.get("rows") or [],
+    }
+
+
+@app.get("/activity", response_class=HTMLResponse, name="activity_list")
+async def activity_list(request: Request) -> HTMLResponse:
+    imports = [build_activity_row(import_log) for import_log in list_import_logs()]
+    return templates.TemplateResponse(
+        request,
+        "activity.html",
+        {"imports": imports},
+    )
+
+
+@app.get("/activity/{import_id}", response_class=HTMLResponse, name="activity_detail")
+async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    message = get_message_by_id(import_log["message_id"])
+    return templates.TemplateResponse(
+        request,
+        "activity_detail.html",
+        {"detail": build_activity_detail(import_log, message)},
+    )
 
 
 @app.get("/import", response_class=HTMLResponse, name="import_page")
