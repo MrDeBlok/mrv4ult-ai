@@ -272,11 +272,37 @@ def _optional_field_matches(
     return _normalize_watch_value(offer_value) == request_normalized
 
 
-def _get_watch_by_id(watch_id: str) -> Record:
+def get_watch_by_id(watch_id: str) -> Record | None:
+    """Return a watch row by id, or None if it does not exist."""
     response = (
         get_client().table("watches").select("*").eq("id", watch_id).limit(1).execute()
     )
-    return _first_row(response.data, "watches")
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def get_active_offers_for_watch(watch_id: str) -> list[Record]:
+    """Return all active offers for a watch, including dealer contact fields."""
+    response = (
+        get_client()
+        .table("offers")
+        .select(
+            "original_price, original_currency, usd_price, card_date, condition, "
+            "dealers(display_name, phone_number, whatsapp_id)"
+        )
+        .eq("watch_id", watch_id)
+        .eq("status", "active")
+        .execute()
+    )
+    return response.data or []
+
+
+def _get_watch_by_id(watch_id: str) -> Record:
+    watch = get_watch_by_id(watch_id)
+    if watch is None:
+        raise RuntimeError(f"Watch not found: {watch_id}")
+    return watch
 
 
 def insert_offer(

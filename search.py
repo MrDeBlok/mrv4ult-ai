@@ -44,9 +44,9 @@ def read_query() -> str:
     return query
 
 
-def search_offers(query: str) -> list[Record]:
+def search_offers(query: str) -> tuple[list[Record], bool]:
     """Search active offers by watch fields matching all query tokens."""
-    tokens, max_usd_price = parse_query(query)
+    tokens, max_usd_price, cheapest_only = parse_query(query)
     response = (
         get_client()
         .table("offers")
@@ -70,18 +70,23 @@ def search_offers(query: str) -> list[Record]:
         offer["dealer"] = _nested_record(offer.get("dealers"))
         matches.append(offer)
 
-    return matches
+    return matches, cheapest_only
 
 
-def parse_query(query: str) -> tuple[list[str], int | None]:
-    """Split a search query into watch tokens and an optional max USD price filter."""
+def parse_query(query: str) -> tuple[list[str], int | None, bool]:
+    """Split a search query into watch tokens, optional max USD price, and cheapest mode."""
     parts = re.split(r"\s+", query.strip())
     tokens: list[str] = []
     max_usd_price: int | None = None
+    cheapest_only = False
     index = 0
 
     while index < len(parts):
         word = parts[index].lower()
+        if word == "cheapest":
+            cheapest_only = True
+            index += 1
+            continue
         if word in PRICE_FILTER_WORDS:
             if index + 1 >= len(parts):
                 raise ValueError(f"Missing price after '{word}'.")
@@ -91,7 +96,7 @@ def parse_query(query: str) -> tuple[list[str], int | None]:
         tokens.append(parts[index])
         index += 1
 
-    return tokens, max_usd_price
+    return tokens, max_usd_price, cheapest_only
 
 
 def _parse_max_usd_price(value: str) -> int:
@@ -110,7 +115,11 @@ def _offer_within_max_usd_price(offer: Record, max_usd_price: int | None) -> boo
     return usd_price <= max_usd_price
 
 
-def group_offers_by_watch(offers: list[Record]) -> list[WatchGroup]:
+def group_offers_by_watch(
+    offers: list[Record],
+    *,
+    cheapest_only: bool = False,
+) -> list[WatchGroup]:
     """Group matching offers by watch_id with price statistics."""
     grouped: dict[str, list[Record]] = {}
     for offer in offers:
@@ -122,9 +131,16 @@ def group_offers_by_watch(offers: list[Record]) -> list[WatchGroup]:
     groups: list[WatchGroup] = []
     for watch_id, watch_offers in grouped.items():
         watch_offers.sort(key=_sort_key_usd_price)
+        if cheapest_only:
+            cheapest_offer = _pick_cheapest_offer(watch_offers)
+            watch_offers = [cheapest_offer] if cheapest_offer else []
+
         usd_prices = [
             price for price in (offer.get("usd_price") for offer in watch_offers) if price is not None
         ]
+        if not watch_offers:
+            continue
+
         watch = watch_offers[0].get("watch") or {}
         groups.append(
             {
@@ -140,6 +156,15 @@ def group_offers_by_watch(offers: list[Record]) -> list[WatchGroup]:
 
     groups.sort(key=lambda group: (group["lowest_usd"] is None, group["lowest_usd"] or 0))
     return groups
+
+
+def _pick_cheapest_offer(offers: list[Record]) -> Record | None:
+    if not offers:
+        return None
+    priced_offers = [offer for offer in offers if offer.get("usd_price") is not None]
+    if priced_offers:
+        return min(priced_offers, key=lambda offer: offer["usd_price"])
+    return offers[0]
 
 
 def _nested_record(value: Any) -> Record:
@@ -249,8 +274,8 @@ def print_watch_group(group: WatchGroup) -> None:
 def main() -> None:
     try:
         query = read_query()
-        offers = search_offers(query)
-        groups = group_offers_by_watch(offers)
+        offers, cheapest_only = search_offers(query)
+        groups = group_offers_by_watch(offers, cheapest_only=cheapest_only)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -1,0 +1,35 @@
+body {
+    background-color: #f4f6f8;
+}
+
+.search-panel {
+    border: 0;
+}
+
+.navbar-brand {
+    letter-spacing: 0.04em;
+}
+
+.table th {
+    white-space: nowrap;
+}
+
+@media (max-width: 575.98px) {
+    .table {
+        font-size: 0.9rem;
+    }
+
+    .search-panel .btn-lg {
+        width: 100%;
+    }
+}
+
+.watch-row {
+    cursor: pointer;
+}
+
+.watch-row:hover,
+.watch-row:focus {
+    background-color: rgba(13, 110, 253, 0.08);
+    outline: none;
+}
