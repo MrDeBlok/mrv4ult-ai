@@ -119,6 +119,10 @@
                     <th scope="col">Reference</th>
                     <th scope="col">Brand</th>
                     <th scope="col">Price</th>
+                    <th scope="col">Rank</th>
+                    <th scope="col">Previous lowest</th>
+                    <th scope="col">Vs lowest</th>
+                    <th scope="col">Label</th>
                     <th scope="col">Result</th>
                 </tr>
             </thead>
@@ -128,6 +132,12 @@
                     <td>{{ row.reference }}</td>
                     <td>{{ row.brand }}</td>
                     <td>{{ row.price }}</td>
+                    <td>{{ row.rank }}</td>
+                    <td>{{ row.previous_lowest_usd }}</td>
+                    <td>{{ row.price_difference }}</td>
+                    <td>
+                        <span class="badge rounded-pill text-bg-{{ row.price_label_class }}">{{ row.price_label }}</span>
+                    </td>
                     <td>
                         {% for result in row.results %}
                         <span class="badge rounded-pill text-bg-light border import-result-badge">{{ result }}</span>

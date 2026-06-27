@@ -168,6 +168,8 @@ def ingest_message(
         if watch_created:
             summary["new_watches"] += 1
 
+        existing_usd_prices = _get_active_usd_prices(watch_row["id"])
+
         _, offer_created, matched_requests = insert_offer(
             message_id=message["id"],
             watch_id=watch_row["id"],
@@ -194,6 +196,11 @@ def ingest_message(
                 watch_created=watch_created,
                 offer_created=offer_created,
                 request_matched=matched_requests > 0,
+                price_intelligence=_build_price_intelligence(
+                    watch.get("usd_price"),
+                    existing_usd_prices,
+                    is_duplicate=not offer_created,
+                ),
             )
         )
 
@@ -206,12 +213,114 @@ def _normalize_whatsapp_number(value: str) -> str:
     return value.strip()
 
 
+def _get_active_usd_prices(watch_id: str) -> list[int]:
+    """Return USD prices for all active offers on a watch."""
+    response = (
+        get_client()
+        .table("offers")
+        .select("usd_price")
+        .eq("watch_id", watch_id)
+        .eq("status", "active")
+        .execute()
+    )
+    return [
+        price
+        for row in response.data or []
+        if (price := row.get("usd_price")) is not None
+    ]
+
+
+def _build_price_intelligence(
+    usd_price: int | None,
+    existing_usd_prices: list[int],
+    *,
+    is_duplicate: bool,
+) -> dict[str, str]:
+    """Compare an imported offer against existing active offers for the same watch."""
+    if is_duplicate:
+        rank_prices = existing_usd_prices
+        label = "Duplicate offer"
+    else:
+        rank_prices = existing_usd_prices + ([usd_price] if usd_price is not None else [])
+        label = _price_intelligence_label(usd_price, existing_usd_prices)
+
+    previous_lowest = min(existing_usd_prices) if existing_usd_prices else None
+
+    return {
+        "rank": _format_rank(_price_rank(usd_price, rank_prices)),
+        "previous_lowest_usd": _format_usd_amount(previous_lowest),
+        "price_difference": _format_price_difference(usd_price, previous_lowest),
+        "label": label,
+        "label_class": _price_label_class(label),
+    }
+
+
+def _price_intelligence_label(
+    usd_price: int | None,
+    existing_usd_prices: list[int],
+) -> str:
+    if usd_price is None:
+        return "Normal price"
+    if not existing_usd_prices:
+        return "New lowest price"
+
+    previous_lowest = min(existing_usd_prices)
+    if usd_price < previous_lowest:
+        return "New lowest price"
+    if usd_price <= previous_lowest * 1.03:
+        return "Good price"
+    if usd_price <= previous_lowest * 1.10:
+        return "Normal price"
+    return "Expensive"
+
+
+def _price_rank(usd_price: int | None, prices: list[int]) -> int | None:
+    if usd_price is None or not prices:
+        return None
+    return sum(1 for price in prices if price < usd_price) + 1
+
+
+def _format_rank(rank: int | None) -> str:
+    if rank is None:
+        return "N/A"
+    return str(rank)
+
+
+def _format_usd_amount(amount: int | None) -> str:
+    if amount is None:
+        return "N/A"
+    return f"${amount:,}"
+
+
+def _format_price_difference(usd_price: int | None, previous_lowest: int | None) -> str:
+    if usd_price is None or previous_lowest is None:
+        return "N/A"
+
+    difference = usd_price - previous_lowest
+    if difference == 0:
+        return "$0"
+    if difference > 0:
+        return f"+${difference:,}"
+    return f"-${abs(difference):,}"
+
+
+def _price_label_class(label: str) -> str:
+    return {
+        "New lowest price": "success",
+        "Good price": "info",
+        "Normal price": "secondary",
+        "Expensive": "danger",
+        "Duplicate offer": "dark",
+    }.get(label, "secondary")
+
+
 def _build_watch_row(
     watch: dict[str, Any],
     *,
     watch_created: bool,
     offer_created: bool,
     request_matched: bool,
+    price_intelligence: dict[str, str],
 ) -> dict[str, Any]:
     results = [
         "New watch" if watch_created else "Existing watch",
@@ -228,6 +337,11 @@ def _build_watch_row(
             watch.get("original_currency") or watch.get("currency"),
         ),
         "results": results,
+        "rank": price_intelligence["rank"],
+        "previous_lowest_usd": price_intelligence["previous_lowest_usd"],
+        "price_difference": price_intelligence["price_difference"],
+        "price_label": price_intelligence["label"],
+        "price_label_class": price_intelligence["label_class"],
     }
 
 
