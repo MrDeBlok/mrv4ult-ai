@@ -41,7 +41,6 @@ from search import (
     group_offers_by_watch,
     search_offers,
 )
-from watch_parser import parse_message
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_WHATSAPP_INSTANCE = get_default_instance_name()
@@ -387,15 +386,26 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
     }
 
 
-def build_watch_offer_cards(raw_message: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build card view models for parsed watches on the import detail page."""
-    parsed_watches = parse_message(raw_message).get("watches") or [] if raw_message.strip() else []
-    item_count = max(len(rows), len(parsed_watches))
+def build_deal_analysis_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build deal analysis cards from watches stored during import."""
+    watches = _deal_analysis_watch_sources(summary)
+    rows = summary.get("rows") or []
+
+    analyses: list[dict[str, Any]] = []
+    for index, watch in enumerate(watches):
+        row = rows[index] if index < len(rows) else {}
+        analyses.append(_build_deal_analysis(row, watch, index))
+    return analyses
+
+
+def build_watch_offer_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build card view models from watches stored during import."""
+    watches = _deal_analysis_watch_sources(summary)
+    rows = summary.get("rows") or []
 
     cards: list[dict[str, Any]] = []
-    for index in range(item_count):
+    for index, watch in enumerate(watches):
         row = rows[index] if index < len(rows) else {}
-        watch = parsed_watches[index] if index < len(parsed_watches) else {}
         cards.append(_build_watch_offer_card(row, watch, index))
     return cards
 
@@ -407,6 +417,27 @@ DEAL_RECOMMENDATIONS: dict[str, tuple[str, str]] = {
     "Expensive": ("Expensive", "expensive"),
     "Duplicate offer": ("Market Price", "market"),
 }
+
+
+def _import_parsed_watches(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return parsed watches stored at import time."""
+    watches = summary.get("parsed_watches")
+    if isinstance(watches, list):
+        return watches
+    return []
+
+
+def _deal_analysis_watch_sources(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one stored watch object per parsed import watch."""
+    parsed_watches = _import_parsed_watches(summary)
+    if parsed_watches:
+        return parsed_watches
+
+    rows = summary.get("rows") or []
+    if isinstance(rows, list) and rows:
+        return rows
+
+    return []
 
 
 def _parse_usd_amount(value: Any) -> int | None:
@@ -449,13 +480,14 @@ def _resolve_deal_recommendation(
     offer_usd: int | None,
     market_usd: int | None,
 ) -> tuple[str, str]:
+    if market_usd is None:
+        return "Insufficient market data", "insufficient"
+
     if price_label and price_label in DEAL_RECOMMENDATIONS:
         return DEAL_RECOMMENDATIONS[price_label]
-    if offer_usd is not None and market_usd is not None:
+    if offer_usd is not None:
         return _recommendation_from_prices(offer_usd, market_usd)
-    if offer_usd is not None and market_usd is None:
-        return "Excellent Buy", "excellent"
-    return "Market Price", "market"
+    return "Insufficient market data", "insufficient"
 
 
 def _deal_recommendation_confidence(
@@ -488,9 +520,13 @@ def _deal_recommendation_confidence(
 
 
 def _deal_analysis_title(row: dict[str, Any], watch: dict[str, Any], index: int) -> str:
-    brand = _card_text(row, watch, "brand", "brand")
-    reference = _card_text(row, watch, "reference", "reference")
-    title_parts = [part for part in (brand, reference) if part]
+    brand = watch.get("brand") or row.get("brand")
+    reference = watch.get("reference") or row.get("reference")
+    if isinstance(brand, str):
+        brand = _display_value(brand)
+    if isinstance(reference, str):
+        reference = _display_value(reference)
+    title_parts = [part for part in (brand, reference) if _has_display_value(part)]
     return " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
 
 
@@ -501,50 +537,50 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
 
     market_usd = _parse_usd_amount(row.get("previous_lowest_usd"))
     price_label = row.get("price_label")
+    has_market = market_usd is not None
 
     difference_usd: int | None = None
-    difference_pct: str = "N/A"
-    if offer_usd is not None and market_usd is not None:
+    difference_pct: str | None = None
+    market_position_label: str | None = None
+    market_position_amount: str | None = None
+    potential_profit: int | None = None
+    if has_market and offer_usd is not None:
         difference_usd = offer_usd - market_usd
         difference_pct = f"{((difference_usd / market_usd) * 100):+.1f}%"
-    elif _has_display_value(row.get("price_difference")):
-        difference_usd = _parse_signed_usd(row.get("price_difference"))
-
-    potential_profit: int | None = None
-    if offer_usd is not None and market_usd is not None:
-        potential_profit = market_usd - offer_usd
+        if difference_usd > 0:
+            market_position_label = "Above market"
+            market_position_amount = _format_signed_usd(difference_usd)
+            potential_profit = 0
+        elif difference_usd < 0:
+            market_position_label = "Below market"
+            market_position_amount = _format_signed_usd(difference_usd)
+            potential_profit = market_usd - offer_usd
+        else:
+            potential_profit = 0
 
     recommendation, recommendation_class = _resolve_deal_recommendation(
         price_label,
         offer_usd,
         market_usd,
     )
-    confidence = _deal_recommendation_confidence(
-        watch,
-        row,
-        offer_usd=offer_usd,
-        market_usd=market_usd,
-        price_label=price_label,
-    )
 
     return {
         "title": _deal_analysis_title(row, watch, index),
         "offer_price": format_usd_price(offer_usd) if offer_usd is not None else "N/A",
-        "market_price": format_usd_price(market_usd) if market_usd is not None else "No comparables",
-        "difference": _format_signed_usd(difference_usd),
+        "market_price": format_usd_price(market_usd) if has_market else "No comparables",
+        "show_market_metrics": has_market,
+        "difference": _format_signed_usd(difference_usd) if has_market else None,
         "difference_pct": difference_pct,
-        "market_rank": row.get("rank") or "N/A",
         "market_rank_display": (
-            f"#{row.get('rank')}" if _has_display_value(row.get("rank")) else "N/A"
+            f"#{row.get('rank')}" if has_market and _has_display_value(row.get("rank")) else None
         ),
+        "market_position_label": market_position_label,
+        "market_position_amount": market_position_amount,
+        "show_market_position": market_position_label is not None,
         "recommendation": recommendation,
         "recommendation_class": recommendation_class,
-        "potential_profit": (
-            format_usd_price(potential_profit) if potential_profit is not None else "N/A"
-        ),
-        "potential_profit_positive": potential_profit is not None and potential_profit > 0,
-        "confidence": confidence,
-        "confidence_label": f"{confidence}%",
+        "potential_profit": format_usd_price(potential_profit) if has_market else None,
+        "potential_profit_positive": has_market and potential_profit is not None and potential_profit > 0,
     }
 
 
@@ -557,19 +593,6 @@ def _parse_signed_usd(value: Any) -> int | None:
     if amount is None:
         return None
     return -amount if negative else amount
-
-
-def build_deal_analysis_cards(raw_message: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build deal analysis cards from stored price intelligence."""
-    parsed_watches = parse_message(raw_message).get("watches") or [] if raw_message.strip() else []
-    item_count = max(len(rows), len(parsed_watches))
-
-    analyses: list[dict[str, Any]] = []
-    for index in range(item_count):
-        row = rows[index] if index < len(rows) else {}
-        watch = parsed_watches[index] if index < len(parsed_watches) else {}
-        analyses.append(_build_deal_analysis(row, watch, index))
-    return analyses
 
 
 def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
@@ -617,8 +640,8 @@ def build_activity_detail(
         "status_class": import_status_class(status),
         "status_reason": import_status_reason(import_log),
         "raw_message": raw_message,
-        "deal_analyses": build_deal_analysis_cards(raw_message, rows),
-        "watch_cards": build_watch_offer_cards(raw_message, rows),
+        "deal_analyses": build_deal_analysis_cards(summary),
+        "watch_cards": build_watch_offer_cards(summary),
         "rows": rows,
     }
 

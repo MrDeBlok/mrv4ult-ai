@@ -84,6 +84,7 @@
                             <span class="deal-metric-label">Market price</span>
                             <span class="deal-metric-value">{{ deal.market_price }}</span>
                         </div>
+                        {% if deal.show_market_metrics %}
                         <div class="deal-metric">
                             <span class="deal-metric-label">Difference</span>
                             <span class="deal-metric-value">{{ deal.difference }}</span>
@@ -96,27 +97,26 @@
                             <span class="deal-metric-label">Market rank</span>
                             <span class="deal-metric-value">{{ deal.market_rank_display }}</span>
                         </div>
+                        {% if deal.show_market_position %}
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">{{ deal.market_position_label }}</span>
+                            <span class="deal-metric-value {% if deal.market_position_label == 'Below market' %}deal-market-below{% else %}deal-market-above{% endif %}">
+                                {{ deal.market_position_amount }}
+                            </span>
+                        </div>
+                        {% endif %}
                         <div class="deal-metric">
                             <span class="deal-metric-label">Potential profit</span>
                             <span class="deal-metric-value {% if deal.potential_profit_positive %}deal-profit-positive{% endif %}">
                                 {{ deal.potential_profit }}
                             </span>
                         </div>
+                        {% endif %}
                     </div>
 
                     <div class="deal-recommendation-banner">
                         <span class="deal-recommendation-label">Recommendation</span>
                         <span class="deal-recommendation-value">{{ deal.recommendation }}</span>
-                    </div>
-
-                    <div class="deal-confidence">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span class="deal-confidence-label">Recommendation confidence</span>
-                            <span class="deal-confidence-value">{{ deal.confidence_label }}</span>
-                        </div>
-                        <div class="progress deal-confidence-bar" role="progressbar" aria-valuenow="{{ deal.confidence }}" aria-valuemin="0" aria-valuemax="100">
-                            <div class="progress-bar" style="width: {{ deal.confidence }}%"></div>
-                        </div>
                     </div>
                 </div>
             </div>

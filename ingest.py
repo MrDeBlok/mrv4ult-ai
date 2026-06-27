@@ -174,9 +174,9 @@ def ingest_message(
         if watch_created:
             summary["new_watches"] += 1
 
-        existing_usd_prices = _get_active_usd_prices(watch_row["id"])
+        active_offers = _get_active_offers(watch_row["id"])
 
-        _, offer_created, matched_requests = insert_offer(
+        offer_row, offer_created, matched_requests = insert_offer(
             message_id=message["id"],
             watch_id=watch_row["id"],
             dealer_id=dealer_id,
@@ -196,6 +196,11 @@ def ingest_message(
             summary["duplicate_offers"] += 1
         summary["matched_requests"] += matched_requests
 
+        comparable_usd_prices = _comparable_usd_prices(
+            active_offers,
+            exclude_offer_ids={offer_row["id"]},
+        )
+
         summary["rows"].append(
             _build_watch_row(
                 watch,
@@ -204,7 +209,7 @@ def ingest_message(
                 request_matched=matched_requests > 0,
                 price_intelligence=_build_price_intelligence(
                     watch.get("usd_price"),
-                    existing_usd_prices,
+                    comparable_usd_prices,
                     is_duplicate=not offer_created,
                 ),
             )
@@ -218,6 +223,7 @@ def ingest_message(
 
     import_status, status_reason = _import_status(summary, parse_status, parsed["watches"])
     summary["status_reason"] = status_reason
+    summary["parsed_watches"] = list(parsed["watches"])
     import_log = insert_import_log(
         message_id=message["id"],
         import_time=message_received_at,
@@ -242,41 +248,56 @@ def _normalize_whatsapp_number(value: str) -> str:
     return value.strip()
 
 
-def _get_active_usd_prices(watch_id: str) -> list[int]:
-    """Return USD prices for all active offers on a watch."""
+def _get_active_offers(watch_id: str) -> list[tuple[str, int]]:
+    """Return active offer ids and USD prices for a watch before importing a new offer."""
     response = (
         get_client()
         .table("offers")
-        .select("usd_price")
+        .select("id, usd_price")
         .eq("watch_id", watch_id)
         .eq("status", "active")
         .execute()
     )
+    offers: list[tuple[str, int]] = []
+    for row in response.data or []:
+        offer_id = row.get("id")
+        usd_price = row.get("usd_price")
+        if offer_id and usd_price is not None:
+            offers.append((str(offer_id), int(usd_price)))
+    return offers
+
+
+def _comparable_usd_prices(
+    active_offers: list[tuple[str, int]],
+    *,
+    exclude_offer_ids: set[str],
+) -> list[int]:
+    """Return market comparables excluding the current imported offer."""
     return [
-        price
-        for row in response.data or []
-        if (price := row.get("usd_price")) is not None
+        usd_price
+        for offer_id, usd_price in active_offers
+        if offer_id not in exclude_offer_ids
     ]
 
 
 def _build_price_intelligence(
     usd_price: int | None,
-    existing_usd_prices: list[int],
+    comparable_usd_prices: list[int],
     *,
     is_duplicate: bool,
 ) -> dict[str, str]:
-    """Compare an imported offer against existing active offers for the same watch."""
+    """Compare an imported offer against other active offers for the same watch."""
     if is_duplicate:
-        rank_prices = existing_usd_prices
         label = "Duplicate offer"
+    elif not comparable_usd_prices:
+        label = "No comparables"
     else:
-        rank_prices = existing_usd_prices + ([usd_price] if usd_price is not None else [])
-        label = _price_intelligence_label(usd_price, existing_usd_prices)
+        label = _price_intelligence_label(usd_price, comparable_usd_prices)
 
-    previous_lowest = min(existing_usd_prices) if existing_usd_prices else None
+    previous_lowest = min(comparable_usd_prices) if comparable_usd_prices else None
 
     return {
-        "rank": _format_rank(_price_rank(usd_price, rank_prices)),
+        "rank": _format_rank(_price_rank(usd_price, comparable_usd_prices)),
         "previous_lowest_usd": _format_usd_amount(previous_lowest),
         "price_difference": _format_price_difference(usd_price, previous_lowest),
         "label": label,
@@ -286,14 +307,14 @@ def _build_price_intelligence(
 
 def _price_intelligence_label(
     usd_price: int | None,
-    existing_usd_prices: list[int],
+    comparable_usd_prices: list[int],
 ) -> str:
     if usd_price is None:
         return "Normal price"
-    if not existing_usd_prices:
-        return "New lowest price"
+    if not comparable_usd_prices:
+        return "No comparables"
 
-    previous_lowest = min(existing_usd_prices)
+    previous_lowest = min(comparable_usd_prices)
     if usd_price < previous_lowest:
         return "New lowest price"
     if usd_price <= previous_lowest * 1.03:
@@ -303,10 +324,10 @@ def _price_intelligence_label(
     return "Expensive"
 
 
-def _price_rank(usd_price: int | None, prices: list[int]) -> int | None:
-    if usd_price is None or not prices:
+def _price_rank(usd_price: int | None, comparable_usd_prices: list[int]) -> int | None:
+    if usd_price is None or not comparable_usd_prices:
         return None
-    return sum(1 for price in prices if price < usd_price) + 1
+    return sum(1 for price in comparable_usd_prices if price < usd_price) + 1
 
 
 def _format_rank(rank: int | None) -> str:
@@ -340,6 +361,7 @@ def _price_label_class(label: str) -> str:
         "Normal price": "secondary",
         "Expensive": "danger",
         "Duplicate offer": "dark",
+        "No comparables": "secondary",
     }.get(label, "secondary")
 
 
