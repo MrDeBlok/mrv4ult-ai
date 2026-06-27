@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+import time
 from datetime import datetime, timezone
+from typing import Any
 
 from database import (
     find_or_create_watch,
@@ -18,60 +20,116 @@ DEFAULT_GROUP_NAME = "Default Group"
 DEFAULT_DEALER_WHATSAPP_ID = "default-dealer"
 DEFAULT_DEALER_NAME = "Default Dealer"
 
+IngestSummary = dict[str, Any]
 
-def get_default_group_id() -> str:
-    """Return the default group, creating it if needed."""
+
+def find_or_create_group(group_name: str) -> str:
+    """Return a group id for the given name, creating the group if needed."""
+    name = group_name.strip()
+    if not name:
+        raise ValueError("Group name is required.")
+
+    client = get_client()
+    existing = client.table("groups").select("id").eq("name", name).limit(1).execute()
+    if existing.data:
+        return existing.data[0]["id"]
+
+    created = client.table("groups").insert({"name": name}).execute()
+    if not created.data:
+        raise RuntimeError(f"Failed to create group: {name}")
+    return created.data[0]["id"]
+
+
+def find_or_create_dealer(
+    whatsapp_number: str,
+    *,
+    display_name: str | None = None,
+) -> str:
+    """Return a dealer id for the given WhatsApp number, creating or updating as needed."""
+    whatsapp_id = _normalize_whatsapp_number(whatsapp_number)
+    if not whatsapp_id:
+        raise ValueError("Dealer WhatsApp number is required.")
+
+    alias = display_name.strip() if display_name else None
+    if alias == "":
+        alias = None
+
     client = get_client()
     existing = (
-        client.table("groups")
-        .select("id")
-        .eq("name", DEFAULT_GROUP_NAME)
+        client.table("dealers")
+        .select("id, display_name")
+        .eq("whatsapp_id", whatsapp_id)
         .limit(1)
         .execute()
     )
     if existing.data:
-        return existing.data[0]["id"]
+        dealer = existing.data[0]
+        updates: dict[str, Any] = {"phone_number": whatsapp_id}
+        if alias is not None:
+            updates["display_name"] = alias
+        client.table("dealers").update(updates).eq("id", dealer["id"]).execute()
+        return dealer["id"]
 
-    created = client.table("groups").insert({"name": DEFAULT_GROUP_NAME}).execute()
+    payload: dict[str, Any] = {
+        "whatsapp_id": whatsapp_id,
+        "phone_number": whatsapp_id,
+        "is_active": True,
+    }
+    if alias is not None:
+        payload["display_name"] = alias
+
+    created = client.table("dealers").insert(payload).execute()
     if not created.data:
-        raise RuntimeError("Failed to create default group.")
+        raise RuntimeError(f"Failed to create dealer: {whatsapp_id}")
     return created.data[0]["id"]
+
+
+def get_default_group_id() -> str:
+    """Return the default group, creating it if needed."""
+    return find_or_create_group(DEFAULT_GROUP_NAME)
 
 
 def get_default_dealer_id() -> str:
     """Return the default dealer, creating it if needed."""
-    client = get_client()
-    existing = (
-        client.table("dealers")
-        .select("id")
-        .eq("whatsapp_id", DEFAULT_DEALER_WHATSAPP_ID)
-        .limit(1)
-        .execute()
+    return find_or_create_dealer(
+        DEFAULT_DEALER_WHATSAPP_ID,
+        display_name=DEFAULT_DEALER_NAME,
     )
-    if existing.data:
-        return existing.data[0]["id"]
-
-    created = (
-        client.table("dealers")
-        .insert(
-            {
-                "whatsapp_id": DEFAULT_DEALER_WHATSAPP_ID,
-                "display_name": DEFAULT_DEALER_NAME,
-                "is_active": True,
-            }
-        )
-        .execute()
-    )
-    if not created.data:
-        raise RuntimeError("Failed to create default dealer.")
-    return created.data[0]["id"]
 
 
-def ingest_message(text: str) -> int:
+def ingest_message(
+    text: str,
+    *,
+    group_name: str | None = None,
+    dealer_whatsapp: str | None = None,
+    dealer_alias: str | None = None,
+) -> IngestSummary:
     """Parse a message and save it with all offers to Supabase."""
+    started_at = time.perf_counter()
     parsed = parse_message(text)
-    group_id = get_default_group_id()
-    dealer_id = get_default_dealer_id()
+
+    if group_name is not None and dealer_whatsapp is not None:
+        normalized_group_name = group_name.strip()
+        normalized_whatsapp = _normalize_whatsapp_number(dealer_whatsapp)
+        normalized_alias = dealer_alias.strip() if dealer_alias else None
+        if normalized_alias == "":
+            normalized_alias = None
+
+        group_id = find_or_create_group(normalized_group_name)
+        dealer_id = find_or_create_dealer(
+            normalized_whatsapp,
+            display_name=normalized_alias,
+        )
+        summary_group = normalized_group_name
+        summary_whatsapp = normalized_whatsapp
+        summary_alias = normalized_alias
+    else:
+        group_id = get_default_group_id()
+        dealer_id = get_default_dealer_id()
+        summary_group = DEFAULT_GROUP_NAME
+        summary_whatsapp = DEFAULT_DEALER_WHATSAPP_ID
+        summary_alias = DEFAULT_DEALER_NAME
+
     now = datetime.now(timezone.utc)
 
     message = insert_message(
@@ -84,16 +142,33 @@ def ingest_message(text: str) -> int:
         parse_status=_parse_status(parsed),
     )
 
-    saved = 0
+    summary: IngestSummary = {
+        "messages_imported": 1,
+        "watches_parsed": 0,
+        "new_watches": 0,
+        "new_offers": 0,
+        "duplicate_offers": 0,
+        "matched_requests": 0,
+        "processing_time": "",
+        "group": summary_group,
+        "dealer_whatsapp": summary_whatsapp,
+        "dealer_alias": summary_alias,
+        "rows": [],
+    }
+
     for line_index, watch in enumerate(parsed["watches"]):
-        watch_row = find_or_create_watch(
+        summary["watches_parsed"] += 1
+        watch_row, watch_created = find_or_create_watch(
             brand=watch.get("brand"),
             reference=watch.get("reference"),
             model=watch.get("model"),
             dial=watch.get("dial"),
             bracelet=watch.get("bracelet"),
         )
-        _, created = insert_offer(
+        if watch_created:
+            summary["new_watches"] += 1
+
+        _, offer_created, matched_requests = insert_offer(
             message_id=message["id"],
             watch_id=watch_row["id"],
             dealer_id=dealer_id,
@@ -107,13 +182,88 @@ def ingest_message(text: str) -> int:
             exchange_rate_to_usd=watch.get("exchange_rate_to_usd"),
             line_index=line_index,
         )
-        if created:
-            saved += 1
+        if offer_created:
+            summary["new_offers"] += 1
+        else:
+            summary["duplicate_offers"] += 1
+        summary["matched_requests"] += matched_requests
 
-    return saved
+        summary["rows"].append(
+            _build_watch_row(
+                watch,
+                watch_created=watch_created,
+                offer_created=offer_created,
+                request_matched=matched_requests > 0,
+            )
+        )
+
+    elapsed = time.perf_counter() - started_at
+    summary["processing_time"] = _format_processing_time(elapsed)
+    return summary
 
 
-def _parse_status(parsed: dict) -> str:
+def _normalize_whatsapp_number(value: str) -> str:
+    return value.strip()
+
+
+def _build_watch_row(
+    watch: dict[str, Any],
+    *,
+    watch_created: bool,
+    offer_created: bool,
+    request_matched: bool,
+) -> dict[str, Any]:
+    results = [
+        "New watch" if watch_created else "Existing watch",
+        "New offer" if offer_created else "Duplicate offer",
+    ]
+    if request_matched:
+        results.append("Request matched")
+
+    return {
+        "reference": _display_value(watch.get("reference")),
+        "brand": _display_value(watch.get("brand")),
+        "price": _format_price(
+            watch.get("original_price") or watch.get("price"),
+            watch.get("original_currency") or watch.get("currency"),
+        ),
+        "results": results,
+    }
+
+
+def _display_value(value: str | None) -> str:
+    if not value:
+        return "N/A"
+    return value.title() if value.islower() else value
+
+
+def _format_price(amount: int | None, currency: str | None) -> str:
+    if amount is None:
+        return "N/A"
+
+    formatted = f"{amount:,}"
+    if currency == "USD":
+        return f"${formatted}"
+    if currency == "EUR":
+        return f"€{formatted}"
+    if currency == "GBP":
+        return f"£{formatted}"
+    if currency == "CHF":
+        return f"CHF {formatted}"
+    if currency == "HKD":
+        return f"HK${formatted}"
+    if currency:
+        return f"{formatted} {currency}"
+    return formatted
+
+
+def _format_processing_time(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1000:.0f} ms"
+    return f"{seconds:.2f} s"
+
+
+def _parse_status(parsed: dict[str, Any]) -> str:
     if parsed["message_type"] == "unknown":
         return "partial"
     if parsed["watches"]:
@@ -124,12 +274,12 @@ def _parse_status(parsed: dict) -> str:
 def main() -> None:
     try:
         text = read_message()
-        saved = ingest_message(text)
+        summary = ingest_message(text)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Saved {saved} offer(s).")
+    print(f"Saved {summary['new_offers']} offer(s).")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,10 @@
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
             <a class="navbar-brand fw-semibold" href="/">MRV4ULT AI</a>
-            <span class="navbar-text text-secondary small">Internal dashboard · read-only</span>
+            <div class="navbar-nav flex-row gap-3 ms-auto">
+                <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/">Search</a>
+                <a class="nav-link{% if request.url.path == '/import' %} active{% endif %}" href="/import">Import</a>
+            </div>
         </div>
     </nav>
 

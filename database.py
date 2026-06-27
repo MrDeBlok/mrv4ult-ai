@@ -80,7 +80,7 @@ def find_or_create_watch(
     model: str | None = None,
     dial: str | None = None,
     bracelet: str | None = None,
-) -> Record:
+) -> tuple[Record, bool]:
     """Find an existing watch by identity fields, or create a new one."""
     _ensure_logging()
 
@@ -99,7 +99,7 @@ def find_or_create_watch(
                 row.get("bracelet"),
                 row.get("id"),
             )
-            return row
+            return row, False
 
     payload: Record = {
         "brand": _storage_value(brand),
@@ -118,7 +118,7 @@ def find_or_create_watch(
         created.get("bracelet"),
         created.get("id"),
     )
-    return created
+    return created, True
 
 
 def _normalize_watch_value(value: str | None) -> str | None:
@@ -323,8 +323,12 @@ def insert_offer(
     is_duplicate: bool = False,
     duplicate_of_id: str | None = None,
     status: str = "active",
-) -> tuple[Record, bool]:
-    """Insert an offer unless an identical active offer already exists."""
+) -> tuple[Record, bool, int]:
+    """Insert an offer unless an identical active offer already exists.
+
+    Returns the offer record, whether it was newly created, and the number of
+    matched active requests.
+    """
     normalized_currency = _storage_value(original_currency)
     normalized_condition = _storage_value(condition)
     normalized_card_date = _storage_value(card_date)
@@ -340,7 +344,7 @@ def insert_offer(
     )
     if existing:
         print("Duplicate offer found")
-        return existing, False
+        return existing, False, 0
 
     payload: Record = {
         "message_id": message_id,
@@ -366,16 +370,17 @@ def insert_offer(
     print("Created new offer")
 
     watch = _get_watch_by_id(watch_id)
-    for request in find_matching_requests(
+    matches = find_matching_requests(
         brand=watch.get("brand"),
         reference=watch.get("reference"),
         dial=watch.get("dial"),
         bracelet=watch.get("bracelet"),
         usd_price=usd_price,
-    ):
+    )
+    for request in matches:
         print(f"Match found for request {request['id']}")
 
-    return created, True
+    return created, True, len(matches)
 
 
 def _first_row(data: list[Record] | None, table: str) -> Record:

@@ -6,6 +6,20 @@ body {
     border: 0;
 }
 
+.import-textarea {
+    font-family: inherit;
+    min-height: 16rem;
+}
+
+.import-stats dt {
+    font-weight: 600;
+}
+
+.import-result-badge {
+    margin-right: 0.25rem;
+    margin-bottom: 0.25rem;
+}
+
 .navbar-brand {
     letter-spacing: 0.04em;
 }

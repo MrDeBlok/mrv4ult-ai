@@ -5,12 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from database import get_active_offers_for_watch, get_client, get_watch_by_id
+from ingest import ingest_message
 from search import (
     _display_value,
     _nested_record,
@@ -183,6 +184,68 @@ def build_watch_display(watch: dict[str, Any]) -> dict[str, str]:
         "dial": _display_value(watch.get("dial")),
         "bracelet": _display_value(watch.get("bracelet")),
     }
+
+
+@app.get("/import", response_class=HTMLResponse, name="import_page")
+async def import_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "import.html",
+        {
+            "message_text": "",
+            "group_name": "",
+            "dealer_whatsapp": "",
+            "dealer_alias": "",
+            "summary": None,
+            "error": None,
+        },
+    )
+
+
+@app.post("/import", response_class=HTMLResponse)
+async def import_submit(
+    request: Request,
+    message: str = Form(""),
+    group_name: str = Form(""),
+    dealer_whatsapp: str = Form(""),
+    dealer_alias: str = Form(""),
+) -> HTMLResponse:
+    message_text = message.strip()
+    group_name_value = group_name.strip()
+    dealer_whatsapp_value = dealer_whatsapp.strip()
+    dealer_alias_value = dealer_alias.strip()
+    error: str | None = None
+    summary: dict[str, Any] | None = None
+
+    if not group_name_value:
+        error = "Group name is required."
+    elif not dealer_whatsapp_value:
+        error = "Dealer WhatsApp number is required."
+    elif not message_text:
+        error = "Message text is required."
+    else:
+        try:
+            summary = ingest_message(
+                message_text,
+                group_name=group_name_value,
+                dealer_whatsapp=dealer_whatsapp_value,
+                dealer_alias=dealer_alias_value or None,
+            )
+        except Exception as exc:
+            error = str(exc)
+
+    return templates.TemplateResponse(
+        request,
+        "import.html",
+        {
+            "message_text": message_text,
+            "group_name": group_name_value,
+            "dealer_whatsapp": dealer_whatsapp_value,
+            "dealer_alias": dealer_alias_value,
+            "summary": summary,
+            "error": error,
+        },
+    )
 
 
 @app.get("/watch/{watch_id}", response_class=HTMLResponse, name="watch_detail")
