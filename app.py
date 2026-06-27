@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,9 +133,14 @@ def _parse_cheapest_only(value: str | None) -> bool:
 
 
 def normalize_offer(offer: dict[str, Any]) -> dict[str, Any]:
-    """Flatten nested Supabase dealer data onto an offer record."""
+    """Flatten nested Supabase dealer and message data onto an offer record."""
     normalized = dict(offer)
     normalized["dealer"] = _nested_record(normalized.pop("dealers", None))
+    message = _nested_record(normalized.pop("messages", None))
+    normalized["received_at"] = message.get("received_at")
+    normalized["group_id"] = message.get("group_id")
+    group = _nested_record(message.get("groups"))
+    normalized["group_name"] = group.get("name")
     return normalized
 
 
@@ -144,12 +150,30 @@ def build_watch_stats(offers: list[dict[str, Any]]) -> dict[str, Any]:
         price for price in (offer.get("usd_price") for offer in offers) if price is not None
     ]
     average_usd = round(sum(usd_prices) / len(usd_prices)) if usd_prices else None
+    dealer_ids = {offer.get("dealer_id") for offer in offers if offer.get("dealer_id")}
+    group_keys = {
+        offer.get("group_id") or offer.get("group_name")
+        for offer in offers
+        if offer.get("group_id") or offer.get("group_name")
+    }
     return {
         "lowest_usd": format_usd_price(min(usd_prices) if usd_prices else None),
         "average_usd": format_usd_price(average_usd),
         "highest_usd": format_usd_price(max(usd_prices) if usd_prices else None),
         "offer_count": len(offers),
+        "unique_dealers": len(dealer_ids),
+        "unique_groups": len(group_keys),
     }
+
+
+def format_received_at(value: str | None) -> str:
+    if not value:
+        return "N/A"
+    try:
+        received_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return received_at.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
 
 
 def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -157,11 +181,12 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     for offer in sorted(offers, key=_sort_key_usd_price):
-        dealer_contact = format_dealer_contact(offer.get("dealer") or {})
+        dealer = offer.get("dealer") or {}
         rows.append(
             {
-                "dealer_primary": dealer_contact["primary"],
-                "dealer_secondary": dealer_contact["secondary"],
+                "dealer_name": dealer.get("display_name") or "Unknown dealer",
+                "dealer_whatsapp": dealer.get("phone_number") or dealer.get("whatsapp_id") or "N/A",
+                "group_name": offer.get("group_name") or "N/A",
                 "original_price": format_price(
                     offer.get("original_price"),
                     offer.get("original_currency"),
@@ -169,6 +194,7 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "usd_price": format_usd_price(offer.get("usd_price")),
                 "card_date": offer.get("card_date") or "N/A",
                 "condition": offer.get("condition") or "N/A",
+                "received_at": format_received_at(offer.get("received_at")),
             }
         )
 

@@ -283,13 +283,14 @@ def get_watch_by_id(watch_id: str) -> Record | None:
 
 
 def get_active_offers_for_watch(watch_id: str) -> list[Record]:
-    """Return all active offers for a watch, including dealer contact fields."""
+    """Return all active offers for a watch with dealer, group, and message metadata."""
     response = (
         get_client()
         .table("offers")
         .select(
-            "original_price, original_currency, usd_price, card_date, condition, "
-            "dealers(display_name, phone_number, whatsapp_id)"
+            "dealer_id, original_price, original_currency, usd_price, card_date, condition, "
+            "dealers(display_name, phone_number, whatsapp_id), "
+            "messages(received_at, group_id, groups(name))"
         )
         .eq("watch_id", watch_id)
         .eq("status", "active")

@@ -40,21 +40,29 @@
     <div class="card-body p-3 p-md-4">
         <h2 class="h5 mb-3">Statistics</h2>
         <div class="row g-3">
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Lowest USD price</div>
                 <div class="fw-semibold">{{ stats.lowest_usd }}</div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Average USD price</div>
                 <div class="fw-semibold">{{ stats.average_usd }}</div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Highest USD price</div>
                 <div class="fw-semibold">{{ stats.highest_usd }}</div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Active offers</div>
                 <div class="fw-semibold">{{ stats.offer_count }}</div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="text-muted small">Unique dealers</div>
+                <div class="fw-semibold">{{ stats.unique_dealers }}</div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="text-muted small">Groups</div>
+                <div class="fw-semibold">{{ stats.unique_groups }}</div>
             </div>
         </div>
     </div>
@@ -69,26 +77,27 @@
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
-                    <th scope="col">Dealer / WhatsApp</th>
+                    <th scope="col">Dealer name</th>
+                    <th scope="col">Dealer WhatsApp</th>
+                    <th scope="col">Group</th>
                     <th scope="col">Original price</th>
                     <th scope="col">USD price</th>
                     <th scope="col">Card date</th>
                     <th scope="col">Condition</th>
+                    <th scope="col">Received at</th>
                 </tr>
             </thead>
             <tbody>
                 {% for offer in offers %}
                 <tr>
-                    <td>
-                        <div>{{ offer.dealer_primary }}</div>
-                        {% if offer.dealer_secondary %}
-                        <div class="text-muted small">{{ offer.dealer_secondary }}</div>
-                        {% endif %}
-                    </td>
+                    <td>{{ offer.dealer_name }}</td>
+                    <td>{{ offer.dealer_whatsapp }}</td>
+                    <td>{{ offer.group_name }}</td>
                     <td>{{ offer.original_price }}</td>
                     <td class="fw-semibold">{{ offer.usd_price }}</td>
                     <td>{{ offer.card_date }}</td>
                     <td>{{ offer.condition }}</td>
+                    <td>{{ offer.received_at }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
