@@ -61,6 +61,71 @@
     </div>
 </section>
 
+{% if detail.deal_analyses %}
+<section class="mb-4">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <h2 class="h5 mb-0">Deal analysis</h2>
+        <span class="text-muted small">Quick read for buying decisions</span>
+    </div>
+    <div class="row g-3">
+        {% for deal in detail.deal_analyses %}
+        <div class="col-12 col-xl-6">
+            <div class="card deal-analysis-card deal-analysis-{{ deal.recommendation_class }} shadow-sm h-100">
+                <div class="card-body p-3 p-md-4">
+                    <div class="deal-analysis-kicker">Deal analysis</div>
+                    <h3 class="deal-analysis-title">{{ deal.title }}</h3>
+
+                    <div class="deal-analysis-metrics">
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Offer price</span>
+                            <span class="deal-metric-value">{{ deal.offer_price }}</span>
+                        </div>
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Market price</span>
+                            <span class="deal-metric-value">{{ deal.market_price }}</span>
+                        </div>
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Difference</span>
+                            <span class="deal-metric-value">{{ deal.difference }}</span>
+                        </div>
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Difference %</span>
+                            <span class="deal-metric-value">{{ deal.difference_pct }}</span>
+                        </div>
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Market rank</span>
+                            <span class="deal-metric-value">{{ deal.market_rank_display }}</span>
+                        </div>
+                        <div class="deal-metric">
+                            <span class="deal-metric-label">Potential profit</span>
+                            <span class="deal-metric-value {% if deal.potential_profit_positive %}deal-profit-positive{% endif %}">
+                                {{ deal.potential_profit }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="deal-recommendation-banner">
+                        <span class="deal-recommendation-label">Recommendation</span>
+                        <span class="deal-recommendation-value">{{ deal.recommendation }}</span>
+                    </div>
+
+                    <div class="deal-confidence">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="deal-confidence-label">Recommendation confidence</span>
+                            <span class="deal-confidence-value">{{ deal.confidence_label }}</span>
+                        </div>
+                        <div class="progress deal-confidence-bar" role="progressbar" aria-valuenow="{{ deal.confidence }}" aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-bar" style="width: {{ deal.confidence }}%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
 {% if detail.watch_cards %}
 <section class="mb-4">
     <h2 class="h5 mb-3">Detected watch offers</h2>
