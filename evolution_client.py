@@ -257,3 +257,37 @@ def _format_state_label(state: str) -> str:
         "close": "Disconnected",
     }
     return labels.get(state, state.title())
+
+
+def fetch_group_info(instance_name: str, group_jid: str) -> Record:
+    """Fetch group metadata via GET /group/findGroupInfos/{instance}."""
+    jid = group_jid.strip()
+    if not jid:
+        raise EvolutionAPIError("Group JID is required.")
+    if not instance_name.strip():
+        raise EvolutionAPIError("Instance name is required.")
+
+    return _request(
+        "GET",
+        f"/group/findGroupInfos/{instance_name.strip()}",
+        params={"groupJid": jid},
+    )
+
+
+def extract_group_subject(payload: Record) -> str | None:
+    """Extract a group display name from a findGroupInfos response."""
+    candidates: list[Any] = []
+
+    if isinstance(payload, dict):
+        group = payload.get("group")
+        if isinstance(group, dict):
+            candidates.extend([group.get("subject"), group.get("name")])
+
+        for key in ("subject", "name"):
+            candidates.append(payload.get(key))
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    return None

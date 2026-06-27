@@ -9,8 +9,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from whatsapp_collector import WhatsAppMessage, collect_message
+from evolution_client import (
+    EvolutionAPIError,
+    extract_group_subject,
+    fetch_group_info,
+    get_default_instance_name,
+)
 
 logger = logging.getLogger(__name__)
+
+PRIVATE_OFFERS_GROUP_NAME = "Private Offers"
 
 _group_name_cache: dict[str, str] = {}
 
@@ -33,7 +41,7 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     log_webhook_payload(payload)
     event = normalize_event_name(payload.get("event"))
 
-    if event in {"groups.upsert", "groups.update"}:
+    if event in {"groups.upsert", "groups.update", "group.update"}:
         update_group_name_cache(payload.get("data"))
         return {"status": "ignored", "reason": "group metadata event"}
 
@@ -57,6 +65,14 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
 
     whatsapp_message = map_payload_to_whatsapp_message(payload, data, message_text)
     summary = collect_message(whatsapp_message)
+
+    if whatsapp_message.group_name == PRIVATE_OFFERS_GROUP_NAME:
+        logger.info(
+            "[Evolution webhook private] Private offer imported: dealer=%s watches_parsed=%s new_offers=%s",
+            summary.get("dealer_whatsapp"),
+            summary.get("watches_parsed"),
+            summary.get("new_offers"),
+        )
 
     return {
         "status": "imported",
@@ -117,10 +133,42 @@ def map_payload_to_whatsapp_message(
 ) -> WhatsAppMessage:
     key = data.get("key") or {}
     remote_jid = str(key.get("remoteJid") or "")
-    if not is_group_jid(remote_jid):
-        raise WebhookProcessingError("Only WhatsApp group messages are imported.")
 
-    group_name = resolve_group_name(remote_jid, data)
+    if is_private_chat(key):
+        logger.info(
+            "[Evolution webhook private] Private message detected: %s",
+            remote_jid or key.get("remoteJidAlt") or payload.get("sender"),
+        )
+        dealer_whatsapp = resolve_private_dealer_whatsapp(key, payload)
+        if not dealer_whatsapp:
+            raise WebhookProcessingError(
+                "Could not determine dealer WhatsApp number for private message."
+            )
+
+        dealer_alias = extract_dealer_alias(data)
+        received_at = extract_received_at(data, payload)
+        whatsapp_message = WhatsAppMessage(
+            group_name=PRIVATE_OFFERS_GROUP_NAME,
+            dealer_whatsapp=dealer_whatsapp,
+            dealer_alias=dealer_alias,
+            message_text=message_text,
+            received_at=received_at,
+        )
+        logger.info(
+            "[Evolution webhook private] Private offer mapped: dealer=%s alias=%s",
+            dealer_whatsapp,
+            dealer_alias or "N/A",
+        )
+        return whatsapp_message
+
+    if not is_group_jid(remote_jid):
+        raise WebhookProcessingError("Unsupported WhatsApp chat type.")
+
+    group_name = resolve_group_name(
+        remote_jid,
+        data,
+        instance_name=str(payload.get("instance") or ""),
+    )
     dealer_whatsapp = resolve_dealer_whatsapp(key, data, payload)
     if not dealer_whatsapp:
         raise WebhookProcessingError("Could not determine dealer WhatsApp number.")
@@ -137,7 +185,12 @@ def map_payload_to_whatsapp_message(
     )
 
 
-def resolve_group_name(group_jid: str, data: dict[str, Any]) -> str:
+def resolve_group_name(
+    group_jid: str,
+    data: dict[str, Any],
+    *,
+    instance_name: str = "",
+) -> str:
     for candidate in (
         _group_name_cache.get(group_jid),
         data.get("subject"),
@@ -145,9 +198,44 @@ def resolve_group_name(group_jid: str, data: dict[str, Any]) -> str:
         data.get("name"),
     ):
         if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
+            resolved = candidate.strip()
+            _group_name_cache[group_jid] = resolved
+            return resolved
 
-    raise WebhookProcessingError(f"Group name not found for {group_jid}.")
+    logger.info("[Evolution webhook group] Group name missing for %s", group_jid)
+
+    instance = instance_name.strip() or get_default_instance_name()
+    logger.info(
+        "[Evolution webhook group] Fetching group metadata for %s (instance=%s)",
+        group_jid,
+        instance,
+    )
+
+    try:
+        response = fetch_group_info(instance, group_jid)
+        subject = extract_group_subject(response)
+        if subject:
+            _group_name_cache[group_jid] = subject
+            logger.info(
+                "[Evolution webhook group] Group resolved: %s -> %s",
+                group_jid,
+                subject,
+            )
+            return subject
+        logger.warning(
+            "[Evolution webhook group] Group metadata fetched but no subject for %s",
+            group_jid,
+        )
+    except EvolutionAPIError as exc:
+        logger.warning(
+            "[Evolution webhook group] Could not fetch metadata for %s: %s",
+            group_jid,
+            exc,
+        )
+
+    logger.info("[Evolution webhook group] Fallback to remoteJid: %s", group_jid)
+    _group_name_cache[group_jid] = group_jid
+    return group_jid
 
 
 def resolve_dealer_whatsapp(
@@ -160,6 +248,24 @@ def resolve_dealer_whatsapp(
         key.get("participant"),
         data.get("participant"),
         data.get("participantAlt"),
+        payload.get("sender"),
+    ]
+
+    for candidate in candidates:
+        phone = jid_to_phone(str(candidate)) if candidate else None
+        if phone:
+            return phone
+
+    return None
+
+
+def resolve_private_dealer_whatsapp(
+    key: dict[str, Any],
+    payload: dict[str, Any],
+) -> str | None:
+    candidates = [
+        key.get("remoteJidAlt"),
+        key.get("remoteJid"),
         payload.get("sender"),
     ]
 
@@ -216,6 +322,16 @@ def update_group_name_cache(data: Any) -> None:
 
 def is_group_jid(jid: str) -> bool:
     return jid.endswith("@g.us")
+
+
+def is_private_jid(jid: str) -> bool:
+    return jid.endswith("@s.whatsapp.net")
+
+
+def is_private_chat(key: dict[str, Any]) -> bool:
+    remote_jid = str(key.get("remoteJid") or "")
+    remote_jid_alt = str(key.get("remoteJidAlt") or "")
+    return is_private_jid(remote_jid) or is_private_jid(remote_jid_alt)
 
 
 def jid_to_phone(jid: str) -> str | None:
