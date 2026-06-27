@@ -24,6 +24,8 @@ BRAND_ALIASES: dict[str, str] = {
     "fp": "FP Journe",
 }
 
+PRICE_FILTER_WORDS = frozenset({"under", "below", "max"})
+
 TERM_ALIASES: dict[str, str] = {
     "jub": "jubilee",
     "oys": "oyster",
@@ -44,7 +46,7 @@ def read_query() -> str:
 
 def search_offers(query: str) -> list[Record]:
     """Search active offers by watch fields matching all query tokens."""
-    tokens = _tokenize_query(query)
+    tokens, max_usd_price = parse_query(query)
     response = (
         get_client()
         .table("offers")
@@ -60,12 +62,52 @@ def search_offers(query: str) -> list[Record]:
     matches: list[Record] = []
     for offer in response.data or []:
         watch = _nested_record(offer.get("watches"))
-        if _watch_matches_tokens(watch, tokens):
-            offer["watch"] = watch
-            offer["dealer"] = _nested_record(offer.get("dealers"))
-            matches.append(offer)
+        if not _watch_matches_tokens(watch, tokens):
+            continue
+        if not _offer_within_max_usd_price(offer, max_usd_price):
+            continue
+        offer["watch"] = watch
+        offer["dealer"] = _nested_record(offer.get("dealers"))
+        matches.append(offer)
 
     return matches
+
+
+def parse_query(query: str) -> tuple[list[str], int | None]:
+    """Split a search query into watch tokens and an optional max USD price filter."""
+    parts = re.split(r"\s+", query.strip())
+    tokens: list[str] = []
+    max_usd_price: int | None = None
+    index = 0
+
+    while index < len(parts):
+        word = parts[index].lower()
+        if word in PRICE_FILTER_WORDS:
+            if index + 1 >= len(parts):
+                raise ValueError(f"Missing price after '{word}'.")
+            max_usd_price = _parse_max_usd_price(parts[index + 1])
+            index += 2
+            continue
+        tokens.append(parts[index])
+        index += 1
+
+    return tokens, max_usd_price
+
+
+def _parse_max_usd_price(value: str) -> int:
+    cleaned = value.replace(",", "").strip()
+    if not cleaned.isdigit():
+        raise ValueError(f"Invalid max USD price: {value}")
+    return int(cleaned)
+
+
+def _offer_within_max_usd_price(offer: Record, max_usd_price: int | None) -> bool:
+    if max_usd_price is None:
+        return True
+    usd_price = offer.get("usd_price")
+    if usd_price is None:
+        return False
+    return usd_price <= max_usd_price
 
 
 def group_offers_by_watch(offers: list[Record]) -> list[WatchGroup]:
@@ -98,10 +140,6 @@ def group_offers_by_watch(offers: list[Record]) -> list[WatchGroup]:
 
     groups.sort(key=lambda group: (group["lowest_usd"] is None, group["lowest_usd"] or 0))
     return groups
-
-
-def _tokenize_query(query: str) -> list[str]:
-    return [token for token in re.split(r"\s+", query.strip()) if token]
 
 
 def _nested_record(value: Any) -> Record:
