@@ -134,9 +134,15 @@ BRAND_PATTERN = re.compile(
     r"\b("
     r"rolex|rlx|patek(?:\s+philippe)?|pp|audemars(?:\s+piguet)?|ap|"
     r"vacheron(?:\s+constantin)?|vc|"
-    r"a\.?\s*lange(?:\s*&\s*s[öo]hne)?|als|lange|"
+    r"a\.?\s*lange(?:\s*&\s*s[öo]hne)?|lange|"
     r"richard\s+mille|rm|fp\s*journe|fpj|f\.?\s*p\.?\s*journe"
     r")\b",
+    re.I,
+)
+
+ALS_UPPER_PATTERN = re.compile(r"\bALS\b")
+ALS_CONTEXT_TERMS = re.compile(
+    r"\b(?:lange|saxonia|datograph|zeitwerk|odysseus|1815|chrono(?:graph)?)\b",
     re.I,
 )
 
@@ -475,9 +481,9 @@ def _looks_like_watch_line(line: str) -> bool:
         return True
     if _extract_price(line)[0] is not None:
         return True
-    if BRAND_PATTERN.search(line):
+    if _extract_brand(line):
         return True
-    if REQUEST_PATTERN.search(line) and (BRAND_PATTERN.search(line) or _extract_reference(line)[0]):
+    if REQUEST_PATTERN.search(line) and (_extract_brand(line) or _extract_reference(line)[0]):
         return True
     return False
 
@@ -657,10 +663,29 @@ def _normalize_brand_alias(alias: str) -> str:
 
 def _extract_brand(text: str) -> str | None:
     match = BRAND_PATTERN.search(text)
-    if not match:
+    if match:
+        alias = _normalize_brand_alias(match.group(1))
+        brand = BRAND_ALIASES.get(alias)
+        if brand:
+            return brand
+    return _extract_als_brand(text)
+
+
+def _extract_als_brand(text: str) -> str | None:
+    """Detect ALS as A. Lange & Söhne without matching Dutch 'als'."""
+    if ALS_UPPER_PATTERN.search(text):
+        return BRAND_ALIASES["als"]
+
+    if not re.search(r"\bals\b", text):
         return None
-    alias = _normalize_brand_alias(match.group(1))
-    return BRAND_ALIASES.get(alias)
+
+    if _extract_reference(text)[0]:
+        return BRAND_ALIASES["als"]
+    if ALS_CONTEXT_TERMS.search(text):
+        return BRAND_ALIASES["als"]
+    if _extract_price(text)[0] is not None:
+        return BRAND_ALIASES["als"]
+    return None
 
 
 def _infer_brand_from_reference(reference: str) -> str | None:

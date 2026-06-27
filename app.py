@@ -15,6 +15,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
+from activity_feed import (
+    activity_feed_counts,
+    build_ignored_activity_row,
+    filter_activity_feed_imports,
+    filter_ignored_import_logs,
+)
+from import_status import (
+    format_import_status,
+    import_status_class,
+    import_status_reason,
+    normalize_import_status,
+)
 from database import (
     get_active_offers_for_watch,
     get_client,
@@ -241,61 +253,6 @@ def format_timestamp(value: str | None) -> str:
         return timestamp.strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return value
-
-
-def normalize_import_status(import_log: dict[str, Any]) -> str:
-    """Map stored import status to the current status vocabulary."""
-    status = (import_log.get("status") or "").strip().lower()
-    if status == "warning" and import_log.get("watches_parsed", 0) == 0:
-        return "no_watch_detected"
-    return status
-
-
-def format_import_status(status: str | None) -> str:
-    labels = {
-        "success": "Success",
-        "no_watch_detected": "No watch detected",
-        "warning": "Needs review",
-        "error": "Error",
-    }
-    if not status:
-        return "Unknown"
-    return labels.get(status, status.replace("_", " ").title())
-
-
-def import_status_class(status: str | None) -> str:
-    return {
-        "success": "success",
-        "no_watch_detected": "info",
-        "warning": "warning",
-        "error": "danger",
-    }.get(status or "", "secondary")
-
-
-def import_status_reason(import_log: dict[str, Any]) -> str:
-    summary = import_log.get("summary") or {}
-    stored_reason = summary.get("status_reason")
-    if isinstance(stored_reason, str) and stored_reason.strip():
-        return stored_reason.strip()
-
-    status = normalize_import_status(import_log)
-    watches_parsed = import_log.get("watches_parsed", 0)
-    duplicate_offers = import_log.get("duplicate_offers", 0)
-
-    if status == "error":
-        return "Technical failure during import."
-    if status == "no_watch_detected":
-        return "No watch offer was detected in this message."
-    if status == "warning":
-        return "Parsed watches are missing important fields such as brand, reference, or price."
-    if duplicate_offers:
-        return (
-            f"Successfully parsed {watches_parsed} watch offer(s). "
-            f"{duplicate_offers} duplicate offer(s) were skipped."
-        )
-    if watches_parsed:
-        return f"Successfully parsed {watches_parsed} watch offer(s)."
-    return "Import completed."
 
 
 WATCH_OFFER_CARD_FIELDS: list[tuple[str, str]] = [
@@ -742,11 +699,34 @@ async def evolution_webhook(request: Request) -> JSONResponse:
 
 @app.get("/activity", response_class=HTMLResponse, name="activity_list")
 async def activity_list(request: Request) -> HTMLResponse:
-    imports = [build_activity_row(import_log) for import_log in list_import_logs()]
+    import_logs = list_import_logs()
+    stats = activity_feed_counts(import_logs)
+    imports = [
+        build_activity_row(import_log)
+        for import_log in filter_activity_feed_imports(import_logs)
+    ]
     return templates.TemplateResponse(
         request,
         "activity.html",
-        {"imports": imports},
+        {"imports": imports, "stats": stats},
+    )
+
+
+@app.get("/activity/ignored", response_class=HTMLResponse, name="activity_ignored")
+async def activity_ignored(request: Request) -> HTMLResponse:
+    import_logs = list_import_logs()
+    stats = activity_feed_counts(import_logs)
+    ignored_rows: list[dict[str, Any]] = []
+    for import_log in filter_ignored_import_logs(import_logs):
+        message = get_message_by_id(import_log["message_id"])
+        row = build_ignored_activity_row(import_log, message)
+        row["import_time"] = format_timestamp(import_log.get("import_time"))
+        ignored_rows.append(row)
+
+    return templates.TemplateResponse(
+        request,
+        "activity_ignored.html",
+        {"imports": ignored_rows, "stats": stats},
     )
 
 

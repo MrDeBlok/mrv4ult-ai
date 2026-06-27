@@ -54,6 +54,18 @@ body {
     cursor: pointer;
 }
 
+.activity-feed-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.25rem;
+    color: #495057;
+    font-size: 0.95rem;
+}
+
+.activity-stat strong {
+    font-weight: 700;
+}
+
 .import-message {
     white-space: pre-wrap;
     word-break: break-word;

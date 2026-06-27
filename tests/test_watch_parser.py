@@ -7,6 +7,27 @@ import pytest
 from watch_parser import parse_message, parse_watch_line
 
 
+class TestAlsBrandDetection:
+    def test_dutch_als_is_not_treated_as_brand(self) -> None:
+        result = parse_message("ik ga pas eten als iedereen er is")
+
+        assert result["watches"] == []
+
+    def test_uppercase_als_with_model_and_price(self) -> None:
+        watch = parse_watch_line("ALS Odysseus blue dial €40000")
+
+        assert watch is not None
+        assert watch["brand"] == "A. Lange & Söhne"
+        assert watch["dial"] == "Blue"
+
+    def test_uppercase_als_with_reference_context(self) -> None:
+        watch = parse_watch_line("ALS 1815 chrono 2022 full set")
+
+        assert watch is not None
+        assert watch["brand"] == "A. Lange & Söhne"
+        assert watch["condition"] == "full set"
+
+
 class TestBrandRecognition:
     @pytest.mark.parametrize(
         ("line", "expected_brand"),

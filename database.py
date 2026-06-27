@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -360,6 +360,23 @@ def get_import_log(import_log_id: str) -> Record | None:
     if not response.data:
         return None
     return response.data[0]
+
+
+def cleanup_ignored_messages(days: int = 30) -> int:
+    """Delete ignored import logs older than the given number of days."""
+    if days < 0:
+        raise ValueError("days must be zero or greater")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    response = (
+        get_client()
+        .table("import_logs")
+        .delete()
+        .eq("status", "no_watch_detected")
+        .lt("import_time", cutoff.isoformat())
+        .execute()
+    )
+    return len(response.data or [])
 
 
 def get_message_by_id(message_id: str) -> Record | None:
