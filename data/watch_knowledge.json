@@ -1,0 +1,44 @@
+{
+  "126713GRNR": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Zombie",
+    "metal": "Steel / Yellow Gold",
+    "bezel": "Black & Grey Cerachrom",
+    "dial_color": "Grey",
+    "bracelet": "Jubilee",
+    "case_size": "40 mm",
+    "movement": "3285",
+    "production_status": "Current Production",
+    "launch_year": 2024
+  },
+  "126500LN": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Panda",
+    "metal": "Steel",
+    "bezel": "Black Cerachrom",
+    "dial_color": "White",
+    "bracelet": "Oyster",
+    "case_size": "40 mm",
+    "movement": "4131",
+    "production_status": "Current Production",
+    "launch_year": 2023
+  },
+  "126610LN": {
+    "brand": "Rolex",
+    "collection": "Submariner Date",
+    "model": "Submariner Date",
+    "nickname": null,
+    "metal": "Steel",
+    "bezel": "Black Cerachrom",
+    "dial_color": "Black",
+    "bracelet": "Oyster",
+    "case_size": "41 mm",
+    "movement": "3235",
+    "production_status": "Current Production",
+    "launch_year": 2020
+  }
+}

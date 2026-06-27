@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
 from database import (
     get_active_offers_for_watch,
     get_client,
@@ -376,9 +377,15 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         if _has_display_value(value):
             intelligence_fields.append({"label": label, "value": str(value)})
 
+    knowledge = watch.get("knowledge")
+    if not isinstance(knowledge, dict):
+        knowledge = lookup_reference(watch.get("reference") or row.get("reference"))
+    knowledge_fields = knowledge_display_fields(knowledge) if isinstance(knowledge, dict) else []
+
     return {
         "title": title,
         "fields": fields,
+        "knowledge_fields": knowledge_fields,
         "intelligence_fields": intelligence_fields,
         "price_label": row.get("price_label"),
         "price_label_class": row.get("price_label_class"),

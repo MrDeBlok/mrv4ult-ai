@@ -14,6 +14,7 @@ from database import (
     insert_message,
     insert_offer,
 )
+from watch_knowledge import enrich_parsed_watch
 from watch_parser import parse_message, read_message
 
 PARSER_VERSION = "watch_parser_v1"
@@ -109,6 +110,7 @@ def ingest_message(
     """Parse a message and save it with all offers to Supabase."""
     started_at = time.perf_counter()
     parsed = parse_message(text)
+    parsed_watches = [enrich_parsed_watch(watch) for watch in parsed["watches"]]
 
     if group_name is not None and dealer_whatsapp is not None:
         normalized_group_name = group_name.strip()
@@ -162,7 +164,7 @@ def ingest_message(
         "rows": [],
     }
 
-    for line_index, watch in enumerate(parsed["watches"]):
+    for line_index, watch in enumerate(parsed_watches):
         summary["watches_parsed"] += 1
         watch_row, watch_created = find_or_create_watch(
             brand=watch.get("brand"),
@@ -221,9 +223,9 @@ def ingest_message(
     summary["message_id"] = message["id"]
     summary["import_time"] = message_received_at.isoformat()
 
-    import_status, status_reason = _import_status(summary, parse_status, parsed["watches"])
+    import_status, status_reason = _import_status(summary, parse_status, parsed_watches)
     summary["status_reason"] = status_reason
-    summary["parsed_watches"] = list(parsed["watches"])
+    summary["parsed_watches"] = list(parsed_watches)
     import_log = insert_import_log(
         message_id=message["id"],
         import_time=message_received_at,

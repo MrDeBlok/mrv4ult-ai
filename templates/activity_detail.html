@@ -146,6 +146,17 @@
                     </dl>
                     {% endif %}
 
+                    {% if card.knowledge_fields %}
+                    <hr class="my-3">
+                    <div class="watch-knowledge-heading">Reference knowledge</div>
+                    <dl class="row mb-0 watch-offer-fields watch-knowledge-fields">
+                        {% for field in card.knowledge_fields %}
+                        <dt class="col-sm-4 col-md-3">{{ field.label }}</dt>
+                        <dd class="col-sm-8 col-md-9">{{ field.value }}</dd>
+                        {% endfor %}
+                    </dl>
+                    {% endif %}
+
                     {% if card.intelligence_fields %}
                     <hr class="my-3">
                     <dl class="row mb-0 watch-offer-fields">
