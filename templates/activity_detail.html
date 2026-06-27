@@ -61,6 +61,56 @@
     </div>
 </section>
 
+{% if detail.watch_cards %}
+<section class="mb-4">
+    <h2 class="h5 mb-3">Detected watch offers</h2>
+    <div class="row g-3">
+        {% for card in detail.watch_cards %}
+        <div class="col-12 col-xl-6">
+            <div class="card shadow-sm h-100 watch-offer-card">
+                <div class="card-header bg-white py-3">
+                    <h3 class="h6 mb-0">{{ card.title }}</h3>
+                </div>
+                <div class="card-body p-3 p-md-4">
+                    {% if card.fields %}
+                    <dl class="row mb-0 watch-offer-fields">
+                        {% for field in card.fields %}
+                        <dt class="col-sm-4 col-md-3">{{ field.label }}</dt>
+                        <dd class="col-sm-8 col-md-9">{{ field.value }}</dd>
+                        {% endfor %}
+                    </dl>
+                    {% endif %}
+
+                    {% if card.intelligence_fields %}
+                    <hr class="my-3">
+                    <dl class="row mb-0 watch-offer-fields">
+                        {% for field in card.intelligence_fields %}
+                        <dt class="col-sm-4 col-md-3">{{ field.label }}</dt>
+                        <dd class="col-sm-8 col-md-9">{{ field.value }}</dd>
+                        {% endfor %}
+                    </dl>
+                    {% endif %}
+
+                    {% if card.price_label or card.results %}
+                    <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                        {% if card.price_label %}
+                        <span class="badge rounded-pill text-bg-{{ card.price_label_class }}">
+                            {{ card.price_label }}
+                        </span>
+                        {% endif %}
+                        {% for result in card.results %}
+                        <span class="badge rounded-pill text-bg-light border import-result-badge">{{ result }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
 {% if detail.rows %}
 <section class="card shadow-sm mb-4">
     <div class="card-header bg-white py-3">

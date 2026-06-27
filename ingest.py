@@ -361,6 +361,16 @@ def _build_watch_row(
     return {
         "reference": _display_value(watch.get("reference")),
         "brand": _display_value(watch.get("brand")),
+        "model": _optional_display_value(watch.get("model")),
+        "nickname": watch.get("nickname"),
+        "dial": _optional_display_value(watch.get("dial")),
+        "bracelet": _optional_display_value(watch.get("bracelet")),
+        "condition": watch.get("condition"),
+        "card_date": watch.get("card_date"),
+        "original_price": watch.get("original_price") or watch.get("price"),
+        "original_currency": watch.get("original_currency") or watch.get("currency"),
+        "usd_price": watch.get("usd_price"),
+        "notes": watch.get("notes"),
         "price": _format_price(
             watch.get("original_price") or watch.get("price"),
             watch.get("original_currency") or watch.get("currency"),
@@ -372,6 +382,12 @@ def _build_watch_row(
         "price_label": price_intelligence["label"],
         "price_label_class": price_intelligence["label_class"],
     }
+
+
+def _optional_display_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    return _display_value(value)
 
 
 def _display_value(value: str | None) -> str:

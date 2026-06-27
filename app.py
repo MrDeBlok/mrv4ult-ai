@@ -40,6 +40,7 @@ from search import (
     group_offers_by_watch,
     search_offers,
 )
+from watch_parser import parse_message
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_WHATSAPP_INSTANCE = get_default_instance_name()
@@ -296,6 +297,108 @@ def import_status_reason(import_log: dict[str, Any]) -> str:
     return "Import completed."
 
 
+WATCH_OFFER_CARD_FIELDS: list[tuple[str, str]] = [
+    ("brand", "Brand"),
+    ("reference", "Reference"),
+    ("model", "Model"),
+    ("nickname", "Nickname"),
+    ("dial", "Dial"),
+    ("bracelet", "Bracelet"),
+    ("condition", "Condition"),
+    ("card_date", "Card date"),
+    ("original_price_display", "Original price"),
+    ("original_currency", "Currency"),
+    ("usd_price_display", "USD price"),
+    ("notes", "Notes"),
+]
+
+
+def _has_display_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and (not value.strip() or value.strip().upper() == "N/A"):
+        return False
+    return True
+
+
+def _card_text(row: dict[str, Any], watch: dict[str, Any], row_key: str, watch_key: str) -> str | None:
+    value = row.get(row_key)
+    if not _has_display_value(value):
+        value = watch.get(watch_key)
+    if not _has_display_value(value):
+        return None
+    if row_key in {"brand", "model", "dial", "bracelet", "reference"} and isinstance(value, str):
+        return _display_value(value)
+    return str(value)
+
+
+def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: int) -> dict[str, Any]:
+    original_price = row.get("original_price")
+    if original_price is None:
+        original_price = watch.get("original_price") or watch.get("price")
+    original_currency = row.get("original_currency") or watch.get("original_currency") or watch.get("currency")
+    usd_price = row.get("usd_price")
+    if usd_price is None:
+        usd_price = watch.get("usd_price")
+
+    merged = {
+        "brand": _card_text(row, watch, "brand", "brand"),
+        "reference": _card_text(row, watch, "reference", "reference"),
+        "model": _card_text(row, watch, "model", "model"),
+        "nickname": _card_text(row, watch, "nickname", "nickname"),
+        "dial": _card_text(row, watch, "dial", "dial"),
+        "bracelet": _card_text(row, watch, "bracelet", "bracelet"),
+        "condition": _card_text(row, watch, "condition", "condition"),
+        "card_date": _card_text(row, watch, "card_date", "card_date"),
+        "original_price_display": row.get("price")
+        or (format_price(original_price, original_currency) if original_price is not None else None),
+        "original_currency": original_currency if _has_display_value(original_currency) else None,
+        "usd_price_display": format_usd_price(usd_price) if usd_price is not None else None,
+        "notes": _card_text(row, watch, "notes", "notes"),
+    }
+
+    fields = [
+        {"label": label, "value": merged[key]}
+        for key, label in WATCH_OFFER_CARD_FIELDS
+        if _has_display_value(merged.get(key))
+    ]
+
+    title_parts = [part for part in (merged.get("brand"), merged.get("reference")) if part]
+    title = " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
+
+    intelligence_fields: list[dict[str, str]] = []
+    for key, label in (
+        ("rank", "Rank"),
+        ("previous_lowest_usd", "Previous lowest"),
+        ("price_difference", "Difference vs lowest"),
+    ):
+        value = row.get(key)
+        if _has_display_value(value):
+            intelligence_fields.append({"label": label, "value": str(value)})
+
+    return {
+        "title": title,
+        "fields": fields,
+        "intelligence_fields": intelligence_fields,
+        "price_label": row.get("price_label"),
+        "price_label_class": row.get("price_label_class"),
+        "results": row.get("results") or [],
+    }
+
+
+def build_watch_offer_cards(raw_message: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build card view models for parsed watches on the import detail page."""
+    parsed_watches = parse_message(raw_message).get("watches") or [] if raw_message.strip() else []
+    item_count = max(len(rows), len(parsed_watches))
+
+    cards: list[dict[str, Any]] = []
+    for index in range(item_count):
+        row = rows[index] if index < len(rows) else {}
+        watch = parsed_watches[index] if index < len(parsed_watches) else {}
+        cards.append(_build_watch_offer_card(row, watch, index))
+    return cards
+
+
 def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
     """Format one import log for the activity list."""
     status = normalize_import_status(import_log)
@@ -323,6 +426,8 @@ def build_activity_detail(
     summary = import_log.get("summary") or {}
     message = message or {}
     status = normalize_import_status(import_log)
+    rows = summary.get("rows") or []
+    raw_message = message.get("raw_text") or ""
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
@@ -338,8 +443,9 @@ def build_activity_detail(
         "status": format_import_status(status),
         "status_class": import_status_class(status),
         "status_reason": import_status_reason(import_log),
-        "raw_message": message.get("raw_text") or "",
-        "rows": summary.get("rows") or [],
+        "raw_message": raw_message,
+        "watch_cards": build_watch_offer_cards(raw_message, rows),
+        "rows": rows,
     }
 
 

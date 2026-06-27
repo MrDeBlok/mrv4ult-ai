@@ -65,6 +65,19 @@ body {
     font-size: 0.95rem;
 }
 
+.watch-offer-card .watch-offer-fields dt {
+    font-weight: 600;
+    color: #495057;
+}
+
+.watch-offer-card .watch-offer-fields dd {
+    margin-bottom: 0.75rem;
+}
+
+.watch-offer-card .watch-offer-fields dd:last-child {
+    margin-bottom: 0;
+}
+
 .whatsapp-qr {
     max-width: 320px;
     border: 1px solid #dee2e6;
