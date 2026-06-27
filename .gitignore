@@ -8,6 +8,10 @@ __pycache__/
 # Environment
 .env
 .env.*
+!.env.example
+
+# Evolution API local data
+data/evolution/
 
 # OS
 .DS_Store
