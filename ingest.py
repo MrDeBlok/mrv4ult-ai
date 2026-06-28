@@ -150,6 +150,7 @@ def ingest_message(
     dealer_whatsapp: str | None = None,
     dealer_alias: str | None = None,
     received_at: datetime | None = None,
+    imported_by_user_id: str | None = None,
 ) -> IngestSummary:
     """Parse a message and save it with all offers to Supabase."""
     started_at = time.perf_counter()
@@ -207,6 +208,7 @@ def ingest_message(
         parsed_at=now,
         parser_version=PARSER_VERSION,
         parse_status=parse_status,
+        imported_by_user_id=imported_by_user_id,
     )
 
     if business_import:
@@ -339,6 +341,7 @@ def ingest_message(
         processing_time_ms=summary["processing_time_ms"],
         status=import_status,
         summary=summary,
+        imported_by_user_id=imported_by_user_id,
     )
 
     matched_request_count = 0

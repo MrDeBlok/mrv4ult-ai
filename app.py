@@ -13,6 +13,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 from condition_normalizer import display_condition
 from model_aliases import alias_display_fields, enrich_with_model_alias
@@ -67,6 +68,7 @@ from database import (
     load_enriched_request_matches_by_request_ids,
     list_requests,
     list_requests_for_client,
+    list_users,
     mark_all_notifications_read,
     mark_notification_read,
     mark_import_parser_issue_ignored,
@@ -140,12 +142,27 @@ from contact_classification import (
     filter_records_by_contact_search,
     format_import_sender_label,
     is_business_contact,
-    is_business_import_log,
     is_removed_contact,
     parse_contacts_filter,
     should_redact_import_sender,
 )
 from notifications import build_notification_display, get_unread_notification_count
+from auth import (
+    authenticate_email,
+    get_current_user,
+    is_admin,
+    is_public_path,
+    login_user,
+    logout_user,
+    redirect_to_login,
+    session_secret_key,
+)
+from user_visibility import (
+    can_view_import,
+    filter_contacts_for_user,
+    filter_contacts_page_for_user,
+    filter_imports_for_user,
+)
 from request_profit import (
     attach_profit_to_matches,
     build_request_profit_summary,
@@ -171,6 +188,58 @@ app = FastAPI(title="MRV4ULT AI Dashboard")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["unread_notification_count"] = get_unread_notification_count
+templates.env.globals["current_user"] = get_current_user
+templates.env.globals["is_admin"] = is_admin
+
+
+@app.middleware("http")
+async def require_authenticated_user(request: Request, call_next):
+    if is_public_path(request.url.path):
+        return await call_next(request)
+    if get_current_user(request) is None:
+        return redirect_to_login()
+    return await call_next(request)
+
+
+app.add_middleware(SessionMiddleware, secret_key=session_secret_key())
+
+
+@app.get("/login", response_class=HTMLResponse, name="login_page")
+async def login_page(request: Request, error: str = "") -> HTMLResponse:
+    if get_current_user(request) is not None:
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": error.strip() or None},
+    )
+
+
+@app.post("/login")
+async def login_submit(request: Request, email: str = Form(...)) -> RedirectResponse:
+    user = authenticate_email(email)
+    if user is None:
+        return RedirectResponse(url="/login?error=unknown-email", status_code=303)
+    login_user(request, user)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/logout")
+async def logout_submit(request: Request) -> RedirectResponse:
+    logout_user(request)
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/users", response_class=HTMLResponse, name="users_page")
+async def users_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if user is None or not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {"users": list_users()},
+    )
 
 
 def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1109,14 +1178,22 @@ async def requests_close(request_id: str) -> RedirectResponse:
     return RedirectResponse(url="/requests", status_code=303)
 
 
+def _visible_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return filter_imports_for_user(list_import_logs(), user)
+
+
+def _parser_review_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+    return filter_business_import_logs(_visible_import_logs(user), lookup)
+
+
 def _business_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
     return filter_business_import_logs(import_logs, lookup)
 
 
-def _is_business_import_log(import_log: dict[str, Any]) -> bool:
-    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
-    return is_business_import_log(import_log, lookup)
+def _can_access_import_log(user: dict[str, Any] | None, import_log: dict[str, Any]) -> bool:
+    return can_view_import(user, import_log)
 
 
 ACTIVITY_TAB_FILTERS = {
@@ -1142,7 +1219,8 @@ ACTIVITY_EMPTY_MESSAGES = {
 
 
 def _render_activity_page(request: Request, tab: str) -> HTMLResponse:
-    import_logs = _business_import_logs(list_import_logs())
+    user = get_current_user(request)
+    import_logs = _visible_import_logs(user)
     stats = activity_feed_counts(import_logs)
     imports = [
         build_activity_row(import_log)
@@ -1184,7 +1262,8 @@ async def activity_all(request: Request) -> HTMLResponse:
 @app.get("/parser-review", response_class=HTMLResponse, name="parser_review")
 async def parser_review_page(request: Request, filter: str = "all") -> HTMLResponse:
     filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
-    import_logs = _business_import_logs(list_import_logs())
+    user = get_current_user(request)
+    import_logs = _parser_review_import_logs(user)
     counts = parser_review_counts(import_logs)
     filtered_logs = filter_parser_review_by_issue(import_logs, filter_key)
     rows: list[dict[str, Any]] = []
@@ -1259,8 +1338,9 @@ async def parser_review_add_brand_alias(
 
 @app.get("/activity/{import_id}", response_class=HTMLResponse, name="activity_detail")
 async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
+    user = get_current_user(request)
     import_log = get_import_log(import_id)
-    if import_log is None or not _is_business_import_log(import_log):
+    if import_log is None or not _can_access_import_log(user, import_log):
         raise HTTPException(status_code=404, detail="Import not found")
 
     message = get_message_by_id(import_log["message_id"])
@@ -1310,11 +1390,13 @@ async def import_submit(
         error = "Message text is required."
     else:
         try:
+            current_user = get_current_user(request)
             summary = ingest_message(
                 message_text,
                 group_name=group_name_value,
                 dealer_whatsapp=dealer_whatsapp_value,
                 dealer_alias=dealer_alias_value or None,
+                imported_by_user_id=current_user["id"] if current_user else None,
             )
         except Exception as exc:
             error = str(exc)
@@ -1734,10 +1816,12 @@ async def contacts_list(
     filter: str = DEFAULT_CONTACTS_FILTER,
     q: str = "",
 ) -> HTMLResponse:
+    user = get_current_user(request)
     active_filter = parse_contacts_filter(filter)
     search_query = q.strip()
-    contacts = filter_contact_rows(
-        build_contact_rows(list_contacts()),
+    contacts = filter_contacts_page_for_user(
+        list_contacts(),
+        user,
         filter_key=active_filter,
         search_query=search_query,
     )
@@ -1816,18 +1900,27 @@ async def contacts_set_client(
 
 @app.post("/contacts/{contact_id}/remove")
 async def contacts_remove_from_system(
+    request: Request,
     contact_id: str,
     confirm: str = Form(...),
     filter: str = Form(DEFAULT_CONTACTS_FILTER),
 ) -> RedirectResponse:
     if confirm != "1":
         raise HTTPException(status_code=400, detail="Confirmation required")
+    user = get_current_user(request)
     dealer = get_dealer_by_id(contact_id)
     if dealer is None:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if not filter_contacts_for_user([dealer], user):
+        raise HTTPException(status_code=404, detail="Contact not found")
     if is_removed_contact(dealer_contact_type(dealer)):
         raise HTTPException(status_code=400, detail="Contact already removed")
-    update_dealer_contact_type(contact_id, CONTACT_TYPE_REMOVED)
+    update_dealer_contact_type(
+        contact_id,
+        CONTACT_TYPE_REMOVED,
+        owner_user_id=user["id"] if user else None,
+        classified_by_user_id=user["id"] if user else None,
+    )
     return RedirectResponse(url=_contacts_redirect_url(filter, removed="1"), status_code=303)
 
 

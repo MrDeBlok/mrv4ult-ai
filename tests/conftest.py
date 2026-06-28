@@ -4,13 +4,49 @@ from __future__ import annotations
 
 import pytest
 
-from database import reset_client_profiles_cache, reset_contact_type_column_cache
+from database import reset_client_profiles_cache, reset_contact_type_column_cache, reset_user_columns_cache
+
+ADMIN_USER = {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "name": "Admin User",
+    "email": "admin@mrvault.local",
+    "role": "admin",
+    "created_at": "2026-06-27T12:00:00+00:00",
+}
+
+TRADER_ONE = {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "name": "Trader One",
+    "email": "trader1@mrvault.local",
+    "role": "trader",
+    "created_at": "2026-06-27T12:00:00+00:00",
+}
+
+TRADER_TWO = {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "name": "Trader Two",
+    "email": "trader2@mrvault.local",
+    "role": "trader",
+    "created_at": "2026-06-27T12:00:00+00:00",
+}
 
 
 @pytest.fixture(autouse=True)
 def _reset_contact_type_column_cache() -> None:
     reset_contact_type_column_cache()
     reset_client_profiles_cache()
+    reset_user_columns_cache()
     yield
     reset_contact_type_column_cache()
     reset_client_profiles_cache()
+    reset_user_columns_cache()
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_dashboard_user(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.node.get_closest_marker("no_auto_login"):
+        return
+    monkeypatch.setattr("app.get_current_user", lambda _request: ADMIN_USER)
+    monkeypatch.setattr("auth.authenticate_email", lambda email: ADMIN_USER if email == ADMIN_USER["email"] else None)
+    monkeypatch.setattr("database.users_table_supported", lambda: True)
+    monkeypatch.setattr("database.user_ownership_columns_supported", lambda: True)

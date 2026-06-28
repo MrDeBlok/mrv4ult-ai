@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app import app
+from tests.conftest import ADMIN_USER
 from contact_classification import (
     CONTACT_TYPE_CLIENT,
     CONTACT_TYPE_DEALER,
@@ -67,6 +68,40 @@ def _migration_step_positions(sql: str) -> dict[str, int]:
         "last_mapping_update": last_mapping_update,
         "add_constraint": add_positions[-1] if add_positions else -1,
     }
+
+
+def _sample_contacts() -> list[dict]:
+    return [
+        {
+            "id": "dealer-1",
+            "display_name": "HK Dealer",
+            "whatsapp_id": "85291234567",
+            "phone_number": "85291234567",
+            "contact_type": CONTACT_TYPE_DEALER,
+        },
+        {
+            "id": "client-1",
+            "display_name": "Wishlist Client",
+            "whatsapp_id": "85299998888",
+            "phone_number": "85299998888",
+            "contact_type": CONTACT_TYPE_CLIENT,
+        },
+        {
+            "id": "removed-1",
+            "display_name": "Removed Person",
+            "whatsapp_id": "85288887777",
+            "phone_number": "85288887777",
+            "contact_type": CONTACT_TYPE_REMOVED,
+            "owner_user_id": ADMIN_USER["id"],
+        },
+        {
+            "id": "placeholder-1",
+            "display_name": "Import Placeholder",
+            "whatsapp_id": "import-placeholder",
+            "phone_number": "N/A",
+            "contact_type": CONTACT_TYPE_REMOVED,
+        },
+    ]
 
 
 def _sample_contact_rows() -> list[dict]:
@@ -185,15 +220,12 @@ class TestContactsPageFilters:
 
 
 class TestContactsPeoplePage:
-    @patch("app.build_contact_rows")
     @patch("app.list_contacts")
     def test_people_page_default_shows_dealers_and_clients(
         self,
         mock_list_contacts: MagicMock,
-        mock_build_rows: MagicMock,
     ) -> None:
-        mock_list_contacts.return_value = []
-        mock_build_rows.return_value = _sample_contact_rows()
+        mock_list_contacts.return_value = _sample_contacts()
 
         client = TestClient(app)
         response = client.get("/contacts")
@@ -207,15 +239,12 @@ class TestContactsPeoplePage:
         assert "Set as Client" in response.text
         assert "Private" not in response.text
 
-    @patch("app.build_contact_rows")
     @patch("app.list_contacts")
     def test_removed_filter_shows_restore_actions_only(
         self,
         mock_list_contacts: MagicMock,
-        mock_build_rows: MagicMock,
     ) -> None:
-        mock_list_contacts.return_value = []
-        mock_build_rows.return_value = _sample_contact_rows()
+        mock_list_contacts.return_value = _sample_contacts()
 
         client = TestClient(app)
         response = client.get("/contacts?filter=removed")
@@ -242,7 +271,12 @@ class TestContactsPeoplePage:
         )
 
         assert response.status_code == 303
-        mock_update.assert_called_once_with("dealer-1", CONTACT_TYPE_REMOVED)
+        mock_update.assert_called_once_with(
+            "dealer-1",
+            CONTACT_TYPE_REMOVED,
+            owner_user_id=ADMIN_USER["id"],
+            classified_by_user_id=ADMIN_USER["id"],
+        )
 
     @patch("app.update_dealer_contact_type")
     @patch("app.get_dealer_by_id")

@@ -63,6 +63,8 @@ def get_client() -> Client:
 
 
 _contact_type_column_supported: bool | None = None
+_users_table_supported: bool | None = None
+_user_ownership_columns_supported: bool | None = None
 _client_profiles_supported: bool | None = None
 _watch_knowledge_supported: bool | None = None
 _watch_identification_supported: bool | None = None
@@ -72,6 +74,13 @@ def reset_contact_type_column_cache() -> None:
     """Reset cached contact_type column detection (for tests)."""
     global _contact_type_column_supported
     _contact_type_column_supported = None
+
+
+def reset_user_columns_cache() -> None:
+    """Reset cached user table/column detection (for tests)."""
+    global _users_table_supported, _user_ownership_columns_supported
+    _users_table_supported = None
+    _user_ownership_columns_supported = None
 
 
 def reset_client_profiles_cache() -> None:
@@ -108,6 +117,51 @@ def contact_type_column_supported() -> bool:
         else:
             raise
     return _contact_type_column_supported
+
+
+def users_table_supported() -> bool:
+    """Return True when the users table exists in the connected database."""
+    global _users_table_supported
+    if _users_table_supported is not None:
+        return _users_table_supported
+
+    try:
+        get_client().table("users").select("id").limit(1).execute()
+        _users_table_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42P01", "PGRST205"} or "users" in message and "does not exist" in message:
+            _users_table_supported = False
+            logger.warning(
+                "users table missing; apply docs/migrations/sprint_33_users_private_contacts.sql"
+            )
+        else:
+            raise
+    return _users_table_supported
+
+
+def user_ownership_columns_supported() -> bool:
+    """Return True when import/contact ownership columns exist."""
+    global _user_ownership_columns_supported
+    if _user_ownership_columns_supported is not None:
+        return _user_ownership_columns_supported
+
+    try:
+        get_client().table("import_logs").select("imported_by_user_id").limit(1).execute()
+        _user_ownership_columns_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "imported_by_user_id" in message:
+            _user_ownership_columns_supported = False
+            logger.warning(
+                "import ownership columns missing; apply "
+                "docs/migrations/sprint_33_users_private_contacts.sql"
+            )
+        else:
+            raise
+    return _user_ownership_columns_supported
 
 
 def client_profiles_supported() -> bool:
@@ -201,6 +255,7 @@ def insert_message(
     parser_version: str | None = None,
     parse_status: str | None = None,
     parse_error: str | None = None,
+    imported_by_user_id: str | None = None,
 ) -> Record:
     """Insert a row into messages and return the created record."""
     payload: Record = {
@@ -216,6 +271,8 @@ def insert_message(
         "parse_status": parse_status,
         "parse_error": parse_error,
     }
+    if imported_by_user_id and user_ownership_columns_supported():
+        payload["imported_by_user_id"] = imported_by_user_id
 
     response = get_client().table("messages").insert(payload).execute()
     return _first_row(response.data, "messages")
@@ -863,6 +920,7 @@ def insert_import_log(
     processing_time_ms: int,
     status: str,
     summary: Record,
+    imported_by_user_id: str | None = None,
 ) -> Record:
     """Persist a completed import for the activity dashboard."""
     payload: Record = {
@@ -880,6 +938,8 @@ def insert_import_log(
         "status": status,
         "summary": summary,
     }
+    if imported_by_user_id and user_ownership_columns_supported():
+        payload["imported_by_user_id"] = imported_by_user_id
     response = get_client().table("import_logs").insert(payload).execute()
     return _first_row(response.data, "import_logs")
 
@@ -1065,6 +1125,54 @@ def list_contacts() -> list[Record]:
     return response.data or []
 
 
+def list_users() -> list[Record]:
+    """Return all dashboard users."""
+    if not users_table_supported():
+        return []
+    response = (
+        get_client()
+        .table("users")
+        .select("id, name, email, role, created_at")
+        .order("name")
+        .execute()
+    )
+    return response.data or []
+
+
+def get_user_by_id(user_id: str) -> Record | None:
+    """Return one dashboard user by id."""
+    if not users_table_supported():
+        return None
+    response = (
+        get_client()
+        .table("users")
+        .select("id, name, email, role, created_at")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def get_user_by_email(email: str) -> Record | None:
+    """Return one dashboard user by email."""
+    if not users_table_supported():
+        return None
+    response = (
+        get_client()
+        .table("users")
+        .select("id, name, email, role, created_at")
+        .eq("email", email.strip().lower())
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
 def list_contacts_for_import_lookup() -> list[Record]:
     """Return contact classification fields used to filter business import logs."""
     fields = (
@@ -1082,7 +1190,13 @@ def list_contacts_for_import_lookup() -> list[Record]:
     return rows
 
 
-def update_dealer_contact_type(dealer_id: str, contact_type: str) -> Record:
+def update_dealer_contact_type(
+    dealer_id: str,
+    contact_type: str,
+    *,
+    owner_user_id: str | None = None,
+    classified_by_user_id: str | None = None,
+) -> Record:
     """Update the privacy classification for one contact."""
     if not contact_type_column_supported():
         raise RuntimeError(
@@ -1092,10 +1206,20 @@ def update_dealer_contact_type(dealer_id: str, contact_type: str) -> Record:
     if contact_type not in ALL_CONTACT_TYPES:
         raise ValueError(f"Unsupported contact type: {contact_type}")
 
+    updates: Record = {"contact_type": contact_type}
+    if user_ownership_columns_supported():
+        if contact_type == CONTACT_TYPE_REMOVED:
+            if owner_user_id:
+                updates["owner_user_id"] = owner_user_id
+            if classified_by_user_id:
+                updates["classified_by_user_id"] = classified_by_user_id
+        elif contact_type in {CONTACT_TYPE_DEALER, CONTACT_TYPE_CLIENT}:
+            updates["owner_user_id"] = None
+
     response = (
         get_client()
         .table("dealers")
-        .update({"contact_type": contact_type})
+        .update(updates)
         .eq("id", dealer_id)
         .execute()
     )

@@ -29,6 +29,16 @@
                 <a class="nav-link{% if request.url.path.startswith('/activity') %} active{% endif %}" href="/activity">Activity</a>
                 <a class="nav-link{% if request.url.path.startswith('/parser-review') %} active{% endif %}" href="/parser-review">Parser review</a>
                 <a class="nav-link{% if request.url.path.startswith('/whatsapp') %} active{% endif %}" href="/whatsapp">WhatsApp</a>
+                {% set user = current_user(request) %}
+                {% if user %}
+                {% if is_admin(user) %}
+                <a class="nav-link{% if request.url.path.startswith('/users') %} active{% endif %}" href="/users">Users</a>
+                {% endif %}
+                <span class="nav-link text-light-emphasis">{{ user.name }}</span>
+                <form method="post" action="/logout" class="d-inline">
+                    <button type="submit" class="btn btn-link nav-link px-0">Logout</button>
+                </form>
+                {% endif %}
             </div>
         </div>
     </nav>
