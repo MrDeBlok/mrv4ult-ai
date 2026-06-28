@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from activity_feed import format_dealer_label, message_preview
+from import_classification import looks_like_parser_review_offer
 from import_status import import_status_reason, normalize_import_status
 from ingest import _watch_missing_fields
 from unknown_brand_intelligence import extract_unknown_brand_text
@@ -60,6 +61,8 @@ def is_parser_review_pending(import_log: Record) -> bool:
     if summary.get("parser_reviewed"):
         return False
     if summary.get("parser_review_ignored"):
+        return False
+    if not looks_like_parser_review_offer(import_log):
         return False
     return True
 

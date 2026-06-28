@@ -29,6 +29,7 @@ from contact_classification import (
 from notifications import notify_request_match, record_import_notifications
 from watch_knowledge import enrich_parsed_watch
 from condition_normalizer import normalize_watch_condition
+from import_classification import is_buyer_request_message, split_offer_watches
 from watch_parser import parse_message
 from unknown_brand_intelligence import record_unknown_brands_for_watches
 from unknown_nickname_intelligence import record_unknown_nicknames_for_watches
@@ -157,7 +158,8 @@ def ingest_message(
         normalize_watch_condition(enrich_parsed_watch(watch))
         for watch in parsed["watches"]
     ]
-    has_valid_offers = has_valid_parsed_offers(len(parsed_watches))
+    offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
+    has_valid_offers = has_valid_parsed_offers(len(offer_watches))
 
     if group_name is not None and dealer_whatsapp is not None:
         normalized_group_name = group_name.strip()
@@ -209,13 +211,13 @@ def ingest_message(
 
     if business_import:
         record_unknown_brands_for_watches(
-            parsed_watches,
+            offer_watches,
             example_message=text,
             dealer_id=dealer_id,
             seen_at=message_received_at,
         )
         record_unknown_nicknames_for_watches(
-            parsed_watches,
+            offer_watches,
             example_message=text,
             dealer_id=dealer_id,
             seen_at=message_received_at,
@@ -237,7 +239,7 @@ def ingest_message(
 
     new_offers_for_matching: list[dict[str, Any]] = []
 
-    for line_index, watch in enumerate(parsed_watches):
+    for line_index, watch in enumerate(offer_watches):
         summary["watches_parsed"] += 1
         watch_row, watch_created = find_or_create_watch(
             brand=watch.get("brand"),
@@ -303,9 +305,19 @@ def ingest_message(
     summary["message_id"] = message["id"]
     summary["import_time"] = message_received_at.isoformat()
 
-    import_status, status_reason = _import_status(summary, parse_status, parsed_watches)
+    import_status, status_reason = _import_status(
+        summary,
+        parse_status,
+        offer_watches,
+        classification=import_classification,
+    )
     summary["status_reason"] = status_reason
     summary["parsed_watches"] = list(parsed_watches)
+    summary["message_type"] = parsed["message_type"]
+    if is_buyer_request_message(text, parsed):
+        summary["message_type"] = "request"
+    if import_classification:
+        summary["import_classification"] = import_classification
 
     log_dealer_whatsapp = summary_whatsapp if has_valid_offers else ""
     log_dealer_alias = summary_alias if has_valid_offers else None
@@ -665,9 +677,17 @@ def _import_status(
     summary: IngestSummary,
     parse_status: str,
     watches: list[dict[str, Any]],
+    *,
+    classification: str | None = None,
 ) -> tuple[str, str]:
     if parse_status == "failed":
         return "error", "Technical failure during parsing."
+
+    if classification == "request_intent":
+        return "request_intent", "Buyer request detected. Offer was not created."
+
+    if classification == "noise":
+        return "noise", "Chat noise detected. No watch offer was identified."
 
     if summary["watches_parsed"] == 0:
         return "no_watch_detected", "No watch offer was detected in this message."

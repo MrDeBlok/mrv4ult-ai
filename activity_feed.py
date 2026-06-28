@@ -8,7 +8,7 @@ from import_status import import_status_reason, normalize_import_status
 from contact_classification import format_import_sender_label, should_redact_import_sender
 
 ACTIVITY_FEED_STATUSES = frozenset({"success", "warning"})
-IGNORED_STATUSES = frozenset({"no_watch_detected"})
+IGNORED_STATUSES = frozenset({"no_watch_detected", "noise", "request_intent"})
 
 
 def message_preview(text: str | None, *, max_length: int = 80) -> str:
@@ -34,7 +34,7 @@ def activity_feed_counts(import_logs: list[dict[str, Any]]) -> dict[str, int]:
             counts["offers"] += 1
         elif status == "warning":
             counts["needs_review"] += 1
-        elif status == "no_watch_detected":
+        elif status in IGNORED_STATUSES:
             counts["ignored"] += 1
     return counts
 

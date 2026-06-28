@@ -18,6 +18,8 @@ def format_import_status(status: str | None) -> str:
         "success": "Success",
         "no_watch_detected": "No watch detected",
         "warning": "Needs review",
+        "noise": "Ignored noise",
+        "request_intent": "Buyer request",
         "error": "Error",
     }
     if not status:
@@ -30,6 +32,8 @@ def import_status_class(status: str | None) -> str:
         "success": "success",
         "no_watch_detected": "info",
         "warning": "warning",
+        "noise": "info",
+        "request_intent": "info",
         "error": "danger",
     }.get(status or "", "secondary")
 
@@ -46,6 +50,10 @@ def import_status_reason(import_log: dict[str, Any]) -> str:
 
     if status == "error":
         return "Technical failure during import."
+    if status == "noise":
+        return "Chat noise detected. No watch offer was identified."
+    if status == "request_intent":
+        return "Buyer request detected. Offer was not created."
     if status == "no_watch_detected":
         return "No watch offer was detected in this message."
     if status == "warning":
