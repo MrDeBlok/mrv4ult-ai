@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import quote
 
 Record = dict[str, Any]
 
@@ -231,6 +233,46 @@ def parse_contacts_filter(value: str | None) -> str:
     return normalized
 
 
+def normalize_search_query(value: str | None) -> str:
+    """Normalize a people/dealer/client search query."""
+    return (value or "").strip()
+
+
+def normalize_search_phone(value: str | None) -> str:
+    """Normalize phone/WhatsApp values for digit-only matching."""
+    return re.sub(r"\D", "", value or "")
+
+
+def matches_contact_search(record: Record, query: str) -> bool:
+    """Return True when a contact row matches a name or phone search query."""
+    normalized_query = normalize_search_query(query).lower()
+    if not normalized_query:
+        return True
+
+    searchable_values = [
+        str(record.get("name") or ""),
+        str(record.get("display_name") or ""),
+        str(record.get("whatsapp_id") or ""),
+        str(record.get("phone_number") or ""),
+    ]
+    query_digits = normalize_search_phone(normalized_query)
+
+    for value in searchable_values:
+        lowered_value = value.lower()
+        if normalized_query in lowered_value:
+            return True
+        if query_digits and query_digits in normalize_search_phone(value):
+            return True
+    return False
+
+
+def filter_records_by_contact_search(records: list[Record], query: str) -> list[Record]:
+    """Filter contact-like records by name or phone/WhatsApp."""
+    if not normalize_search_query(query):
+        return records
+    return [record for record in records if matches_contact_search(record, query)]
+
+
 def is_active_contacts_row(row: Record) -> bool:
     """Return True when a contact belongs on the default active people view."""
     contact_type = str(row.get("contact_type") or "")
@@ -241,6 +283,7 @@ def filter_contact_rows(
     rows: list[Record],
     *,
     filter_key: str = DEFAULT_CONTACTS_FILTER,
+    search_query: str = "",
 ) -> list[Record]:
     """Filter contacts for the people management page."""
     normalized_filter = parse_contacts_filter(filter_key)
@@ -251,33 +294,47 @@ def filter_contact_rows(
     ]
 
     if normalized_filter == CONTACTS_FILTER_REMOVED:
-        return [row for row in visible if row.get("contact_type") == CONTACT_TYPE_REMOVED]
+        filtered = [row for row in visible if row.get("contact_type") == CONTACT_TYPE_REMOVED]
+    else:
+        visible = [
+            row
+            for row in visible
+            if row.get("contact_type") != CONTACT_TYPE_REMOVED
+        ]
 
-    visible = [
-        row
-        for row in visible
-        if row.get("contact_type") != CONTACT_TYPE_REMOVED
-    ]
+        if normalized_filter == CONTACTS_FILTER_ALL:
+            filtered = visible
+        elif normalized_filter == CONTACTS_FILTER_DEALERS:
+            filtered = [row for row in visible if row.get("contact_type") == CONTACT_TYPE_DEALER]
+        elif normalized_filter == CONTACTS_FILTER_CLIENTS:
+            filtered = [row for row in visible if row.get("contact_type") == CONTACT_TYPE_CLIENT]
+        else:
+            filtered = [row for row in visible if is_active_contacts_row(row)]
 
-    if normalized_filter == CONTACTS_FILTER_ALL:
-        return visible
-    if normalized_filter == CONTACTS_FILTER_DEALERS:
-        return [row for row in visible if row.get("contact_type") == CONTACT_TYPE_DEALER]
-    if normalized_filter == CONTACTS_FILTER_CLIENTS:
-        return [row for row in visible if row.get("contact_type") == CONTACT_TYPE_CLIENT]
-
-    return [row for row in visible if is_active_contacts_row(row)]
+    return filter_records_by_contact_search(filtered, search_query)
 
 
-def build_contacts_filter_options(active_filter: str) -> list[Record]:
+def build_contacts_filter_options(active_filter: str, search_query: str = "") -> list[Record]:
     """Build filter links for the contacts page."""
     normalized_filter = parse_contacts_filter(active_filter)
+    normalized_search = normalize_search_query(search_query)
+
+    def build_href(filter_key: str) -> str:
+        params: list[str] = []
+        if filter_key != DEFAULT_CONTACTS_FILTER:
+            params.append(f"filter={filter_key}")
+        if normalized_search:
+            params.append(f"q={quote(normalized_search)}")
+        if not params:
+            return "/contacts"
+        return f"/contacts?{'&'.join(params)}"
+
     return [
         {
             "key": filter_key,
             "label": CONTACTS_FILTER_LABELS[filter_key],
             "active": filter_key == normalized_filter,
-            "href": "/contacts" if filter_key == DEFAULT_CONTACTS_FILTER else f"/contacts?filter={filter_key}",
+            "href": build_href(filter_key),
         }
         for filter_key in CONTACTS_FILTERS
     ]

@@ -17,10 +17,12 @@ logger = logging.getLogger(__name__)
 from condition_normalizer import normalize_condition_value
 from contact_classification import (
     ALL_CONTACT_TYPES,
+    CONTACT_TYPE_CLIENT,
     CONTACT_TYPE_DEALER,
     CONTACT_TYPE_REMOVED,
     IMPORT_PLACEHOLDER_WHATSAPP_ID,
     is_business_contact,
+    is_client_contact,
     normalize_contact_type,
 )
 from request_matching import match_offer_against_requests
@@ -61,12 +63,19 @@ def get_client() -> Client:
 
 
 _contact_type_column_supported: bool | None = None
+_client_profiles_supported: bool | None = None
 
 
 def reset_contact_type_column_cache() -> None:
     """Reset cached contact_type column detection (for tests)."""
     global _contact_type_column_supported
     _contact_type_column_supported = None
+
+
+def reset_client_profiles_cache() -> None:
+    """Reset cached client_profiles table detection (for tests)."""
+    global _client_profiles_supported
+    _client_profiles_supported = None
 
 
 def contact_type_column_supported() -> bool:
@@ -90,6 +99,25 @@ def contact_type_column_supported() -> bool:
         else:
             raise
     return _contact_type_column_supported
+
+
+def client_profiles_supported() -> bool:
+    """Return True when client_profiles exists in the connected database."""
+    global _client_profiles_supported
+    if _client_profiles_supported is not None:
+        return _client_profiles_supported
+
+    try:
+        get_client().table("client_profiles").select("id").limit(1).execute()
+        _client_profiles_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42P01", "PGRST205"} or "client_profiles" in message:
+            _client_profiles_supported = False
+        else:
+            raise
+    return _client_profiles_supported
 
 
 def _legacy_contact_type(dealer: Record) -> str:
@@ -343,6 +371,7 @@ def create_request(
     currency: str | None = None,
     notes: str | None = None,
     status: str = "open",
+    client_id: str | None = None,
 ) -> Record:
     """Create a manual client request."""
     payload: Record = {
@@ -360,6 +389,8 @@ def create_request(
         "notes": _storage_value(notes),
         "status": status,
     }
+    if client_id:
+        payload["client_id"] = client_id
     response = get_client().table("requests").insert(payload).execute()
     return _first_row(response.data, "requests")
 
@@ -1031,6 +1062,257 @@ def get_active_offers_for_dealer(dealer_id: str) -> list[Record]:
         for offer in response.data or []
         if _offer_from_business_dealer(offer)
     ]
+
+
+def list_clients() -> list[Record]:
+    """Return CRM client contacts."""
+    query = get_client().table("dealers").select("*").order("display_name")
+    if contact_type_column_supported():
+        query = query.eq("contact_type", CONTACT_TYPE_CLIENT)
+    response = query.execute()
+    return [
+        client
+        for client in response.data or []
+        if is_client_contact(dealer_contact_type(client))
+    ]
+
+
+def get_client_by_id(client_id: str) -> Record | None:
+    """Return one client contact row, or None when not a client."""
+    client = get_dealer_by_id(client_id)
+    if client is None or not is_client_contact(dealer_contact_type(client)):
+        return None
+    return client
+
+
+def list_client_profiles_by_client_ids(client_ids: list[str]) -> dict[str, Record]:
+    """Return client profiles keyed by client id."""
+    if not client_ids or not client_profiles_supported():
+        return {}
+
+    response = (
+        get_client()
+        .table("client_profiles")
+        .select("*")
+        .in_("client_id", client_ids)
+        .execute()
+    )
+    return {str(row["client_id"]): row for row in response.data or []}
+
+
+def get_client_profile(client_id: str) -> Record:
+    """Return the CRM profile for one client, creating a default row if needed."""
+    if not client_profiles_supported():
+        from client_intelligence import default_client_profile
+
+        return default_client_profile()
+
+    response = (
+        get_client()
+        .table("client_profiles")
+        .select("*")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    return create_client_profile(client_id)
+
+
+def create_client_profile(client_id: str) -> Record:
+    """Create a default CRM profile for one client."""
+    if not client_profiles_supported():
+        raise RuntimeError(
+            "Client profiles require client_profiles table. Apply "
+            "docs/migrations/sprint_28_clients.sql in Supabase."
+        )
+
+    response = (
+        get_client()
+        .table("client_profiles")
+        .insert({"client_id": client_id, "status": "active"})
+        .execute()
+    )
+    return _first_row(response.data, "client_profiles")
+
+
+def create_client_contact(*, name: str, phone_number: str | None = None) -> Record:
+    """Create a manual CRM client contact and profile."""
+    from uuid import uuid4
+
+    if not name.strip():
+        raise ValueError("Client name is required.")
+
+    payload: Record = {
+        "whatsapp_id": f"crm-{uuid4()}",
+        "phone_number": _storage_value(phone_number),
+        "display_name": name.strip(),
+        "is_active": True,
+    }
+    if contact_type_column_supported():
+        payload["contact_type"] = CONTACT_TYPE_CLIENT
+
+    response = get_client().table("dealers").insert(payload).execute()
+    client = _first_row(response.data, "dealers")
+    if client_profiles_supported():
+        create_client_profile(str(client["id"]))
+    return client
+
+
+def update_client_name(client_id: str, name: str) -> Record:
+    """Update the display name for one client contact."""
+    if not name.strip():
+        raise ValueError("Client name is required.")
+
+    response = (
+        get_client()
+        .table("dealers")
+        .update({"display_name": name.strip()})
+        .eq("id", client_id)
+        .execute()
+    )
+    return _first_row(response.data, "dealers")
+
+
+def update_client_profile(
+    client_id: str,
+    *,
+    notes: str | None = None,
+    preferred_brands: str | None = None,
+    preferred_models: str | None = None,
+    budget_min: int | None = None,
+    budget_max: int | None = None,
+    preferred_condition: str | None = None,
+    preferred_dial: str | None = None,
+    status: str | None = None,
+) -> Record:
+    """Update CRM profile and wishlist fields for one client."""
+    if not client_profiles_supported():
+        raise RuntimeError(
+            "Client profiles require client_profiles table. Apply "
+            "docs/migrations/sprint_28_clients.sql in Supabase."
+        )
+
+    profile = get_client_profile(client_id)
+    payload: Record = {}
+    if notes is not None:
+        payload["notes"] = _storage_value(notes)
+    if preferred_brands is not None:
+        payload["preferred_brands"] = _storage_value(preferred_brands)
+    if preferred_models is not None:
+        payload["preferred_models"] = _storage_value(preferred_models)
+    if budget_min is not None:
+        payload["budget_min"] = budget_min
+    if budget_max is not None:
+        payload["budget_max"] = budget_max
+    if preferred_condition is not None:
+        payload["preferred_condition"] = _storage_value(
+            normalize_condition_value(preferred_condition)
+        )
+    if preferred_dial is not None:
+        payload["preferred_dial"] = _storage_value(preferred_dial)
+    if status is not None:
+        normalized_status = status.strip().lower()
+        if normalized_status not in {"active", "inactive"}:
+            raise ValueError(f"Unsupported client status: {status}")
+        payload["status"] = normalized_status
+
+    if not payload:
+        return profile
+
+    response = (
+        get_client()
+        .table("client_profiles")
+        .update(payload)
+        .eq("client_id", client_id)
+        .execute()
+    )
+    return _first_row(response.data, "client_profiles")
+
+
+def list_requests_for_client(*, client_id: str, client_name: str) -> list[Record]:
+    """Return requests linked by client_id or matching client_name."""
+    requests = list_requests()
+    normalized_name = client_name.strip().lower()
+    matched: list[Record] = []
+
+    for request in requests:
+        request_client_id = request.get("client_id")
+        if request_client_id and str(request_client_id) == client_id:
+            matched.append(request)
+            continue
+        if request_client_id:
+            continue
+        if (request.get("client_name") or "").strip().lower() == normalized_name:
+            matched.append(request)
+
+    return matched
+
+
+def list_client_match_history(client_id: str, *, client_name: str) -> list[Record]:
+    """Return enriched offer matches for all requests belonging to one client."""
+    requests = list_requests_for_client(client_id=client_id, client_name=client_name)
+    request_ids = [str(request["id"]) for request in requests if request.get("id")]
+    if not request_ids:
+        return []
+
+    grouped = load_enriched_request_matches_by_request_ids(request_ids)
+    matches: list[Record] = []
+    for request_id in request_ids:
+        matches.extend(grouped.get(request_id, []))
+    matches.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+    return matches
+
+
+CLIENT_DELETE_BLOCKED_MESSAGE = (
+    "This client has linked history. Remove from system instead."
+)
+
+
+class ClientDeleteBlockedError(Exception):
+    """Raised when a client with linked history cannot be hard-deleted."""
+
+    def __init__(self, message: str = CLIENT_DELETE_BLOCKED_MESSAGE) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+def client_has_messages(client_id: str) -> bool:
+    """Return True when a contact has stored WhatsApp messages."""
+    response = (
+        get_client()
+        .table("messages")
+        .select("id")
+        .eq("dealer_id", client_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(response.data)
+
+
+def client_has_linked_history(client_id: str, *, client_name: str) -> bool:
+    """Return True when a client has requests, offers, or messages."""
+    if list_requests_for_client(client_id=client_id, client_name=client_name):
+        return True
+    if dealer_has_offers(client_id):
+        return True
+    if client_has_messages(client_id):
+        return True
+    return False
+
+
+def delete_client_permanently(client_id: str, *, client_name: str) -> None:
+    """Hard-delete a CRM client contact and profile when no linked history exists."""
+    if get_client_by_id(client_id) is None:
+        raise ValueError("Client not found")
+    if client_has_linked_history(client_id, client_name=client_name):
+        raise ClientDeleteBlockedError()
+
+    if client_profiles_supported():
+        get_client().table("client_profiles").delete().eq("client_id", client_id).execute()
+
+    get_client().table("dealers").delete().eq("id", client_id).execute()
 
 
 def _first_row(data: list[Record] | None, table: str) -> Record:

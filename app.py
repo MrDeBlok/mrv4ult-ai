@@ -30,10 +30,15 @@ from import_status import (
     normalize_import_status,
 )
 from database import (
+    ClientDeleteBlockedError,
+    create_client_contact,
     create_request,
+    delete_client_permanently,
     get_active_offers_for_watch,
     get_active_offers_for_dealer,
     get_client,
+    get_client_by_id,
+    get_client_profile,
     get_dealer_by_id,
     get_import_log,
     get_message_by_id,
@@ -41,8 +46,11 @@ from database import (
     dealer_contact_type,
     dealer_has_offers,
     dealer_is_business_visible,
+    list_clients,
+    list_client_match_history,
     list_contacts,
     list_contacts_for_import_lookup,
+    list_client_profiles_by_client_ids,
     list_dealers,
     list_import_logs,
     list_notifications,
@@ -50,8 +58,11 @@ from database import (
     list_request_matches_for_offer,
     load_enriched_request_matches_by_request_ids,
     list_requests,
+    list_requests_for_client,
     mark_all_notifications_read,
     mark_notification_read,
+    update_client_name,
+    update_client_profile,
     update_dealer_contact_type,
     update_request_status,
 )
@@ -64,6 +75,16 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from client_intelligence import (
+    build_client_list_rows,
+    build_client_match_rows,
+    build_client_profile,
+    build_client_request_rows,
+    build_client_wishlist,
+    client_display_name,
+    compute_client_stats,
+    format_activity_timestamp,
+)
 from dealer_intelligence import (
     build_dealer_list_rows,
     build_dealer_offer_rows,
@@ -85,6 +106,7 @@ from contact_classification import (
     build_dealer_lookup_by_whatsapp,
     filter_business_import_logs,
     filter_contact_rows,
+    filter_records_by_contact_search,
     format_import_sender_label,
     is_business_contact,
     is_business_import_log,
@@ -1259,12 +1281,17 @@ async def notifications_mark_all_read() -> RedirectResponse:
 
 
 @app.get("/dealers", response_class=HTMLResponse, name="dealers_list")
-async def dealers_list(request: Request) -> HTMLResponse:
-    dealers = build_dealer_list_rows(list_dealers(), list_offer_intelligence_rows())
+async def dealers_list(request: Request, q: str = "") -> HTMLResponse:
+    search_query = q.strip()
+    dealers = filter_records_by_contact_search(list_dealers(), search_query)
+    dealer_rows = build_dealer_list_rows(dealers, list_offer_intelligence_rows())
     return templates.TemplateResponse(
         request,
         "dealers.html",
-        {"dealers": dealers},
+        {
+            "dealers": dealer_rows,
+            "search_query": search_query,
+        },
     )
 
 
@@ -1296,12 +1323,129 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
     )
 
 
+@app.get("/clients", response_class=HTMLResponse, name="clients_list")
+async def clients_list(request: Request, q: str = "") -> HTMLResponse:
+    search_query = q.strip()
+    clients = filter_records_by_contact_search(list_clients(), search_query)
+    client_ids = [str(client["id"]) for client in clients if client.get("id")]
+    profiles_by_client_id = list_client_profiles_by_client_ids(client_ids)
+    client_rows = build_client_list_rows(clients, profiles_by_client_id, list_requests())
+    return templates.TemplateResponse(
+        request,
+        "clients.html",
+        {
+            "clients": client_rows,
+            "search_query": search_query,
+            "saved": request.query_params.get("saved") == "1",
+            "deleted": request.query_params.get("deleted") == "1",
+        },
+    )
+
+
+@app.post("/clients")
+async def clients_create(name: str = Form(...)) -> RedirectResponse:
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Client name is required")
+    create_client_contact(name=name.strip())
+    return RedirectResponse(url="/clients?saved=1", status_code=303)
+
+
+@app.get("/clients/{client_id}", response_class=HTMLResponse, name="client_detail")
+async def client_detail(request: Request, client_id: str) -> HTMLResponse:
+    client = get_client_by_id(client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    profile = get_client_profile(client_id)
+    client_name = client_display_name(client)
+    client_requests = list_requests_for_client(client_id=client_id, client_name=client_name)
+    stats = compute_client_stats(client_requests)
+    profile_view = build_client_profile(client, profile)
+    profile_view["last_activity"] = format_activity_timestamp(
+        stats.get("last_activity") or profile.get("updated_at") or client.get("updated_at")
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "client_detail.html",
+        {
+            "client": profile_view,
+            "profile": profile,
+            "wishlist": build_client_wishlist(profile),
+            "requests": build_client_request_rows(client_requests),
+            "matches": build_client_match_rows(
+                list_client_match_history(client_id, client_name=client_name)
+            ),
+            "saved": request.query_params.get("saved") == "1",
+            "delete_blocked": request.query_params.get("delete_blocked") == "1",
+        },
+    )
+
+
+@app.post("/clients/{client_id}/delete")
+async def client_delete_permanently(
+    client_id: str,
+    confirm: str = Form(...),
+) -> RedirectResponse:
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+
+    client = get_client_by_id(client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    try:
+        delete_client_permanently(client_id, client_name=client_display_name(client))
+    except ClientDeleteBlockedError:
+        return RedirectResponse(url=f"/clients/{client_id}?delete_blocked=1", status_code=303)
+
+    return RedirectResponse(url="/clients?deleted=1", status_code=303)
+
+
+@app.post("/clients/{client_id}/edit")
+async def client_edit(
+    client_id: str,
+    name: str = Form(...),
+    notes: str = Form(""),
+    preferred_brands: str = Form(""),
+    preferred_models: str = Form(""),
+    budget_min: str = Form(""),
+    budget_max: str = Form(""),
+    preferred_condition: str = Form(""),
+    preferred_dial: str = Form(""),
+    status: str = Form("active"),
+) -> RedirectResponse:
+    client = get_client_by_id(client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    update_client_name(client_id, name)
+    update_client_profile(
+        client_id,
+        notes=notes,
+        preferred_brands=preferred_brands,
+        preferred_models=preferred_models,
+        budget_min=_parse_optional_int(budget_min),
+        budget_max=_parse_optional_int(budget_max),
+        preferred_condition=preferred_condition,
+        preferred_dial=preferred_dial,
+        status=status,
+    )
+    return RedirectResponse(url=f"/clients/{client_id}?saved=1", status_code=303)
+
+
 @app.get("/contacts", response_class=HTMLResponse, name="contacts_list")
-async def contacts_list(request: Request, filter: str = DEFAULT_CONTACTS_FILTER) -> HTMLResponse:
+async def contacts_list(
+    request: Request,
+    filter: str = DEFAULT_CONTACTS_FILTER,
+    q: str = "",
+) -> HTMLResponse:
     active_filter = parse_contacts_filter(filter)
+    search_query = q.strip()
     contacts = filter_contact_rows(
         build_contact_rows(list_contacts()),
         filter_key=active_filter,
+        search_query=search_query,
     )
     return templates.TemplateResponse(
         request,
@@ -1310,7 +1454,8 @@ async def contacts_list(request: Request, filter: str = DEFAULT_CONTACTS_FILTER)
             "contacts": contacts,
             "active_filter": active_filter,
             "removed_filter": CONTACTS_FILTER_REMOVED,
-            "filter_options": build_contacts_filter_options(active_filter),
+            "filter_options": build_contacts_filter_options(active_filter, search_query),
+            "search_query": search_query,
             "restore_contact_types": RESTORE_CONTACT_TYPES,
             "saved": request.query_params.get("saved") == "1",
             "removed": request.query_params.get("removed") == "1",

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Clients · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+            <div>
+                <h1 class="h3 mb-1">Clients</h1>
+                <p class="text-muted mb-0">Track buyers, wishlists, and request history for your client CRM.</p>
+            </div>
+            <form method="post" action="/clients" class="d-flex gap-2">
+                <input
+                    type="text"
+                    class="form-control form-control-sm"
+                    name="name"
+                    placeholder="New client name"
+                    aria-label="New client name"
+                    required
+                >
+                <button type="submit" class="btn btn-sm btn-primary">Add client</button>
+            </form>
+        </div>
+        <form method="get" action="/clients" class="row g-2 mt-3">
+            <div class="col-12 col-md-8 col-lg-6">
+                <input
+                    type="search"
+                    class="form-control form-control-sm"
+                    name="q"
+                    value="{{ search_query }}"
+                    placeholder="Search by name, phone, or WhatsApp"
+                    aria-label="Search clients"
+                >
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+{% if saved %}
+<div class="alert alert-success" role="alert">Client saved.</div>
+{% endif %}
+{% if deleted %}
+<div class="alert alert-success" role="alert">Client permanently deleted.</div>
+{% endif %}
+
+{% if clients %}
+<section class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col">Client name</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">Last activity</th>
+                    <th scope="col">Requests</th>
+                    <th scope="col">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for client in clients %}
+                <tr
+                    class="activity-row"
+                    tabindex="0"
+                    role="link"
+                    data-href="/clients/{{ client.id }}"
+                >
+                    <td class="fw-semibold">{{ client.name }}</td>
+                    <td>{{ client.created_at }}</td>
+                    <td>{{ client.last_activity }}</td>
+                    <td>{{ client.request_count }}</td>
+                    <td>
+                        <span class="badge rounded-pill text-bg-{{ client.status_class }}">{{ client.status }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% else %}
+<div class="alert alert-secondary" role="alert">
+    {% if search_query %}
+    No clients match this search.
+    {% else %}
+    No clients found yet. Add one above or mark a contact as Client on the People page.
+    {% endif %}
+</div>
+{% endif %}
+
+<script>
+    document.querySelectorAll(".activity-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+            window.location.href = row.dataset.href;
+        });
+        row.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                window.location.href = row.dataset.href;
+            }
+        });
+    });
+</script>
+{% endblock %}

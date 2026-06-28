@@ -24,6 +24,22 @@
                 {% endfor %}
             </div>
         </div>
+        <form method="get" action="/contacts" class="row g-2 mt-3">
+            <input type="hidden" name="filter" value="{{ active_filter }}">
+            <div class="col-12 col-md-8 col-lg-6">
+                <input
+                    type="search"
+                    class="form-control form-control-sm"
+                    name="q"
+                    value="{{ search_query }}"
+                    placeholder="Search by name, phone, or WhatsApp"
+                    aria-label="Search people"
+                >
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
+            </div>
+        </form>
     </div>
 </section>
 
@@ -106,6 +122,8 @@
     No dealers or clients found yet.
     {% elif active_filter == removed_filter %}
     No removed contacts found.
+    {% elif search_query %}
+    No contacts match this search.
     {% else %}
     No contacts match this filter.
     {% endif %}
