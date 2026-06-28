@@ -220,3 +220,96 @@ def match_offer_against_requests(
         if result:
             matches.append(result)
     return matches
+
+
+def _core_match_without_budget(
+    offer: dict[str, Any],
+    request: dict[str, Any],
+) -> dict[str, str] | None:
+    """Return match metadata when an offer satisfies a request except budget."""
+    if not _year_within_range(offer, request):
+        return None
+    if not _dial_matches(offer, request):
+        return None
+    if not _condition_matches(offer, request):
+        return None
+
+    request_reference = normalize_reference(request.get("reference"))
+    offer_reference = normalize_reference(offer.get("reference"))
+
+    if request_reference:
+        if offer_reference and offer_reference == request_reference:
+            if not _brand_matches(offer, request):
+                return None
+            return {
+                "request_id": str(request["id"]),
+                "match_strength": "strong",
+                "match_reason": f"Reference match: {request.get('reference')}",
+            }
+        return None
+
+    if not _brand_matches(offer, request):
+        return None
+    if not _model_or_alias_matches(offer, request):
+        return None
+
+    label = request.get("alias") or request.get("model") or request.get("brand")
+    return {
+        "request_id": str(request["id"]),
+        "match_strength": "medium",
+        "match_reason": f"Brand and model/alias match: {label}",
+    }
+
+
+def _sourcing_bonus_points(offer: dict[str, Any], request: dict[str, Any]) -> int:
+    bonus = 0
+    if normalize_text(request.get("dial")) and _dial_matches(offer, request):
+        bonus += 5
+    if _wear_condition(request.get("condition")) and _condition_matches(offer, request):
+        bonus += 5
+    if _price_within_budget(offer, request):
+        bonus += 5
+    return bonus
+
+
+def match_badge_class(badge: str) -> str:
+    return {
+        "Excellent Match": "success",
+        "Good Match": "primary",
+        "Budget Exceeded": "warning",
+    }.get(badge, "secondary")
+
+
+def evaluate_sourcing_match(
+    offer: dict[str, Any],
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return sourcing match metadata with score and badge for client workspace."""
+    result = evaluate_request_match(offer, request)
+    if result:
+        strength = result["match_strength"]
+        score = 100 if strength == "strong" else 75
+        score += _sourcing_bonus_points(offer, request)
+        badge = "Excellent Match" if strength == "strong" else "Good Match"
+        return {
+            **result,
+            "match_score": score,
+            "match_badge": badge,
+            "match_badge_class": match_badge_class(badge),
+            "budget_exceeded": False,
+        }
+
+    core = _core_match_without_budget(offer, request)
+    if core and not _price_within_budget(offer, request):
+        score = 45 if core["match_strength"] == "strong" else 35
+        score += _sourcing_bonus_points(offer, request)
+        badge = "Budget Exceeded"
+        return {
+            **core,
+            "match_reason": f"{core['match_reason']} (exceeds budget)",
+            "match_score": score,
+            "match_badge": badge,
+            "match_badge_class": match_badge_class(badge),
+            "budget_exceeded": True,
+        }
+    return None

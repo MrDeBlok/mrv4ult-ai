@@ -1064,6 +1064,33 @@ def get_active_offers_for_dealer(dealer_id: str) -> list[Record]:
     ]
 
 
+def list_active_sourcing_offers() -> list[Record]:
+    """Return active business offers with watch, dealer, and message metadata for sourcing."""
+    dealer_fields = (
+        "dealers(id, display_name, phone_number, whatsapp_id, contact_type)"
+        if contact_type_column_supported()
+        else "dealers(id, display_name, phone_number, whatsapp_id)"
+    )
+    response = (
+        get_client()
+        .table("offers")
+        .select(
+            "id, dealer_id, watch_id, original_price, original_currency, usd_price, "
+            "card_date, condition, production_year, "
+            "watches(brand, reference, model, dial, bracelet), "
+            "messages(received_at), "
+            f"{dealer_fields}"
+        )
+        .eq("status", "active")
+        .execute()
+    )
+    return [
+        offer
+        for offer in response.data or []
+        if _offer_from_business_dealer(offer)
+    ]
+
+
 def list_clients() -> list[Record]:
     """Return CRM client contacts."""
     query = get_client().table("dealers").select("*").order("display_name")

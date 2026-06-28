@@ -13,10 +13,34 @@ Record = dict[str, Any]
 
 CLIENT_STATUS_ACTIVE = "active"
 CLIENT_STATUS_INACTIVE = "inactive"
+UNNAMED_CLIENT_TITLE = "Unnamed client"
 
 
 def client_display_name(client: Record) -> str:
     return dealer_display_name(client)
+
+
+def client_profile_title(client: Record) -> str:
+    display_name = (client.get("display_name") or "").strip()
+    if display_name:
+        return display_name
+    return UNNAMED_CLIENT_TITLE
+
+
+def client_contact_phone(client: Record) -> str | None:
+    phone_number = (client.get("phone_number") or "").strip()
+    whatsapp_id = (client.get("whatsapp_id") or "").strip()
+    return phone_number or whatsapp_id or None
+
+
+def build_client_create_request_url(client_id: str, client: Record) -> str:
+    from urllib.parse import urlencode
+
+    params: dict[str, str] = {"client_id": str(client_id)}
+    display_name = (client.get("display_name") or "").strip()
+    if display_name:
+        params["client_name"] = display_name
+    return f"/requests?{urlencode(params)}"
 
 
 def format_budget_value(value: int | None) -> str:
@@ -147,9 +171,14 @@ def build_client_list_rows(
 
 def build_client_profile(client: Record, profile: Record) -> Record:
     status_label, status_class = format_client_status(profile.get("status"))
+    display_name = (client.get("display_name") or "").strip()
+    contact_phone = client_contact_phone(client)
     return {
         "id": client.get("id"),
-        "name": client_display_name(client),
+        "title": client_profile_title(client),
+        "name": display_name,
+        "show_contact_phone": not display_name and bool(contact_phone),
+        "contact_phone": _display_value(contact_phone) if contact_phone else "N/A",
         "notes": _display_value(profile.get("notes")),
         "phone_number": _display_value(client.get("phone_number")),
         "whatsapp_id": _display_value(client.get("whatsapp_id")),
@@ -157,6 +186,7 @@ def build_client_profile(client: Record, profile: Record) -> Record:
         "last_activity": format_activity_timestamp(profile.get("updated_at") or client.get("updated_at")),
         "status": status_label,
         "status_class": status_class,
+        "create_request_url": build_client_create_request_url(str(client.get("id")), client),
     }
 
 

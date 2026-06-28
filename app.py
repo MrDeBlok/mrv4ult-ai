@@ -47,6 +47,7 @@ from database import (
     dealer_has_offers,
     dealer_is_business_visible,
     list_clients,
+    list_active_sourcing_offers,
     list_client_match_history,
     list_contacts,
     list_contacts_for_import_lookup,
@@ -75,6 +76,11 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from client_sourcing import (
+    build_client_sourcing_dashboard,
+    build_matching_offer_rows,
+    find_matching_offers_for_client,
+)
 from client_intelligence import (
     build_client_list_rows,
     build_client_match_rows,
@@ -1003,7 +1009,12 @@ async def evolution_webhook(request: Request) -> JSONResponse:
 
 
 @app.get("/requests", response_class=HTMLResponse, name="requests_list")
-async def requests_list(request: Request, status: str = "") -> HTMLResponse:
+async def requests_list(
+    request: Request,
+    status: str = "",
+    client_id: str = "",
+    client_name: str = "",
+) -> HTMLResponse:
     status_filter = status.strip().lower() or None
     all_requests = list_requests()
     all_rows = build_request_rows(all_requests)
@@ -1025,6 +1036,8 @@ async def requests_list(request: Request, status: str = "") -> HTMLResponse:
             "summary": summary,
             "status_filter": status_filter or "all",
             "saved": request.query_params.get("saved") == "1",
+            "prefill_client_id": client_id.strip(),
+            "prefill_client_name": client_name.strip(),
         },
     )
 
@@ -1033,6 +1046,7 @@ async def requests_list(request: Request, status: str = "") -> HTMLResponse:
 async def requests_create(
     request: Request,
     client_name: str = Form(""),
+    client_id: str = Form(""),
     brand: str = Form(""),
     reference: str = Form(""),
     model: str = Form(""),
@@ -1059,6 +1073,7 @@ async def requests_create(
         max_price=_parse_optional_int(max_price),
         currency=currency or None,
         notes=notes or None,
+        client_id=client_id.strip() or None,
     )
     return RedirectResponse(url="/requests?saved=1", status_code=303)
 
@@ -1364,6 +1379,19 @@ async def client_detail(request: Request, client_id: str) -> HTMLResponse:
     profile_view["last_activity"] = format_activity_timestamp(
         stats.get("last_activity") or profile.get("updated_at") or client.get("updated_at")
     )
+    matching_offers = find_matching_offers_for_client(
+        requests=client_requests,
+        offers=list_active_sourcing_offers(),
+    )
+    open_client_requests = [
+        request
+        for request in client_requests
+        if (request.get("status") or "").lower() in {"open", "active"}
+    ]
+    dashboard = build_client_sourcing_dashboard(
+        requests=client_requests,
+        matching_offers=matching_offers,
+    )
 
     return templates.TemplateResponse(
         request,
@@ -1372,10 +1400,13 @@ async def client_detail(request: Request, client_id: str) -> HTMLResponse:
             "client": profile_view,
             "profile": profile,
             "wishlist": build_client_wishlist(profile),
-            "requests": build_client_request_rows(client_requests),
+            "requests": build_client_request_rows(open_client_requests),
+            "has_open_requests": bool(open_client_requests),
             "matches": build_client_match_rows(
                 list_client_match_history(client_id, client_name=client_name)
             ),
+            "dashboard": dashboard,
+            "matching_offers": build_matching_offer_rows(matching_offers),
             "saved": request.query_params.get("saved") == "1",
             "delete_blocked": request.query_params.get("delete_blocked") == "1",
         },

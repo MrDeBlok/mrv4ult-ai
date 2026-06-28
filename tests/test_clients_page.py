@@ -114,6 +114,7 @@ class TestClientIntelligence:
         )
 
         assert profile["name"] == "Anna Buyer"
+        assert profile["title"] == "Anna Buyer"
         assert profile["notes"] == "Looking for Datejust under 80k"
         assert profile["status"] == "Inactive"
 
@@ -173,6 +174,7 @@ class TestClientsPage:
 
 
 class TestClientDetailPage:
+    @patch("app.list_active_sourcing_offers", return_value=[])
     @patch("app.build_client_match_rows", return_value=[])
     @patch("app.list_client_match_history", return_value=[])
     @patch("app.build_client_request_rows")
@@ -187,6 +189,7 @@ class TestClientDetailPage:
         mock_build_request_rows: MagicMock,
         mock_list_match_history: MagicMock,
         mock_build_match_rows: MagicMock,
+        mock_list_offers: MagicMock,
     ) -> None:
         mock_get_client.return_value = {
             "id": "client-1",
@@ -234,7 +237,9 @@ class TestClientDetailPage:
         assert "Anna Buyer" in response.text
         assert "Prefers blue dials" in response.text
         assert "126200" in response.text
-        assert "Purchased watches" in response.text
+        assert "Open Requests" in response.text
+        assert response.text.index("Open Requests") < response.text.index("Matching Offers")
+        assert "Purchased Watches" in response.text
 
     @patch("app.get_client_by_id", return_value=None)
     def test_client_detail_page_returns_404_for_missing_client(
