@@ -522,6 +522,79 @@ def process_offer_request_matches(
     return created
 
 
+def create_notification(
+    *,
+    type: str,
+    title: str,
+    message: str,
+    related_import_log_id: str | None = None,
+    related_request_id: str | None = None,
+    related_offer_id: str | None = None,
+) -> Record:
+    """Persist a dashboard notification."""
+    payload: Record = {
+        "type": type,
+        "title": title.strip(),
+        "message": message.strip(),
+        "related_import_log_id": related_import_log_id,
+        "related_request_id": related_request_id,
+        "related_offer_id": related_offer_id,
+        "is_read": False,
+    }
+    response = get_client().table("notifications").insert(payload).execute()
+    return _first_row(response.data, "notifications")
+
+
+def list_notifications() -> list[Record]:
+    """Return notifications with unread items first."""
+    response = (
+        get_client()
+        .table("notifications")
+        .select("*")
+        .order("is_read")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def count_unread_notifications() -> int:
+    """Return the number of unread notifications."""
+    response = (
+        get_client()
+        .table("notifications")
+        .select("id", count="exact")
+        .eq("is_read", False)
+        .limit(0)
+        .execute()
+    )
+    return int(response.count or 0)
+
+
+def mark_notification_read(notification_id: str) -> Record:
+    """Mark one notification as read."""
+    response = (
+        get_client()
+        .table("notifications")
+        .update({"is_read": True})
+        .eq("id", notification_id)
+        .execute()
+    )
+    return _first_row(response.data, "notifications")
+
+
+def mark_all_notifications_read() -> int:
+    """Mark every unread notification as read."""
+    response = (
+        get_client()
+        .table("notifications")
+        .update({"is_read": True})
+        .eq("is_read", False)
+        .execute()
+    )
+    return len(response.data or [])
+
+
 def update_import_log(
     import_log_id: str,
     *,

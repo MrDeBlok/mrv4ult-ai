@@ -138,6 +138,17 @@ body {
     font-weight: 700;
 }
 
+.notification-nav-badge {
+    font-size: 0.65rem;
+    margin-left: 0.25rem;
+    vertical-align: top;
+}
+
+.notification-item.notification-unread {
+    background: #f8fbff;
+    border-left: 4px solid #0d6efd;
+}
+
 .watch-offer-card .watch-offer-fields dt {
     font-weight: 600;
     color: #495057;

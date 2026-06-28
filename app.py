@@ -37,9 +37,12 @@ from database import (
     get_message_by_id,
     get_watch_by_id,
     list_import_logs,
+    list_notifications,
     list_request_matches_for_offer,
     load_enriched_request_matches_by_request_ids,
     list_requests,
+    mark_all_notifications_read,
+    mark_notification_read,
     update_request_status,
 )
 from evolution_client import (
@@ -51,6 +54,7 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from notifications import build_notification_display, get_unread_notification_count
 from request_profit import (
     attach_profit_to_matches,
     build_request_profit_summary,
@@ -75,6 +79,16 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="MRV4ULT AI Dashboard")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates.env.globals["unread_notification_count"] = get_unread_notification_count
+
+
+def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for notification in notifications:
+        row = build_notification_display(notification)
+        row["created_at"] = format_timestamp(row.get("created_at"))
+        rows.append(row)
+    return rows
 
 
 def format_dealer_contact(dealer: dict[str, Any]) -> dict[str, str]:
@@ -1158,3 +1172,29 @@ async def home(
             "error": error,
         },
     )
+
+
+@app.get("/notifications", response_class=HTMLResponse, name="notifications_list")
+async def notifications_page(request: Request) -> HTMLResponse:
+    notifications = build_notification_rows(list_notifications())
+    unread_count = sum(1 for item in notifications if not item["is_read"])
+    return templates.TemplateResponse(
+        request,
+        "notifications.html",
+        {
+            "notifications": notifications,
+            "unread_count": unread_count,
+        },
+    )
+
+
+@app.post("/notifications/{notification_id}/read")
+async def notifications_mark_read(notification_id: str) -> RedirectResponse:
+    mark_notification_read(notification_id)
+    return RedirectResponse(url="/notifications", status_code=303)
+
+
+@app.post("/notifications/read-all")
+async def notifications_mark_all_read() -> RedirectResponse:
+    mark_all_notifications_read()
+    return RedirectResponse(url="/notifications", status_code=303)

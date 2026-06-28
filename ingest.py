@@ -16,6 +16,7 @@ from database import (
     process_offer_request_matches,
     update_import_log,
 )
+from notifications import notify_request_match, record_import_notifications
 from watch_knowledge import enrich_parsed_watch
 from condition_normalizer import normalize_watch_condition
 from watch_parser import parse_message, read_message
@@ -268,6 +269,14 @@ def ingest_message(
         row = summary["rows"][item["line_index"]]
         row["request_matches"] = _summary_request_matches(matches)
         row["results"] = _append_request_match_result(row.get("results") or [], matches)
+        for match in matches:
+            notify_request_match(
+                import_log_id=import_log["id"],
+                request_id=str(match["request_id"]),
+                offer_id=str(item["offer_id"]),
+                client_name=match.get("client_name") or "Client",
+                match_reason=match.get("match_reason") or "Request matched",
+            )
 
     summary["matched_requests"] = matched_request_count
     if matched_request_count:
@@ -276,6 +285,12 @@ def ingest_message(
             matched_requests=matched_request_count,
             summary=summary,
         )
+
+    record_import_notifications(
+        import_log_id=import_log["id"],
+        summary=summary,
+        import_status=import_status,
+    )
 
     summary["import_log_id"] = import_log["id"]
     summary["status"] = import_status
