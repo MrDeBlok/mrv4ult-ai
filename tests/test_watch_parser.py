@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION, normalize_watch_condition
 from watch_parser import parse_message, parse_watch_line
 
 
@@ -25,7 +26,9 @@ class TestAlsBrandDetection:
 
         assert watch is not None
         assert watch["brand"] == "A. Lange & Söhne"
-        assert watch["condition"] == "full set"
+        assert watch["condition"] is None
+        assert watch["full_set"] is True
+        assert watch["notes"] == "full set"
 
 
 class TestBrandRecognition:
@@ -97,27 +100,31 @@ class TestConditionAndAccessories:
     def test_full_set_and_year(self) -> None:
         watch = parse_watch_line("AP 15500ST blue 2023 full set €52k")
         assert watch is not None
-        assert watch["condition"] == "full set"
+        assert watch["condition"] is None
         assert watch["full_set"] is True
+        assert watch["notes"] == "full set"
         assert watch["production_year"] == 2023
 
     def test_watch_only(self) -> None:
         watch = parse_watch_line("PP 5711 blue watch only 540k")
         assert watch is not None
-        assert watch["condition"] == "watch only"
+        assert watch["condition"] is None
         assert watch["watch_only"] is True
+        assert watch["notes"] == "watch only"
 
     def test_box_only(self) -> None:
         watch = parse_watch_line("Rolex 116500 box only 180k")
         assert watch is not None
-        assert watch["condition"] == "box only"
+        assert watch["condition"] is None
         assert watch["box_only"] is True
+        assert watch["notes"] == "box only"
 
     def test_papers(self) -> None:
         watch = parse_watch_line("5711/1A with papers 590k")
         assert watch is not None
-        assert watch["condition"] == "papers"
+        assert watch["condition"] is None
         assert watch["papers"] is True
+        assert watch["notes"] == "papers"
 
     def test_used_year(self) -> None:
         watch = parse_watch_line("126231g champ jub used 2024y 147500usd")
@@ -256,3 +263,43 @@ n9/25
         assert result["watches"][0]["original_price"] == 19_500
         assert result["watches"][1]["reference"] == "126500LN"
         assert result["watches"][1]["original_price"] == 305_000
+
+
+def _parse_normalized_line(line: str) -> dict:
+    watch = parse_watch_line(line)
+    assert watch is not None
+    return normalize_watch_condition(watch)
+
+
+class TestWearConditionAccessorySeparation:
+    def test_mint_full_set(self) -> None:
+        watch = _parse_normalized_line("5711 mint full set 580k")
+
+        assert watch["condition"] == PRE_OWNED_CONDITION
+        assert watch["raw_condition"] == "Mint"
+        assert watch["full_set"] is True
+        assert watch["notes"] == "full set"
+
+    def test_unworn_full_set(self) -> None:
+        watch = _parse_normalized_line("5711 unworn full set 580k")
+
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "Unworn"
+        assert watch["full_set"] is True
+        assert watch["notes"] == "full set"
+
+    def test_brand_new_watch_only(self) -> None:
+        watch = _parse_normalized_line("116500 Brand New watch only 180k")
+
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "Brand New"
+        assert watch["watch_only"] is True
+        assert watch["notes"] == "watch only"
+
+    def test_used_papers(self) -> None:
+        watch = _parse_normalized_line("5711 Used papers 590k")
+
+        assert watch["condition"] == PRE_OWNED_CONDITION
+        assert watch["raw_condition"] == "Used"
+        assert watch["papers"] is True
+        assert watch["notes"] == "papers"

@@ -7,6 +7,8 @@ import re
 import sys
 from typing import Any
 
+from model_aliases import find_alias_match
+
 WatchDict = dict[str, Any]
 ParseResult = dict[str, Any]
 
@@ -97,24 +99,42 @@ BRACELET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bleather\b", re.I), "leather"),
 ]
 
-CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bunworn\s+complete\b", re.I), "unworn complete"),
-    (re.compile(r"\bbox\s+and\s+papers\b", re.I), "full set"),
-    (re.compile(r"\bfull\s+set\b", re.I), "full set"),
-    (re.compile(r"\bwatch\s+only\b", re.I), "watch only"),
-    (re.compile(r"\bbox\s+only\b", re.I), "box only"),
-    (re.compile(r"\bpapers?\s+only\b", re.I), "papers only"),
-    (re.compile(r"\bwith\s+papers\b", re.I), "papers"),
-    (re.compile(r"\bpapers\b", re.I), "papers"),
-    (re.compile(r"\bcomplete\b", re.I), "complete"),
-    (re.compile(r"\bstickered\b", re.I), "stickered"),
-    (re.compile(r"\bunworn\b", re.I), "unworn"),
+WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
+    (re.compile(r"\bunworn\s+complete\b", re.I), "Unworn complete"),
+    (re.compile(r"\bpre\s*owned\b", re.I), "Pre-Owned"),
+    (re.compile(r"\bpreowned\b", re.I), "Preowned"),
+    (re.compile(r"\bpre\s+owned\b", re.I), "Pre owned"),
     (re.compile(r"\bbnib\b", re.I), "bnib"),
     (re.compile(r"\bnos\b", re.I), "nos"),
-    (re.compile(r"\bmint\b", re.I), "mint"),
     (re.compile(r"\blnib\b", re.I), "lnib"),
+    (re.compile(r"\bunworn\b", re.I), "Unworn"),
+    (re.compile(r"\bmint\b", re.I), "Mint"),
     (re.compile(r"\bworn\b", re.I), "worn"),
+    (re.compile(r"\bused\b", re.I), "Used"),
+    (re.compile(r"\bbn\b", re.I), "BN"),
+    (re.compile(r"\bnew\b", re.I), "New"),
 ]
+
+ACCESSORY_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"\bbox\s+and\s+papers\b", re.I), "full set", "full_set"),
+    (re.compile(r"\bfull\s+set\b", re.I), "full set", "full_set"),
+    (re.compile(r"\bwatch\s+only\b", re.I), "watch only", "watch_only"),
+    (re.compile(r"\bbox\s+only\b", re.I), "box only", "box_only"),
+    (re.compile(r"\bpapers?\s+only\b", re.I), "papers", "papers"),
+    (re.compile(r"\bwith\s+papers\b", re.I), "papers", "papers"),
+    (re.compile(r"\bpapers\b", re.I), "papers", "papers"),
+]
+
+NOTE_KEEP_PATTERN = re.compile(
+    r"\b(bh\s+deal|deal|obo|firm|quick\s+sale|reserved|best\s+offer)\b",
+    re.I,
+)
+
+ACCESSORY_LINE_PATTERN = re.compile(
+    r"\bfull\s+set\b|\bwatch\s+only\b|\bbox\s+only\b|\bpapers\b|\bbh\s+deal\b",
+    re.I,
+)
 
 REQUEST_PATTERN = re.compile(
     r"\b(wtb|looking\s+for|lf\b|iso\b|need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch))\b",
@@ -428,13 +448,9 @@ def _is_continuation_content(line: str) -> bool:
         return True
     if USED_YEAR_PATTERN.search(line):
         return True
-    if _extract_condition(line):
+    if _detect_wear_condition(line):
         return True
-    if re.search(
-        r"\bfull\s+set\b|\bwatch\s+only\b|\bbox\s+only\b|\bpapers\b|\bbh\s+deal\b",
-        line,
-        re.I,
-    ):
+    if ACCESSORY_LINE_PATTERN.search(line):
         return True
     if not _extract_brand(line) and not _extract_reference(line)[0]:
         stripped = line.strip()
@@ -516,23 +532,32 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     watch["nickname"] = _extract_nickname(text, watch.get("reference"))
     watch["dial"] = _extract_dial(text)
     watch["bracelet"] = _extract_bracelet(text)
-    _apply_accessory_fields(watch, text)
 
     card_date, new_condition = _extract_card_date(text)
     watch["card_date"] = card_date
+    remaining = text
     if new_condition:
         watch["condition"] = new_condition
+        remaining = _remove_card_date_tokens(remaining)
     else:
         used_condition, production_year = _extract_used_year(text)
         if used_condition:
             watch["condition"] = used_condition
             watch["production_year"] = production_year
+            remaining = USED_YEAR_PATTERN.sub(" ", remaining)
         else:
-            watch["condition"] = _extract_condition(text)
-            watch["production_year"] = _extract_standalone_year(text, watch)
+            wear_condition, remaining = _extract_wear_condition(remaining)
+            watch["condition"] = wear_condition
+            watch["production_year"] = _extract_standalone_year(remaining, watch)
+
+    accessory_notes, remaining = _apply_accessories(watch, remaining)
 
     _apply_price_fields(watch, text)
-    watch["notes"] = _extract_dealer_notes(text, watch) or _extract_notes(text, watch)
+    other_notes = _clean_extra_notes(
+        _extract_dealer_notes(remaining, watch) or _extract_notes(remaining, watch),
+        watch,
+    )
+    watch["notes"] = _join_note_fragments(accessory_notes, other_notes)
     watch["confidence"] = _compute_confidence(watch)
     return watch
 
@@ -604,15 +629,100 @@ def _line_dealer_note_fragment(line: str, watch: WatchDict) -> str | None:
     return remaining
 
 
-def _apply_accessory_fields(watch: WatchDict, text: str) -> None:
-    lowered = text.lower()
-    watch["full_set"] = bool(re.search(r"\bfull\s+set\b|\bbox\s+and\s+papers\b", lowered))
-    watch["watch_only"] = bool(re.search(r"\bwatch\s+only\b", lowered))
-    watch["box_only"] = bool(re.search(r"\bbox\s+only\b", lowered))
-    watch["papers"] = bool(
-        re.search(r"\b(?:with\s+)?papers\b|\bpapers?\s+only\b", lowered)
-        and not watch["full_set"]
-    )
+def _remove_card_date_tokens(text: str) -> str:
+    remaining = NEW_CARD_DATE_MMYyyy_PATTERN.sub(" ", text)
+    remaining = NEW_CARD_DATE_PATTERN.sub(" ", remaining)
+    return re.sub(r"\s+", " ", remaining).strip()
+
+
+def _detect_wear_condition(text: str) -> str | None:
+    condition, _ = _extract_wear_condition(text)
+    return condition
+
+
+def _extract_wear_condition(text: str) -> tuple[str | None, str]:
+    """Detect wear condition and remove the matched phrase from the text."""
+    for pattern, value in WEAR_CONDITION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            remaining = text[: match.start()] + " " + text[match.end() :]
+            remaining = re.sub(r"\s+", " ", remaining).strip()
+            return value, remaining
+    return None, text
+
+
+def _apply_accessories(watch: WatchDict, text: str) -> tuple[list[str], str]:
+    """Parse accessory flags and collect accessory phrases for notes."""
+    remaining = text
+    notes: list[str] = []
+
+    for pattern, note_phrase, field_name in ACCESSORY_PATTERNS:
+        if not pattern.search(remaining):
+            continue
+        watch[field_name] = True
+        if note_phrase not in notes:
+            notes.append(note_phrase)
+        remaining = pattern.sub(" ", remaining)
+
+    remaining = re.sub(r"\s+", " ", remaining).strip()
+    if watch.get("full_set"):
+        watch["papers"] = False
+    return notes, remaining
+
+
+def _join_note_fragments(*parts: str | list[str] | None) -> str | None:
+    fragments: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        if isinstance(part, list):
+            fragments.extend(str(item) for item in part if item)
+        else:
+            fragments.append(str(part))
+    unique: list[str] = []
+    for fragment in fragments:
+        cleaned = fragment.strip(" ,.-")
+        if cleaned and cleaned not in unique:
+            unique.append(cleaned)
+    return " ".join(unique) if unique else None
+
+
+def _clean_extra_notes(notes: str | None, watch: WatchDict) -> str | None:
+    """Remove parsed watch identity tokens from residual note text."""
+    if not notes:
+        return None
+
+    remaining = notes
+    for pattern in NOTES_REMOVE_PATTERNS:
+        remaining = pattern.sub(" ", remaining)
+    remaining = REQUEST_PATTERN.sub(" ", remaining)
+    if watch.get("production_year") is not None:
+        remaining = re.sub(rf"\b{watch['production_year']}\b", " ", remaining)
+    if watch.get("brand"):
+        remaining = re.sub(re.escape(watch["brand"]), " ", remaining, flags=re.I)
+    if watch.get("reference"):
+        remaining = re.sub(re.escape(watch["reference"]), " ", remaining, flags=re.I)
+    if watch.get("nickname"):
+        remaining = re.sub(
+            rf"\b{re.escape(watch['nickname'])}\b",
+            " ",
+            remaining,
+            flags=re.I,
+        )
+    if watch.get("model"):
+        remaining = re.sub(rf"\b{re.escape(watch['model'])}\b", " ", remaining, flags=re.I)
+    if watch.get("dial"):
+        remaining = re.sub(rf"\b{re.escape(watch['dial'])}\b", " ", remaining, flags=re.I)
+    remaining = re.sub(r"\s+", " ", remaining).strip(" ,.-")
+    if not remaining or len(remaining) < 2:
+        return None
+    if NOTE_KEEP_PATTERN.search(remaining):
+        return remaining
+    if watch.get("brand") and len(remaining.split()) <= 3:
+        if find_alias_match(remaining):
+            return remaining
+        return None
+    return remaining
 
 
 def _compute_confidence(watch: WatchDict) -> int:
@@ -812,12 +922,6 @@ def _extract_used_year(text: str) -> tuple[str | None, int | None]:
     return "Used", int(match.group(1))
 
 
-def _extract_condition(text: str) -> str | None:
-    for pattern, value in CONDITION_PATTERNS:
-        if pattern.search(text):
-            return value
-    return None
-
 
 def _extract_standalone_year(text: str, watch: WatchDict) -> int | None:
     if watch.get("production_year") is not None:
@@ -963,6 +1067,13 @@ def _extract_notes(text: str, watch: WatchDict) -> str | None:
         remaining = re.sub(re.escape(watch["brand"]), "", remaining, flags=re.I).strip(" ,.-")
     if watch["reference"]:
         remaining = re.sub(re.escape(watch["reference"]), "", remaining, flags=re.I).strip(" ,.-")
+    if watch.get("nickname"):
+        remaining = re.sub(
+            rf"\b{re.escape(watch['nickname'])}\b",
+            "",
+            remaining,
+            flags=re.I,
+        ).strip(" ,.-")
     if watch["dial"]:
         remaining = re.sub(rf"\b{re.escape(watch['dial'])}\b", "", remaining, flags=re.I).strip(" ,.-")
         for abbrev, dial_value in DIAL_ABBREVIATIONS.items():

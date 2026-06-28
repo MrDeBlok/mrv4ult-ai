@@ -35,7 +35,9 @@ class TestModelAliasEnrichment:
         assert watch["nickname"] == "Pepsi"
         assert watch["reference"] is None
         assert watch["model_alias"]["reference_status"] == "Unknown"
-        assert watch["condition"] == "full set"
+        assert watch["condition"] is None
+        assert watch["full_set"] is True
+        assert watch["notes"].startswith("full set")
         assert watch["production_year"] == 2023
 
     def test_john_mayer_keeps_explicit_reference(self) -> None:
