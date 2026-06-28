@@ -47,6 +47,7 @@ PARSED_FIELD_SPECS: list[tuple[str, str]] = [
     ("dial", "Dial"),
     ("bracelet", "Bracelet"),
     ("condition", "Condition"),
+    ("retail_price", "Retail price"),
     ("original_price", "Price"),
     ("original_currency", "Currency"),
     ("usd_price", "USD price"),
@@ -210,12 +211,15 @@ def _format_price_amount(amount: Any) -> str | None:
 
 
 def _format_parsed_value(field_key: str, watch: Record) -> str | None:
-    if field_key == "original_price":
-        amount = watch.get("original_price") or watch.get("price")
+    if field_key in {"original_price", "retail_price"}:
+        amount = watch.get(field_key)
+        if field_key == "original_price" and amount is None:
+            amount = watch.get("price")
         formatted = _format_price_amount(amount)
         if not formatted:
             return None
-        currency = watch.get("original_currency") or watch.get("currency")
+        currency_key = "retail_currency" if field_key == "retail_price" else "original_currency"
+        currency = watch.get(currency_key) or watch.get("currency")
         if currency:
             return f"{formatted} {currency}"
         return formatted
@@ -238,7 +242,10 @@ def _parsed_field_entries(watches: list[Record]) -> list[str]:
             formatted = _format_parsed_value(field_key, watch)
             if not formatted:
                 continue
-            entry = f"{label}: {formatted}"
+            display_label = label
+            if field_key == "original_price" and watch.get("retail_price") is not None:
+                display_label = "Offer price"
+            entry = f"{display_label}: {formatted}"
             if entry in seen:
                 continue
             seen.add(entry)

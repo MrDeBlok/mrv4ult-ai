@@ -750,7 +750,10 @@ def mark_all_notifications_read() -> int:
 
 def delete_notification(notification_id: str) -> None:
     """Delete one notification for the whole team."""
-    get_client().table("notifications").delete().eq("id", notification_id).execute()
+    cleaned_id = notification_id.strip()
+    if not cleaned_id:
+        raise ValueError("Notification id is required")
+    get_client().table("notifications").delete().eq("id", cleaned_id).execute()
 
 
 def delete_read_notifications() -> int:
@@ -767,7 +770,13 @@ def delete_read_notifications() -> int:
 
 def delete_all_notifications() -> int:
     """Delete every notification for the whole team."""
-    response = get_client().table("notifications").delete().neq("id", "").execute()
+    response = (
+        get_client()
+        .table("notifications")
+        .delete()
+        .not_.is_("created_at", "null")
+        .execute()
+    )
     return len(response.data or [])
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import app, build_notification_rows
@@ -330,3 +331,72 @@ class TestNotificationCleanup:
         assert "Clear read notifications" in response.text
         assert "Clear all notifications" in response.text
         assert "Mark all read" in response.text
+
+
+class TestSprint327ClearAllNotifications:
+    @patch("database.get_client")
+    def test_delete_all_notifications_does_not_compare_uuid_to_empty_string(
+        self,
+        mock_get_client: MagicMock,
+    ) -> None:
+        from database import delete_all_notifications
+
+        mock_table = MagicMock()
+        mock_delete = MagicMock()
+        mock_filter = MagicMock()
+        mock_get_client.return_value.table.return_value = mock_table
+        mock_table.delete.return_value = mock_delete
+        mock_delete.not_.is_.return_value = mock_filter
+        mock_filter.execute.return_value = MagicMock(data=[])
+
+        delete_all_notifications()
+
+        mock_get_client.return_value.table.assert_called_once_with("notifications")
+        mock_table.delete.assert_called_once()
+        mock_delete.neq.assert_not_called()
+        mock_delete.not_.is_.assert_called_once_with("created_at", "null")
+        mock_filter.execute.assert_called_once()
+
+    @patch("database.get_client")
+    def test_delete_all_notifications_deletes_all_rows(
+        self,
+        mock_get_client: MagicMock,
+    ) -> None:
+        from database import delete_all_notifications
+
+        mock_table = MagicMock()
+        mock_delete = MagicMock()
+        mock_filter = MagicMock()
+        mock_get_client.return_value.table.return_value = mock_table
+        mock_table.delete.return_value = mock_delete
+        mock_delete.not_.is_.return_value = mock_filter
+        mock_filter.execute.return_value = MagicMock(
+            data=[{"id": "n-1"}, {"id": "n-2"}, {"id": "n-3"}]
+        )
+
+        deleted = delete_all_notifications()
+
+        assert deleted == 3
+        mock_delete.not_.is_.assert_called_once_with("created_at", "null")
+
+    @patch("app.delete_all_notifications", return_value=3)
+    def test_clear_all_notifications_route_redirects_successfully(
+        self,
+        mock_clear_all: MagicMock,
+    ) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/notifications/clear-all",
+            data={"confirm": "1"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/notifications"
+        mock_clear_all.assert_called_once()
+
+    def test_delete_notification_rejects_empty_id(self) -> None:
+        from database import delete_notification
+
+        with pytest.raises(ValueError, match="Notification id is required"):
+            delete_notification("   ")

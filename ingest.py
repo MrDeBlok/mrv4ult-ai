@@ -694,6 +694,9 @@ def _import_status(
 
     watches_needing_review: list[str] = []
     for line_index, watch in enumerate(watches, start=1):
+        if watch.get("retail_price_only"):
+            watches_needing_review.append(f"watch {line_index}: retail price only")
+            continue
         missing = _watch_missing_fields(watch)
         if missing:
             watches_needing_review.append(

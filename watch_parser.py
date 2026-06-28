@@ -259,6 +259,28 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
 ]
 
+RETAIL_PRICE_LABEL_PATTERN = re.compile(
+    r"\b(?:retail(?:\s+price)?|msrp|list(?:\s+price)?|rrp)\b",
+    re.I,
+)
+OFFER_PRICE_LABEL_PATTERN = re.compile(
+    r"\b(?:nett?|netto|dealer(?:\s+price)?|asking|ask|our(?:\s+price)?|price)\b",
+    re.I,
+)
+LABELED_PRICE_SPAN_PATTERN = re.compile(
+    r"\b("
+    r"retail(?:\s+price)?|msrp|list(?:\s+price)?|rrp|"
+    r"nett?|netto|dealer(?:\s+price)?|asking|ask|our(?:\s+price)?|price"
+    r")\b"
+    r"[\s:]*"
+    r"(.+?)"
+    r"(?=\b(?:"
+    r"retail(?:\s+price)?|msrp|list(?:\s+price)?|rrp|"
+    r"nett?|netto|dealer(?:\s+price)?|asking|ask|our(?:\s+price)?|price"
+    r")\b|$)",
+    re.I | re.S,
+)
+
 BULLET_PREFIX = re.compile(r"^[-*•]\s*")
 NUMBER_PREFIX = re.compile(r"^\d+[\.)]\s+(?=[A-Za-z*])")
 MARKDOWN_EMPHASIS = re.compile(r"\*+")
@@ -267,7 +289,12 @@ MARKDOWN_EMPHASIS = re.compile(r"\*+")
 def _strip_markdown(text: str) -> str:
     """Remove lightweight markdown emphasis markers from dealer text."""
     cleaned = MARKDOWN_EMPHASIS.sub("", text)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    lines: list[str] = []
+    for line in cleaned.splitlines():
+        normalized = re.sub(r"[ \t]+", " ", line).strip()
+        if normalized:
+            lines.append(normalized)
+    return "\n".join(lines)
 
 NOTES_REMOVE_PATTERNS = [
     NEW_CARD_DATE_PATTERN,
@@ -306,6 +333,9 @@ def empty_watch() -> WatchDict:
         "currency": None,
         "original_price": None,
         "original_currency": None,
+        "retail_price": None,
+        "retail_currency": None,
+        "retail_price_only": False,
         "usd_price": None,
         "exchange_rate_to_usd": None,
         "production_year": None,
@@ -721,11 +751,129 @@ def _compute_confidence(watch: WatchDict) -> int:
     return min(score, 100)
 
 
-def _apply_price_fields(watch: WatchDict, text: str) -> None:
-    original_price, original_currency = _extract_price(text)
-    if original_currency is None:
-        original_currency = _extract_currency(text)
+def _price_segments(text: str) -> list[str]:
+    segments: list[str] = []
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        for part in re.split(r"\s*;\s*", cleaned):
+            part = part.strip()
+            if part:
+                segments.append(part)
+    return segments or [text.strip()]
 
+
+def _segment_price_label_kind(segment: str) -> str | None:
+    if RETAIL_PRICE_LABEL_PATTERN.search(segment):
+        return "retail"
+    if OFFER_PRICE_LABEL_PATTERN.search(segment):
+        return "offer"
+    return None
+
+
+def _classify_price_label(label: str) -> str:
+    normalized = label.lower().strip()
+    if re.fullmatch(r"retail(?:\s+price)?|msrp|list(?:\s+price)?|rrp", normalized):
+        return "retail"
+    return "offer"
+
+
+def _extract_labeled_prices_from_segment(
+    segment: str,
+) -> list[tuple[str, int, str | None]]:
+    found: list[tuple[str, int, str | None]] = []
+    for match in LABELED_PRICE_SPAN_PATTERN.finditer(segment):
+        label = match.group(1)
+        tail = match.group(2).strip(" ,:-")
+        amount, currency = _extract_price(tail)
+        if amount is None:
+            amount, currency = _extract_price(f"{label} {tail}")
+        if amount is None:
+            continue
+        if currency is None:
+            currency = _extract_currency(tail) or _extract_currency(segment)
+        found.append((_classify_price_label(label), amount, currency))
+    return found
+
+
+def _segment_has_price_label(segment: str) -> bool:
+    return _segment_price_label_kind(segment) is not None
+
+
+def _extract_labeled_prices(text: str) -> tuple[list[tuple[int, str | None]], list[tuple[int, str | None]]]:
+    retail_prices: list[tuple[int, str | None]] = []
+    offer_prices: list[tuple[int, str | None]] = []
+
+    for segment in _price_segments(text):
+        for kind, amount, currency in _extract_labeled_prices_from_segment(segment):
+            if kind == "retail":
+                retail_prices.append((amount, currency))
+            else:
+                offer_prices.append((amount, currency))
+
+    return retail_prices, offer_prices
+
+
+def _extract_unlabeled_prices(
+    text: str,
+    *,
+    exclude_amounts: set[int] | None = None,
+) -> list[tuple[int, str | None]]:
+    excluded = exclude_amounts or set()
+    candidates: list[tuple[int, str | None]] = []
+    for segment in _price_segments(text):
+        if _segment_has_price_label(segment):
+            continue
+        amount, currency = _extract_price(segment)
+        if amount is None or amount in excluded:
+            continue
+        if currency is None:
+            currency = _extract_currency(segment)
+        candidates.append((amount, currency))
+    return candidates
+
+
+def _select_offer_price(
+    text: str,
+    retail_prices: list[tuple[int, str | None]],
+    offer_prices: list[tuple[int, str | None]],
+) -> tuple[int | None, str | None, bool]:
+    if offer_prices:
+        return (*offer_prices[-1], False)
+
+    if not retail_prices:
+        amount, currency = _extract_price(text)
+        if currency is None:
+            currency = _extract_currency(text)
+        return amount, currency, False
+
+    retail_amounts = {amount for amount, _ in retail_prices}
+    unlabeled = _extract_unlabeled_prices(text, exclude_amounts=retail_amounts)
+    if unlabeled:
+        amount, currency = min(unlabeled, key=lambda item: item[0])
+        return amount, currency, False
+
+    return None, None, True
+
+
+def _apply_price_fields(watch: WatchDict, text: str) -> None:
+    retail_prices, offer_prices = _extract_labeled_prices(text)
+    original_price, original_currency, retail_only = _select_offer_price(
+        text,
+        retail_prices,
+        offer_prices,
+    )
+
+    if retail_prices:
+        retail_price, retail_currency = retail_prices[-1]
+        watch["retail_price"] = retail_price
+        watch["retail_currency"] = retail_currency
+    else:
+        watch["retail_price"] = None
+        watch["retail_currency"] = None
+
+    watch["retail_price_only"] = retail_only
     watch["original_price"] = original_price
     watch["original_currency"] = original_currency
     watch["price"] = original_price
