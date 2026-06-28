@@ -94,7 +94,8 @@ class TestIgnoredActivityRow:
         )
 
         assert row["group_name"] == "HK Dealers"
-        assert row["dealer"] == "Dealer A"
+        assert row["dealer"] == "Private contact"
+        assert row["dealer_redacted"] is True
         assert row["message_preview"] == "Just a chat message about lunch plans today"
         assert row["status_reason"] == "No watch offer was detected in this message."
 

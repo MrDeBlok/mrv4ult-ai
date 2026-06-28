@@ -15,7 +15,20 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 from condition_normalizer import normalize_condition_value
+from contact_classification import (
+    ALL_CONTACT_TYPES,
+    CONTACT_TYPE_DEALER,
+    CONTACT_TYPE_REMOVED,
+    IMPORT_PLACEHOLDER_WHATSAPP_ID,
+    is_business_contact,
+    normalize_contact_type,
+)
 from request_matching import match_offer_against_requests
+
+try:
+    from postgrest.exceptions import APIError
+except ImportError:  # pragma: no cover - test environments without postgrest
+    APIError = Exception  # type: ignore[misc, assignment]
 
 Record = dict[str, Any]
 
@@ -45,6 +58,77 @@ def get_client() -> Client:
 
     _client = create_client(url, key)
     return _client
+
+
+_contact_type_column_supported: bool | None = None
+
+
+def reset_contact_type_column_cache() -> None:
+    """Reset cached contact_type column detection (for tests)."""
+    global _contact_type_column_supported
+    _contact_type_column_supported = None
+
+
+def contact_type_column_supported() -> bool:
+    """Return True when dealers.contact_type exists in the connected database."""
+    global _contact_type_column_supported
+    if _contact_type_column_supported is not None:
+        return _contact_type_column_supported
+
+    try:
+        get_client().table("dealers").select("contact_type").limit(1).execute()
+        _contact_type_column_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "contact_type" in message:
+            _contact_type_column_supported = False
+            logger.warning(
+                "dealers.contact_type column missing; apply "
+                "docs/migrations/sprint_27_1_contact_classification.sql"
+            )
+        else:
+            raise
+    return _contact_type_column_supported
+
+
+def _legacy_contact_type(dealer: Record) -> str:
+    """Infer contact type before the Sprint 27.1 migration is applied."""
+    whatsapp_id = str(dealer.get("whatsapp_id") or "").strip()
+    if whatsapp_id == IMPORT_PLACEHOLDER_WHATSAPP_ID:
+        return CONTACT_TYPE_REMOVED
+    return CONTACT_TYPE_DEALER
+
+
+def dealer_contact_type(dealer: Record | None) -> str:
+    """Return the effective normalized contact type for one dealer row."""
+    if not dealer:
+        return CONTACT_TYPE_REMOVED
+    if contact_type_column_supported():
+        return normalize_contact_type(str(dealer.get("contact_type") or ""))
+    return normalize_contact_type(_legacy_contact_type(dealer))
+
+
+def dealer_is_business_visible(dealer: Record | None) -> bool:
+    """Return True when a dealer may appear in business-facing views."""
+    return is_business_contact(dealer_contact_type(dealer))
+
+
+def is_business_dealer_relation(dealer_data: Any) -> bool:
+    """Return True when nested Supabase dealer data belongs in business views."""
+    return dealer_is_business_visible(_nested_dealer_record(dealer_data))
+
+
+def _nested_dealer_record(dealer: Any) -> Record:
+    if isinstance(dealer, list) and dealer:
+        dealer = dealer[0]
+    if isinstance(dealer, dict):
+        return dealer
+    return {}
+
+
+def _offer_from_business_dealer(offer: Record) -> bool:
+    return dealer_is_business_visible(_nested_dealer_record(offer.get("dealers")))
 
 
 def insert_message(
@@ -219,20 +303,29 @@ def get_watch_by_id(watch_id: str) -> Record | None:
 
 
 def get_active_offers_for_watch(watch_id: str) -> list[Record]:
-    """Return all active offers for a watch with dealer, group, and message metadata."""
+    """Return active offers for a watch with dealer, group, and message metadata."""
+    dealer_fields = (
+        "dealers(display_name, phone_number, whatsapp_id, contact_type)"
+        if contact_type_column_supported()
+        else "dealers(display_name, phone_number, whatsapp_id)"
+    )
     response = (
         get_client()
         .table("offers")
         .select(
             "dealer_id, original_price, original_currency, usd_price, card_date, condition, "
-            "dealers(display_name, phone_number, whatsapp_id), "
+            f"{dealer_fields}, "
             "messages(received_at, group_id, groups(name))"
         )
         .eq("watch_id", watch_id)
         .eq("status", "active")
         .execute()
     )
-    return response.data or []
+    return [
+        offer
+        for offer in response.data or []
+        if _offer_from_business_dealer(offer)
+    ]
 
 
 def create_request(
@@ -792,7 +885,48 @@ def insert_offer(
 
 
 def list_dealers() -> list[Record]:
-    """Return all dealers ordered by display name."""
+    """Return business dealer contacts with at least one offer."""
+    dealer_ids = _dealer_ids_with_offers()
+    query = get_client().table("dealers").select("*").order("display_name")
+    if contact_type_column_supported():
+        query = query.eq("contact_type", "dealer")
+    response = query.execute()
+    return [
+        dealer
+        for dealer in response.data or []
+        if str(dealer.get("id")) in dealer_ids and dealer_is_business_visible(dealer)
+    ]
+
+
+def dealer_has_offers(dealer_id: str) -> bool:
+    """Return True when a dealer has at least one stored offer."""
+    response = (
+        get_client()
+        .table("offers")
+        .select("id")
+        .eq("dealer_id", dealer_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(response.data)
+
+
+def _dealer_ids_with_offers() -> set[str]:
+    response = get_client().table("offers").select("dealer_id").execute()
+    return {
+        str(row["dealer_id"])
+        for row in response.data or []
+        if row.get("dealer_id")
+    }
+
+
+def dealer_ids_with_offers() -> set[str]:
+    """Return dealer ids that have at least one stored offer."""
+    return _dealer_ids_with_offers()
+
+
+def list_contacts() -> list[Record]:
+    """Return all WhatsApp contacts for classification management."""
     response = (
         get_client()
         .table("dealers")
@@ -801,6 +935,43 @@ def list_dealers() -> list[Record]:
         .execute()
     )
     return response.data or []
+
+
+def list_contacts_for_import_lookup() -> list[Record]:
+    """Return contact classification fields used to filter business import logs."""
+    fields = (
+        "id, whatsapp_id, phone_number, contact_type"
+        if contact_type_column_supported()
+        else "id, whatsapp_id, phone_number"
+    )
+    response = get_client().table("dealers").select(fields).execute()
+    rows: list[Record] = []
+    for dealer in response.data or []:
+        row = dict(dealer)
+        if not contact_type_column_supported():
+            row["contact_type"] = _legacy_contact_type(row)
+        rows.append(row)
+    return rows
+
+
+def update_dealer_contact_type(dealer_id: str, contact_type: str) -> Record:
+    """Update the privacy classification for one contact."""
+    if not contact_type_column_supported():
+        raise RuntimeError(
+            "Contact classification requires dealers.contact_type. Apply "
+            "docs/migrations/sprint_27_1_contact_classification.sql in Supabase."
+        )
+    if contact_type not in ALL_CONTACT_TYPES:
+        raise ValueError(f"Unsupported contact type: {contact_type}")
+
+    response = (
+        get_client()
+        .table("dealers")
+        .update({"contact_type": contact_type})
+        .eq("id", dealer_id)
+        .execute()
+    )
+    return _first_row(response.data, "dealers")
 
 
 def get_dealer_by_id(dealer_id: str) -> Record | None:
@@ -815,32 +986,51 @@ def get_dealer_by_id(dealer_id: str) -> Record | None:
 
 def list_offer_intelligence_rows(*, dealer_id: str | None = None) -> list[Record]:
     """Return offer rows used for dealer intelligence aggregation."""
+    dealer_fields = (
+        "dealers(contact_type)"
+        if contact_type_column_supported()
+        else "dealers(whatsapp_id)"
+    )
     query = (
         get_client()
         .table("offers")
-        .select("dealer_id, watch_id, status, usd_price, messages(received_at)")
+        .select(f"dealer_id, watch_id, status, usd_price, messages(received_at), {dealer_fields}")
     )
     if dealer_id:
         query = query.eq("dealer_id", dealer_id)
     response = query.execute()
-    return response.data or []
+    return [
+        offer
+        for offer in response.data or []
+        if _offer_from_business_dealer(offer)
+    ]
 
 
 def get_active_offers_for_dealer(dealer_id: str) -> list[Record]:
-    """Return active offers for a dealer with watch, group, and message metadata."""
+    """Return active offers for a business dealer with watch, group, and message metadata."""
+    dealer_fields = (
+        "dealers(contact_type)"
+        if contact_type_column_supported()
+        else "dealers(whatsapp_id)"
+    )
     response = (
         get_client()
         .table("offers")
         .select(
             "id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
             "watches(brand, reference, model, dial, bracelet), "
-            "messages(received_at, group_id, groups(name))"
+            "messages(received_at, group_id, groups(name)), "
+            f"{dealer_fields}"
         )
         .eq("dealer_id", dealer_id)
         .eq("status", "active")
         .execute()
     )
-    return response.data or []
+    return [
+        offer
+        for offer in response.data or []
+        if _offer_from_business_dealer(offer)
+    ]
 
 
 def _first_row(data: list[Record] | None, table: str) -> Record:

@@ -35,7 +35,7 @@ def _offer(
         "card_date": card_date,
         "condition": condition,
         "watches": _watch(reference=reference),
-        "dealers": {"display_name": "Dealer A"},
+        "dealers": {"display_name": "Dealer A", "contact_type": "dealer", "whatsapp_id": "+85290000001"},
     }
 
 
@@ -54,8 +54,13 @@ def _mock_offers_response(offers: list[dict]) -> MagicMock:
 
 
 class TestSearchConditionFilter:
+    @patch("search.contact_type_column_supported", return_value=False)
     @patch("search.get_client")
-    def test_search_all_conditions(self, mock_get_client: MagicMock) -> None:
+    def test_search_all_conditions(
+        self,
+        mock_get_client: MagicMock,
+        mock_contact_type_supported: MagicMock,
+    ) -> None:
         mock_get_client.return_value = _mock_offers_response(
             [
                 _offer(watch_id="w-new", condition="New", card_date="06/2026"),
@@ -68,8 +73,13 @@ class TestSearchConditionFilter:
 
         assert len(offers) == 3
 
+    @patch("search.contact_type_column_supported", return_value=False)
     @patch("search.get_client")
-    def test_filter_new_only(self, mock_get_client: MagicMock) -> None:
+    def test_filter_new_only(
+        self,
+        mock_get_client: MagicMock,
+        mock_contact_type_supported: MagicMock,
+    ) -> None:
         mock_get_client.return_value = _mock_offers_response(
             [
                 _offer(watch_id="w-new", condition="New"),
@@ -83,8 +93,13 @@ class TestSearchConditionFilter:
         assert len(offers) == 2
         assert all(offer["watch_id"] in {"w-new", "w-unworn"} for offer in offers)
 
+    @patch("search.contact_type_column_supported", return_value=False)
     @patch("search.get_client")
-    def test_filter_pre_owned_only(self, mock_get_client: MagicMock) -> None:
+    def test_filter_pre_owned_only(
+        self,
+        mock_get_client: MagicMock,
+        mock_contact_type_supported: MagicMock,
+    ) -> None:
         mock_get_client.return_value = _mock_offers_response(
             [
                 _offer(watch_id="w-new", condition="New"),

@@ -8,13 +8,23 @@ from datetime import datetime, timezone
 from typing import Any
 
 from database import (
+    contact_type_column_supported,
+    dealer_contact_type,
     find_or_create_watch,
     get_client,
     insert_import_log,
     insert_message,
     insert_offer,
+    is_business_dealer_relation,
     process_offer_request_matches,
     update_import_log,
+)
+from contact_classification import (
+    CONTACT_TYPE_DEALER,
+    CONTACT_TYPE_REMOVED,
+    IMPORT_PLACEHOLDER_WHATSAPP_ID,
+    has_valid_parsed_offers,
+    should_process_business_import,
 )
 from notifications import notify_request_match, record_import_notifications
 from watch_knowledge import enrich_parsed_watch
@@ -50,8 +60,9 @@ def find_or_create_dealer(
     whatsapp_number: str,
     *,
     display_name: str | None = None,
-) -> str:
-    """Return a dealer id for the given WhatsApp number, creating or updating as needed."""
+    default_contact_type: str = CONTACT_TYPE_DEALER,
+) -> tuple[str, str]:
+    """Return a dealer id and contact type for the given WhatsApp number."""
     whatsapp_id = _normalize_whatsapp_number(whatsapp_number)
     if not whatsapp_id:
         raise ValueError("Dealer WhatsApp number is required.")
@@ -61,9 +72,14 @@ def find_or_create_dealer(
         alias = None
 
     client = get_client()
+    select_fields = (
+        "id, display_name, contact_type"
+        if contact_type_column_supported()
+        else "id, display_name, whatsapp_id"
+    )
     existing = (
         client.table("dealers")
-        .select("id, display_name")
+        .select(select_fields)
         .eq("whatsapp_id", whatsapp_id)
         .limit(1)
         .execute()
@@ -73,21 +89,32 @@ def find_or_create_dealer(
         updates: dict[str, Any] = {"phone_number": whatsapp_id}
         if alias is not None:
             updates["display_name"] = alias
-        client.table("dealers").update(updates).eq("id", dealer["id"]).execute()
-        return dealer["id"]
+        contact_type = dealer_contact_type(dealer)
+        if (
+            contact_type_column_supported()
+            and default_contact_type == CONTACT_TYPE_DEALER
+            and contact_type != CONTACT_TYPE_DEALER
+        ):
+            updates["contact_type"] = CONTACT_TYPE_DEALER
+            contact_type = CONTACT_TYPE_DEALER
+        if updates:
+            client.table("dealers").update(updates).eq("id", dealer["id"]).execute()
+        return dealer["id"], contact_type
 
     payload: dict[str, Any] = {
         "whatsapp_id": whatsapp_id,
         "phone_number": whatsapp_id,
         "is_active": True,
     }
+    if contact_type_column_supported():
+        payload["contact_type"] = default_contact_type
     if alias is not None:
         payload["display_name"] = alias
 
     created = client.table("dealers").insert(payload).execute()
     if not created.data:
         raise RuntimeError(f"Failed to create dealer: {whatsapp_id}")
-    return created.data[0]["id"]
+    return created.data[0]["id"], default_contact_type
 
 
 def get_default_group_id() -> str:
@@ -95,11 +122,21 @@ def get_default_group_id() -> str:
     return find_or_create_group(DEFAULT_GROUP_NAME)
 
 
-def get_default_dealer_id() -> str:
+def get_default_dealer_id() -> tuple[str, str]:
     """Return the default dealer, creating it if needed."""
     return find_or_create_dealer(
         DEFAULT_DEALER_WHATSAPP_ID,
         display_name=DEFAULT_DEALER_NAME,
+        default_contact_type=CONTACT_TYPE_DEALER,
+    )
+
+
+def get_import_placeholder_dealer_id() -> tuple[str, str]:
+    """Return the placeholder dealer used for imports without valid watch offers."""
+    return find_or_create_dealer(
+        IMPORT_PLACEHOLDER_WHATSAPP_ID,
+        display_name="Import Placeholder",
+        default_contact_type=CONTACT_TYPE_REMOVED,
     )
 
 
@@ -118,6 +155,7 @@ def ingest_message(
         normalize_watch_condition(enrich_parsed_watch(watch))
         for watch in parsed["watches"]
     ]
+    has_valid_offers = has_valid_parsed_offers(len(parsed_watches))
 
     if group_name is not None and dealer_whatsapp is not None:
         normalized_group_name = group_name.strip()
@@ -127,19 +165,29 @@ def ingest_message(
             normalized_alias = None
 
         group_id = find_or_create_group(normalized_group_name)
-        dealer_id = find_or_create_dealer(
-            normalized_whatsapp,
-            display_name=normalized_alias,
-        )
         summary_group = normalized_group_name
         summary_whatsapp = normalized_whatsapp
         summary_alias = normalized_alias
+
+        if has_valid_offers:
+            dealer_id, contact_type = find_or_create_dealer(
+                normalized_whatsapp,
+                display_name=normalized_alias,
+                default_contact_type=CONTACT_TYPE_DEALER,
+            )
+        else:
+            dealer_id, contact_type = get_import_placeholder_dealer_id()
     else:
         group_id = get_default_group_id()
-        dealer_id = get_default_dealer_id()
         summary_group = DEFAULT_GROUP_NAME
         summary_whatsapp = DEFAULT_DEALER_WHATSAPP_ID
         summary_alias = DEFAULT_DEALER_NAME
+        if has_valid_offers:
+            dealer_id, contact_type = get_default_dealer_id()
+        else:
+            dealer_id, contact_type = get_import_placeholder_dealer_id()
+
+    business_import = has_valid_offers and should_process_business_import(contact_type)
 
     now = datetime.now(timezone.utc)
     message_received_at = received_at or now
@@ -242,12 +290,19 @@ def ingest_message(
     import_status, status_reason = _import_status(summary, parse_status, parsed_watches)
     summary["status_reason"] = status_reason
     summary["parsed_watches"] = list(parsed_watches)
+
+    log_dealer_whatsapp = summary_whatsapp if has_valid_offers else ""
+    log_dealer_alias = summary_alias if has_valid_offers else None
+    if not has_valid_offers:
+        summary["dealer_whatsapp"] = ""
+        summary["dealer_alias"] = None
+
     import_log = insert_import_log(
         message_id=message["id"],
         import_time=message_received_at,
         group_name=summary_group,
-        dealer_whatsapp=summary_whatsapp,
-        dealer_alias=summary_alias,
+        dealer_whatsapp=log_dealer_whatsapp,
+        dealer_alias=log_dealer_alias,
         watches_parsed=summary["watches_parsed"],
         new_offers=summary["new_offers"],
         duplicate_offers=summary["duplicate_offers"],
@@ -259,24 +314,25 @@ def ingest_message(
     )
 
     matched_request_count = 0
-    for item in new_offers_for_matching:
-        matches = process_offer_request_matches(
-            import_log_id=import_log["id"],
-            offer_id=item["offer_id"],
-            offer=item["offer"],
-        )
-        matched_request_count += len(matches)
-        row = summary["rows"][item["line_index"]]
-        row["request_matches"] = _summary_request_matches(matches)
-        row["results"] = _append_request_match_result(row.get("results") or [], matches)
-        for match in matches:
-            notify_request_match(
+    if business_import:
+        for item in new_offers_for_matching:
+            matches = process_offer_request_matches(
                 import_log_id=import_log["id"],
-                request_id=str(match["request_id"]),
-                offer_id=str(item["offer_id"]),
-                client_name=match.get("client_name") or "Client",
-                match_reason=match.get("match_reason") or "Request matched",
+                offer_id=item["offer_id"],
+                offer=item["offer"],
             )
+            matched_request_count += len(matches)
+            row = summary["rows"][item["line_index"]]
+            row["request_matches"] = _summary_request_matches(matches)
+            row["results"] = _append_request_match_result(row.get("results") or [], matches)
+            for match in matches:
+                notify_request_match(
+                    import_log_id=import_log["id"],
+                    request_id=str(match["request_id"]),
+                    offer_id=str(item["offer_id"]),
+                    client_name=match.get("client_name") or "Client",
+                    match_reason=match.get("match_reason") or "Request matched",
+                )
 
     summary["matched_requests"] = matched_request_count
     if matched_request_count:
@@ -286,11 +342,12 @@ def ingest_message(
             summary=summary,
         )
 
-    record_import_notifications(
-        import_log_id=import_log["id"],
-        summary=summary,
-        import_status=import_status,
-    )
+    if business_import:
+        record_import_notifications(
+            import_log_id=import_log["id"],
+            summary=summary,
+            import_status=import_status,
+        )
 
     summary["import_log_id"] = import_log["id"]
     summary["status"] = import_status
@@ -302,17 +359,24 @@ def _normalize_whatsapp_number(value: str) -> str:
 
 
 def _get_active_offers(watch_id: str) -> list[tuple[str, int]]:
-    """Return active offer ids and USD prices for a watch before importing a new offer."""
+    """Return active business-dealer offer ids and USD prices for a watch."""
+    dealer_fields = (
+        "dealers(contact_type)"
+        if contact_type_column_supported()
+        else "dealers(whatsapp_id)"
+    )
     response = (
         get_client()
         .table("offers")
-        .select("id, usd_price")
+        .select(f"id, usd_price, {dealer_fields}")
         .eq("watch_id", watch_id)
         .eq("status", "active")
         .execute()
     )
     offers: list[tuple[str, int]] = []
     for row in response.data or []:
+        if not is_business_dealer_relation(row.get("dealers")):
+            continue
         offer_id = row.get("id")
         usd_price = row.get("usd_price")
         if offer_id and usd_price is not None:

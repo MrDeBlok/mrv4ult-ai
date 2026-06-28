@@ -38,6 +38,11 @@ from database import (
     get_import_log,
     get_message_by_id,
     get_watch_by_id,
+    dealer_contact_type,
+    dealer_has_offers,
+    dealer_is_business_visible,
+    list_contacts,
+    list_contacts_for_import_lookup,
     list_dealers,
     list_import_logs,
     list_notifications,
@@ -47,6 +52,7 @@ from database import (
     list_requests,
     mark_all_notifications_read,
     mark_notification_read,
+    update_dealer_contact_type,
     update_request_status,
 )
 from evolution_client import (
@@ -65,6 +71,26 @@ from dealer_intelligence import (
     compute_dealer_stats,
     flatten_offer_intelligence_rows,
     format_dealer_stats,
+)
+from contact_classification import (
+    CONTACT_TYPES,
+    CONTACT_TYPE_CLIENT,
+    CONTACT_TYPE_DEALER,
+    CONTACT_TYPE_REMOVED,
+    CONTACTS_FILTER_REMOVED,
+    DEFAULT_CONTACTS_FILTER,
+    RESTORE_CONTACT_TYPES,
+    build_contact_rows,
+    build_contacts_filter_options,
+    build_dealer_lookup_by_whatsapp,
+    filter_business_import_logs,
+    filter_contact_rows,
+    format_import_sender_label,
+    is_business_contact,
+    is_business_import_log,
+    is_removed_contact,
+    parse_contacts_filter,
+    should_redact_import_sender,
 )
 from notifications import build_notification_display, get_unread_notification_count
 from request_profit import (
@@ -811,12 +837,13 @@ def _parse_signed_usd(value: Any) -> int | None:
 def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
     """Format one import log for the activity list."""
     status = normalize_import_status(import_log)
+    sender_redacted = should_redact_import_sender(import_log)
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
         "group_name": import_log.get("group_name") or "N/A",
-        "dealer_alias": import_log.get("dealer_alias") or "N/A",
-        "dealer_whatsapp": import_log.get("dealer_whatsapp") or "N/A",
+        "dealer_alias": format_import_sender_label(import_log),
+        "dealer_whatsapp": "—" if sender_redacted else (import_log.get("dealer_whatsapp") or "N/A"),
         "watches_parsed": import_log.get("watches_parsed", 0),
         "new_offers": import_log.get("new_offers", 0),
         "duplicate_offers": import_log.get("duplicate_offers", 0),
@@ -837,12 +864,14 @@ def build_activity_detail(
     status = normalize_import_status(import_log)
     rows = summary.get("rows") or []
     raw_message = message.get("raw_text") or ""
+    sender_redacted = should_redact_import_sender(import_log)
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
         "group_name": import_log.get("group_name") or "N/A",
-        "dealer_alias": import_log.get("dealer_alias"),
-        "dealer_whatsapp": import_log.get("dealer_whatsapp") or "N/A",
+        "dealer_alias": None if sender_redacted else import_log.get("dealer_alias"),
+        "dealer_label": format_import_sender_label(import_log),
+        "dealer_whatsapp": "—" if sender_redacted else (import_log.get("dealer_whatsapp") or "N/A"),
         "watches_parsed": import_log.get("watches_parsed", 0),
         "new_watches": summary.get("new_watches", 0),
         "new_offers": import_log.get("new_offers", 0),
@@ -1018,9 +1047,19 @@ async def requests_close(request_id: str) -> RedirectResponse:
     return RedirectResponse(url="/requests", status_code=303)
 
 
+def _business_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+    return filter_business_import_logs(import_logs, lookup)
+
+
+def _is_business_import_log(import_log: dict[str, Any]) -> bool:
+    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+    return is_business_import_log(import_log, lookup)
+
+
 @app.get("/activity", response_class=HTMLResponse, name="activity_list")
 async def activity_list(request: Request) -> HTMLResponse:
-    import_logs = list_import_logs()
+    import_logs = _business_import_logs(list_import_logs())
     stats = activity_feed_counts(import_logs)
     imports = [
         build_activity_row(import_log)
@@ -1035,7 +1074,7 @@ async def activity_list(request: Request) -> HTMLResponse:
 
 @app.get("/activity/ignored", response_class=HTMLResponse, name="activity_ignored")
 async def activity_ignored(request: Request) -> HTMLResponse:
-    import_logs = list_import_logs()
+    import_logs = _business_import_logs(list_import_logs())
     stats = activity_feed_counts(import_logs)
     ignored_rows: list[dict[str, Any]] = []
     for import_log in filter_ignored_import_logs(import_logs):
@@ -1054,7 +1093,7 @@ async def activity_ignored(request: Request) -> HTMLResponse:
 @app.get("/activity/{import_id}", response_class=HTMLResponse, name="activity_detail")
 async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
     import_log = get_import_log(import_id)
-    if import_log is None:
+    if import_log is None or not _is_business_import_log(import_log):
         raise HTTPException(status_code=404, detail="Import not found")
 
     message = get_message_by_id(import_log["message_id"])
@@ -1232,7 +1271,11 @@ async def dealers_list(request: Request) -> HTMLResponse:
 @app.get("/dealers/{dealer_id}", response_class=HTMLResponse, name="dealer_detail")
 async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
     dealer = get_dealer_by_id(dealer_id)
-    if dealer is None:
+    if (
+        dealer is None
+        or not dealer_is_business_visible(dealer)
+        or not dealer_has_offers(dealer_id)
+    ):
         raise HTTPException(status_code=404, detail="Dealer not found")
 
     offer_rows = flatten_offer_intelligence_rows(
@@ -1251,3 +1294,116 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
             "offers": build_dealer_offer_rows(active_offers),
         },
     )
+
+
+@app.get("/contacts", response_class=HTMLResponse, name="contacts_list")
+async def contacts_list(request: Request, filter: str = DEFAULT_CONTACTS_FILTER) -> HTMLResponse:
+    active_filter = parse_contacts_filter(filter)
+    contacts = filter_contact_rows(
+        build_contact_rows(list_contacts()),
+        filter_key=active_filter,
+    )
+    return templates.TemplateResponse(
+        request,
+        "contacts.html",
+        {
+            "contacts": contacts,
+            "active_filter": active_filter,
+            "removed_filter": CONTACTS_FILTER_REMOVED,
+            "filter_options": build_contacts_filter_options(active_filter),
+            "restore_contact_types": RESTORE_CONTACT_TYPES,
+            "saved": request.query_params.get("saved") == "1",
+            "removed": request.query_params.get("removed") == "1",
+            "restored": request.query_params.get("restored") == "1",
+        },
+    )
+
+
+def _contacts_redirect_url(active_filter: str, **query_params: str) -> str:
+    normalized_filter = parse_contacts_filter(active_filter)
+    parts: list[str] = []
+    if normalized_filter != DEFAULT_CONTACTS_FILTER:
+        parts.append(f"filter={normalized_filter}")
+    parts.extend(f"{key}={value}" for key, value in query_params.items())
+    if not parts:
+        return "/contacts"
+    return f"/contacts?{'&'.join(parts)}"
+
+
+@app.post("/contacts/{contact_id}/contact-type")
+async def contacts_update_contact_type(
+    contact_id: str,
+    contact_type: str = Form(...),
+    filter: str = Form(DEFAULT_CONTACTS_FILTER),
+) -> RedirectResponse:
+    if contact_type not in CONTACT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid contact type")
+    dealer = get_dealer_by_id(contact_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if is_removed_contact(dealer_contact_type(dealer)):
+        raise HTTPException(status_code=400, detail="Removed contacts must be restored first")
+    update_dealer_contact_type(contact_id, contact_type)
+    return RedirectResponse(url=_contacts_redirect_url(filter, saved="1"), status_code=303)
+
+
+@app.post("/contacts/{contact_id}/set-dealer")
+async def contacts_set_dealer(
+    contact_id: str,
+    filter: str = Form(DEFAULT_CONTACTS_FILTER),
+) -> RedirectResponse:
+    dealer = get_dealer_by_id(contact_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if is_removed_contact(dealer_contact_type(dealer)):
+        raise HTTPException(status_code=400, detail="Removed contacts must be restored first")
+    update_dealer_contact_type(contact_id, CONTACT_TYPE_DEALER)
+    return RedirectResponse(url=_contacts_redirect_url(filter, saved="1"), status_code=303)
+
+
+@app.post("/contacts/{contact_id}/set-client")
+async def contacts_set_client(
+    contact_id: str,
+    filter: str = Form(DEFAULT_CONTACTS_FILTER),
+) -> RedirectResponse:
+    dealer = get_dealer_by_id(contact_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if is_removed_contact(dealer_contact_type(dealer)):
+        raise HTTPException(status_code=400, detail="Removed contacts must be restored first")
+    update_dealer_contact_type(contact_id, CONTACT_TYPE_CLIENT)
+    return RedirectResponse(url=_contacts_redirect_url(filter, saved="1"), status_code=303)
+
+
+@app.post("/contacts/{contact_id}/remove")
+async def contacts_remove_from_system(
+    contact_id: str,
+    confirm: str = Form(...),
+    filter: str = Form(DEFAULT_CONTACTS_FILTER),
+) -> RedirectResponse:
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    dealer = get_dealer_by_id(contact_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if is_removed_contact(dealer_contact_type(dealer)):
+        raise HTTPException(status_code=400, detail="Contact already removed")
+    update_dealer_contact_type(contact_id, CONTACT_TYPE_REMOVED)
+    return RedirectResponse(url=_contacts_redirect_url(filter, removed="1"), status_code=303)
+
+
+@app.post("/contacts/{contact_id}/restore")
+async def contacts_restore_contact(
+    contact_id: str,
+    contact_type: str = Form(...),
+    filter: str = Form(CONTACTS_FILTER_REMOVED),
+) -> RedirectResponse:
+    if contact_type not in RESTORE_CONTACT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid restore type")
+    dealer = get_dealer_by_id(contact_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not is_removed_contact(dealer_contact_type(dealer)):
+        raise HTTPException(status_code=400, detail="Contact is not removed")
+    update_dealer_contact_type(contact_id, contact_type)
+    return RedirectResponse(url=_contacts_redirect_url(filter, restored="1"), status_code=303)

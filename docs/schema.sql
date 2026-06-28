@@ -28,10 +28,14 @@ CREATE TABLE dealers (
     country         TEXT,
     notes           TEXT,
     is_active       BOOLEAN     NOT NULL DEFAULT true,
+    contact_type    TEXT        NOT NULL DEFAULT 'unknown',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    CONSTRAINT dealers_whatsapp_id_unique UNIQUE (whatsapp_id)
+    CONSTRAINT dealers_whatsapp_id_unique UNIQUE (whatsapp_id),
+
+    CONSTRAINT dealers_contact_type_check
+        CHECK (contact_type IN ('dealer', 'private', 'ignored', 'unknown'))
 );
 
 CREATE TABLE messages (
@@ -168,6 +172,13 @@ CREATE TABLE import_logs (
 -- ALTER TABLE import_logs DROP CONSTRAINT import_logs_status_check;
 -- ALTER TABLE import_logs ADD CONSTRAINT import_logs_status_check
 --     CHECK (status IN ('success', 'no_watch_detected', 'warning', 'error'));
+
+-- ---------------------------------------------------------------------------
+-- Indexes — dealers
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX idx_dealers_contact_type
+    ON dealers (contact_type);
 
 -- ---------------------------------------------------------------------------
 -- Indexes — watches

@@ -235,10 +235,12 @@ class TestDealerDetailPage:
     @patch("app.build_dealer_offer_rows")
     @patch("app.get_active_offers_for_dealer", return_value=[])
     @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.dealer_has_offers", return_value=True)
     @patch("app.get_dealer_by_id")
     def test_dealer_detail_page_renders_profile_and_stats(
         self,
         mock_get_dealer: MagicMock,
+        mock_has_offers: MagicMock,
         mock_list_offers: MagicMock,
         mock_get_active_offers: MagicMock,
         mock_build_offer_rows: MagicMock,
@@ -251,6 +253,7 @@ class TestDealerDetailPage:
             "company_name": "Elite Watches",
             "country": "Hong Kong",
             "is_active": True,
+            "contact_type": "dealer",
             "created_at": "2026-06-01T10:00:00+00:00",
             "updated_at": "2026-06-27T12:00:00+00:00",
         }

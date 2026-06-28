@@ -6,7 +6,7 @@ import re
 import sys
 from typing import Any
 
-from database import get_client
+from database import contact_type_column_supported, get_client, is_business_dealer_relation
 from condition_normalizer import (
     display_condition,
     offer_condition_display,
@@ -56,13 +56,17 @@ def search_offers(
 ) -> tuple[list[Record], bool]:
     """Search active offers by watch fields matching all query tokens."""
     tokens, max_usd_price, cheapest_only = parse_query(query)
+    dealer_fields = (
+        "dealers(display_name, contact_type)"
+        if contact_type_column_supported()
+        else "dealers(display_name, whatsapp_id)"
+    )
     response = (
         get_client()
         .table("offers")
         .select(
             "watch_id, original_price, original_currency, usd_price, card_date, condition, "
-            "watches(brand, reference, dial, bracelet), "
-            "dealers(display_name)"
+            f"watches(brand, reference, dial, bracelet), {dealer_fields}"
         )
         .eq("status", "active")
         .execute()
@@ -70,6 +74,8 @@ def search_offers(
 
     matches: list[Record] = []
     for offer in response.data or []:
+        if not is_business_dealer_relation(offer.get("dealers")):
+            continue
         watch = _nested_record(offer.get("watches"))
         if not _watch_matches_tokens(watch, tokens):
             continue

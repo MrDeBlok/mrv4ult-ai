@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from import_status import import_status_reason, normalize_import_status
+from contact_classification import format_import_sender_label, should_redact_import_sender
 
 ACTIVITY_FEED_STATUSES = frozenset({"success", "warning"})
 IGNORED_STATUSES = frozenset({"no_watch_detected"})
@@ -21,13 +22,7 @@ def message_preview(text: str | None, *, max_length: int = 80) -> str:
 
 
 def format_dealer_label(import_log: dict[str, Any]) -> str:
-    alias = import_log.get("dealer_alias")
-    if isinstance(alias, str) and alias.strip():
-        return alias.strip()
-    whatsapp = import_log.get("dealer_whatsapp")
-    if isinstance(whatsapp, str) and whatsapp.strip():
-        return whatsapp.strip()
-    return "N/A"
+    return format_import_sender_label(import_log)
 
 
 def activity_feed_counts(import_logs: list[dict[str, Any]]) -> dict[str, int]:
@@ -72,6 +67,7 @@ def build_ignored_activity_row(
         "import_time": import_log.get("import_time"),
         "group_name": import_log.get("group_name") or "N/A",
         "dealer": format_dealer_label(import_log),
+        "dealer_redacted": should_redact_import_sender(import_log),
         "message_preview": message_preview(message.get("raw_text") if message else None),
         "status_reason": import_status_reason(import_log),
     }
