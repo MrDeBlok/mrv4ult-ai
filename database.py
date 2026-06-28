@@ -791,6 +791,58 @@ def insert_offer(
     return created, True
 
 
+def list_dealers() -> list[Record]:
+    """Return all dealers ordered by display name."""
+    response = (
+        get_client()
+        .table("dealers")
+        .select("*")
+        .order("display_name")
+        .execute()
+    )
+    return response.data or []
+
+
+def get_dealer_by_id(dealer_id: str) -> Record | None:
+    """Return a dealer row by id, or None if it does not exist."""
+    response = (
+        get_client().table("dealers").select("*").eq("id", dealer_id).limit(1).execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def list_offer_intelligence_rows(*, dealer_id: str | None = None) -> list[Record]:
+    """Return offer rows used for dealer intelligence aggregation."""
+    query = (
+        get_client()
+        .table("offers")
+        .select("dealer_id, watch_id, status, usd_price, messages(received_at)")
+    )
+    if dealer_id:
+        query = query.eq("dealer_id", dealer_id)
+    response = query.execute()
+    return response.data or []
+
+
+def get_active_offers_for_dealer(dealer_id: str) -> list[Record]:
+    """Return active offers for a dealer with watch, group, and message metadata."""
+    response = (
+        get_client()
+        .table("offers")
+        .select(
+            "id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
+            "watches(brand, reference, model, dial, bracelet), "
+            "messages(received_at, group_id, groups(name))"
+        )
+        .eq("dealer_id", dealer_id)
+        .eq("status", "active")
+        .execute()
+    )
+    return response.data or []
+
+
 def _first_row(data: list[Record] | None, table: str) -> Record:
     if not data:
         raise RuntimeError(f"Supabase returned no rows for {table}.")

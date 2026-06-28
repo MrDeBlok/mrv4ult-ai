@@ -32,12 +32,16 @@ from import_status import (
 from database import (
     create_request,
     get_active_offers_for_watch,
+    get_active_offers_for_dealer,
     get_client,
+    get_dealer_by_id,
     get_import_log,
     get_message_by_id,
     get_watch_by_id,
+    list_dealers,
     list_import_logs,
     list_notifications,
+    list_offer_intelligence_rows,
     list_request_matches_for_offer,
     load_enriched_request_matches_by_request_ids,
     list_requests,
@@ -54,6 +58,14 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from dealer_intelligence import (
+    build_dealer_list_rows,
+    build_dealer_offer_rows,
+    build_dealer_profile,
+    compute_dealer_stats,
+    flatten_offer_intelligence_rows,
+    format_dealer_stats,
+)
 from notifications import build_notification_display, get_unread_notification_count
 from request_profit import (
     attach_profit_to_matches,
@@ -204,6 +216,13 @@ def normalize_offer(offer: dict[str, Any]) -> dict[str, Any]:
     normalized["group_id"] = message.get("group_id")
     group = _nested_record(message.get("groups"))
     normalized["group_name"] = group.get("name")
+    return normalized
+
+
+def normalize_dealer_offer(offer: dict[str, Any]) -> dict[str, Any]:
+    """Flatten nested watch and message data onto a dealer offer record."""
+    normalized = normalize_offer(offer)
+    normalized["watch"] = _nested_record(offer.get("watches"))
     return normalized
 
 
@@ -1198,3 +1217,37 @@ async def notifications_mark_read(notification_id: str) -> RedirectResponse:
 async def notifications_mark_all_read() -> RedirectResponse:
     mark_all_notifications_read()
     return RedirectResponse(url="/notifications", status_code=303)
+
+
+@app.get("/dealers", response_class=HTMLResponse, name="dealers_list")
+async def dealers_list(request: Request) -> HTMLResponse:
+    dealers = build_dealer_list_rows(list_dealers(), list_offer_intelligence_rows())
+    return templates.TemplateResponse(
+        request,
+        "dealers.html",
+        {"dealers": dealers},
+    )
+
+
+@app.get("/dealers/{dealer_id}", response_class=HTMLResponse, name="dealer_detail")
+async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
+    dealer = get_dealer_by_id(dealer_id)
+    if dealer is None:
+        raise HTTPException(status_code=404, detail="Dealer not found")
+
+    offer_rows = flatten_offer_intelligence_rows(
+        list_offer_intelligence_rows(dealer_id=dealer_id)
+    )
+    active_offers = [
+        normalize_dealer_offer(offer) for offer in get_active_offers_for_dealer(dealer_id)
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "dealer_detail.html",
+        {
+            "dealer": build_dealer_profile(dealer),
+            "stats": format_dealer_stats(compute_dealer_stats(offer_rows)),
+            "offers": build_dealer_offer_rows(active_offers),
+        },
+    )
