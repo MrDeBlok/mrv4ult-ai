@@ -39,6 +39,7 @@ class TestImportPipelineTrace:
 
 
 class TestEuropeanPriceImportIntegration:
+    @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
     @patch("ingest.record_unknown_brands_for_watches", return_value=[])
     @patch("ingest.record_import_notifications")
     @patch("ingest.process_offer_request_matches", return_value=[])
@@ -61,6 +62,7 @@ class TestEuropeanPriceImportIntegration:
         mock_process_matches: MagicMock,
         mock_record_notifications: MagicMock,
         mock_record_unknown: MagicMock,
+        mock_record_unknown_nicknames: MagicMock,
     ) -> None:
         mock_insert_message.return_value = {"id": "message-1"}
         mock_find_watch.return_value = (
@@ -103,6 +105,7 @@ class TestEuropeanPriceImportIntegration:
         assert offer_kwargs["original_currency"] == "EUR"
         assert offer_kwargs["usd_price"] == 11_448
 
+    @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
     @patch("ingest.record_unknown_brands_for_watches", return_value=[])
     @patch("ingest.record_import_notifications")
     @patch("ingest.process_offer_request_matches", return_value=[])
@@ -125,6 +128,7 @@ class TestEuropeanPriceImportIntegration:
         mock_process_matches: MagicMock,
         mock_record_notifications: MagicMock,
         mock_record_unknown: MagicMock,
+        mock_record_unknown_nicknames: MagicMock,
     ) -> None:
         mock_insert_message.return_value = {"id": "message-1"}
         mock_find_watch.return_value = ({"id": "watch-2", "brand": "Rolex", "reference": "126500LN"}, True)
@@ -180,6 +184,7 @@ class TestEuropeanPriceImportIntegration:
         mock_ingest.assert_called_once()
         assert mock_ingest.call_args.args[0] == EXAMPLE_MESSAGE
 
+    @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
     @patch("ingest.record_unknown_brands_for_watches", return_value=[])
     @patch("ingest.record_import_notifications")
     @patch("ingest.process_offer_request_matches", return_value=[])
@@ -202,6 +207,7 @@ class TestEuropeanPriceImportIntegration:
         mock_process_matches: MagicMock,
         mock_record_notifications: MagicMock,
         mock_record_unknown: MagicMock,
+        mock_record_unknown_nicknames: MagicMock,
     ) -> None:
         mock_insert_message.return_value = {"id": "message-1"}
         mock_find_watch.return_value = (
