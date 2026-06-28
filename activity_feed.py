@@ -7,8 +7,8 @@ from typing import Any
 from import_status import import_status_reason, normalize_import_status
 from contact_classification import format_import_sender_label, should_redact_import_sender
 
-ACTIVITY_FEED_STATUSES = frozenset({"success", "warning"})
-IGNORED_STATUSES = frozenset({"no_watch_detected", "noise", "request_intent"})
+ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
+IGNORED_ACTIVITY_STATUSES = frozenset({"no_watch_detected", "noise", "request_intent"})
 
 
 def message_preview(text: str | None, *, max_length: int = 80) -> str:
@@ -25,36 +25,86 @@ def format_dealer_label(import_log: dict[str, Any]) -> str:
     return format_import_sender_label(import_log)
 
 
+def import_summary(import_log: dict[str, Any]) -> dict[str, Any]:
+    summary = import_log.get("summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def is_parser_reviewed(import_log: dict[str, Any]) -> bool:
+    return bool(import_summary(import_log).get("parser_reviewed"))
+
+
+def is_parser_review_ignored(import_log: dict[str, Any]) -> bool:
+    return bool(import_summary(import_log).get("parser_review_ignored"))
+
+
+def has_real_offers(import_log: dict[str, Any]) -> bool:
+    """Return True when an import created or parsed watch offers."""
+    return import_log.get("new_offers", 0) > 0 or import_log.get("watches_parsed", 0) > 0
+
+
+def is_active_success_import(import_log: dict[str, Any]) -> bool:
+    if normalize_import_status(import_log) != "success":
+        return False
+    if is_parser_reviewed(import_log):
+        return False
+    return has_real_offers(import_log)
+
+
+def is_active_needs_review(import_log: dict[str, Any]) -> bool:
+    if normalize_import_status(import_log) != "warning":
+        return False
+    if is_parser_reviewed(import_log) or is_parser_review_ignored(import_log):
+        return False
+    return True
+
+
+def filter_active_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return imports for the default Activity tab."""
+    return [
+        import_log
+        for import_log in import_logs
+        if is_active_success_import(import_log) or is_active_needs_review(import_log)
+    ]
+
+
+def filter_reviewed_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return imports marked as reviewed after parser review."""
+    return [import_log for import_log in import_logs if is_parser_reviewed(import_log)]
+
+
+def filter_ignored_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return dismissed parser issues and non-offer imports."""
+    return [
+        import_log
+        for import_log in import_logs
+        if is_parser_review_ignored(import_log)
+        or normalize_import_status(import_log) in IGNORED_ACTIVITY_STATUSES
+    ]
+
+
+def filter_all_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the full business-visible audit trail."""
+    return list(import_logs)
+
+
 def activity_feed_counts(import_logs: list[dict[str, Any]]) -> dict[str, int]:
     """Count offers, needs-review, and ignored imports."""
-    counts = {"offers": 0, "needs_review": 0, "ignored": 0}
-    for import_log in import_logs:
-        status = normalize_import_status(import_log)
-        if status == "success":
-            counts["offers"] += 1
-        elif status == "warning":
-            counts["needs_review"] += 1
-        elif status in IGNORED_STATUSES:
-            counts["ignored"] += 1
-    return counts
+    return {
+        "offers": sum(1 for import_log in import_logs if is_active_success_import(import_log)),
+        "needs_review": sum(1 for import_log in import_logs if is_active_needs_review(import_log)),
+        "ignored": len(filter_ignored_activity_imports(import_logs)),
+    }
 
 
 def filter_activity_feed_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return imports that belong on the main Activity page."""
-    return [
-        import_log
-        for import_log in import_logs
-        if normalize_import_status(import_log) in ACTIVITY_FEED_STATUSES
-    ]
+    return filter_active_activity_imports(import_logs)
 
 
 def filter_ignored_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return imports with no detected watch offers."""
-    return [
-        import_log
-        for import_log in import_logs
-        if normalize_import_status(import_log) in IGNORED_STATUSES
-    ]
+    """Return imports hidden from the default Activity page."""
+    return filter_ignored_activity_imports(import_logs)
 
 
 def build_ignored_activity_row(

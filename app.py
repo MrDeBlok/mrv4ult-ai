@@ -19,9 +19,10 @@ from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
 from activity_feed import (
     activity_feed_counts,
-    build_ignored_activity_row,
-    filter_activity_feed_imports,
-    filter_ignored_import_logs,
+    filter_active_activity_imports,
+    filter_all_activity_imports,
+    filter_ignored_activity_imports,
+    filter_reviewed_activity_imports,
 )
 from parser_review import (
     PARSER_REVIEW_FILTERS,
@@ -1118,37 +1119,66 @@ def _is_business_import_log(import_log: dict[str, Any]) -> bool:
     return is_business_import_log(import_log, lookup)
 
 
-@app.get("/activity", response_class=HTMLResponse, name="activity_list")
-async def activity_list(request: Request) -> HTMLResponse:
+ACTIVITY_TAB_FILTERS = {
+    "active": filter_active_activity_imports,
+    "reviewed": filter_reviewed_activity_imports,
+    "ignored": filter_ignored_activity_imports,
+    "all": filter_all_activity_imports,
+}
+
+ACTIVITY_TAB_DESCRIPTIONS = {
+    "active": "Watch offers and items that still need attention.",
+    "reviewed": "Imports marked as reviewed after parser review.",
+    "ignored": "Noise, buyer requests, and dismissed parser issues.",
+    "all": "Full import audit trail.",
+}
+
+ACTIVITY_EMPTY_MESSAGES = {
+    "active": "No active watch offers or review items.",
+    "reviewed": "No reviewed imports yet.",
+    "ignored": "No ignored messages logged yet.",
+    "all": "No imports logged yet.",
+}
+
+
+def _render_activity_page(request: Request, tab: str) -> HTMLResponse:
     import_logs = _business_import_logs(list_import_logs())
     stats = activity_feed_counts(import_logs)
     imports = [
         build_activity_row(import_log)
-        for import_log in filter_activity_feed_imports(import_logs)
+        for import_log in ACTIVITY_TAB_FILTERS[tab](import_logs)
     ]
     return templates.TemplateResponse(
         request,
         "activity.html",
-        {"imports": imports, "stats": stats},
+        {
+            "imports": imports,
+            "stats": stats,
+            "active_tab": tab,
+            "tab_description": ACTIVITY_TAB_DESCRIPTIONS[tab],
+            "empty_message": ACTIVITY_EMPTY_MESSAGES[tab],
+        },
     )
+
+
+@app.get("/activity", response_class=HTMLResponse, name="activity_list")
+async def activity_list(request: Request) -> HTMLResponse:
+    return _render_activity_page(request, "active")
+
+
+@app.get("/activity/reviewed", response_class=HTMLResponse, name="activity_reviewed")
+async def activity_reviewed(request: Request) -> HTMLResponse:
+    return _render_activity_page(request, "reviewed")
 
 
 @app.get("/activity/ignored", response_class=HTMLResponse, name="activity_ignored")
 async def activity_ignored(request: Request) -> HTMLResponse:
-    import_logs = _business_import_logs(list_import_logs())
-    stats = activity_feed_counts(import_logs)
-    ignored_rows: list[dict[str, Any]] = []
-    for import_log in filter_ignored_import_logs(import_logs):
-        message = get_message_by_id(import_log["message_id"])
-        row = build_ignored_activity_row(import_log, message)
-        row["import_time"] = format_timestamp(import_log.get("import_time"))
-        ignored_rows.append(row)
+    return _render_activity_page(request, "ignored")
 
-    return templates.TemplateResponse(
-        request,
-        "activity_ignored.html",
-        {"imports": ignored_rows, "stats": stats},
-    )
+
+@app.get("/activity/all", response_class=HTMLResponse, name="activity_all")
+async def activity_all(request: Request) -> HTMLResponse:
+    return _render_activity_page(request, "all")
 
 
 @app.get("/parser-review", response_class=HTMLResponse, name="parser_review")
