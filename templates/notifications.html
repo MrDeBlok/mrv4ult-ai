@@ -10,10 +10,32 @@
                 <h1 class="h3 mb-1">Notifications</h1>
                 <p class="text-muted mb-0">Important matches, market moves, and imports that need attention.</p>
             </div>
-            {% if unread_count %}
-            <form method="post" action="/notifications/read-all">
-                <button type="submit" class="btn btn-outline-secondary btn-sm">Mark all read</button>
-            </form>
+            {% if notifications %}
+            <div class="d-flex flex-wrap gap-2">
+                {% if unread_count %}
+                <form method="post" action="/notifications/read-all">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">Mark all read</button>
+                </form>
+                {% endif %}
+                {% if read_count %}
+                <form
+                    method="post"
+                    action="/notifications/clear-read"
+                    onsubmit="return confirm('Clear all read notifications for the team?');"
+                >
+                    <input type="hidden" name="confirm" value="1">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">Clear read notifications</button>
+                </form>
+                {% endif %}
+                <form
+                    method="post"
+                    action="/notifications/clear-all"
+                    onsubmit="return confirm('Delete ALL notifications for the team? This cannot be undone.');"
+                >
+                    <input type="hidden" name="confirm" value="1">
+                    <button type="submit" class="btn btn-outline-danger btn-sm">Clear all notifications</button>
+                </form>
+            </div>
             {% endif %}
         </div>
     </div>
@@ -40,11 +62,19 @@
             {% else %}
             <span class="text-muted small">Read</span>
             {% endif %}
+            <form
+                method="post"
+                action="/notifications/{{ item.id }}/delete"
+                onsubmit="return confirm('Delete this notification for the whole team?');"
+            >
+                <input type="hidden" name="confirm" value="1">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
         </div>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<div class="alert alert-secondary" role="alert">No notifications yet.</div>
+<div class="alert alert-secondary" role="alert">No notifications.</div>
 {% endif %}
 {% endblock %}

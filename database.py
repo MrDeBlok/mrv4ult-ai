@@ -746,6 +746,29 @@ def mark_all_notifications_read() -> int:
     return len(response.data or [])
 
 
+def delete_notification(notification_id: str) -> None:
+    """Delete one notification for the whole team."""
+    get_client().table("notifications").delete().eq("id", notification_id).execute()
+
+
+def delete_read_notifications() -> int:
+    """Delete all read notifications for the whole team."""
+    response = (
+        get_client()
+        .table("notifications")
+        .delete()
+        .eq("is_read", True)
+        .execute()
+    )
+    return len(response.data or [])
+
+
+def delete_all_notifications() -> int:
+    """Delete every notification for the whole team."""
+    response = get_client().table("notifications").delete().neq("id", "").execute()
+    return len(response.data or [])
+
+
 def update_import_log(
     import_log_id: str,
     *,

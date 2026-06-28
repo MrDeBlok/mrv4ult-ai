@@ -62,6 +62,9 @@ from database import (
     list_requests_for_client,
     mark_all_notifications_read,
     mark_notification_read,
+    delete_all_notifications,
+    delete_notification,
+    delete_read_notifications,
     update_client_name,
     update_client_profile,
     update_dealer_contact_type,
@@ -1280,12 +1283,14 @@ async def home(
 async def notifications_page(request: Request) -> HTMLResponse:
     notifications = build_notification_rows(list_notifications())
     unread_count = sum(1 for item in notifications if not item["is_read"])
+    read_count = sum(1 for item in notifications if item["is_read"])
     return templates.TemplateResponse(
         request,
         "notifications.html",
         {
             "notifications": notifications,
             "unread_count": unread_count,
+            "read_count": read_count,
         },
     )
 
@@ -1299,6 +1304,30 @@ async def notifications_mark_read(notification_id: str) -> RedirectResponse:
 @app.post("/notifications/read-all")
 async def notifications_mark_all_read() -> RedirectResponse:
     mark_all_notifications_read()
+    return RedirectResponse(url="/notifications", status_code=303)
+
+
+@app.post("/notifications/{notification_id}/delete")
+async def notifications_delete(notification_id: str, confirm: str = Form(...)) -> RedirectResponse:
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    delete_notification(notification_id)
+    return RedirectResponse(url="/notifications", status_code=303)
+
+
+@app.post("/notifications/clear-read")
+async def notifications_clear_read(confirm: str = Form(...)) -> RedirectResponse:
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    delete_read_notifications()
+    return RedirectResponse(url="/notifications", status_code=303)
+
+
+@app.post("/notifications/clear-all")
+async def notifications_clear_all(confirm: str = Form(...)) -> RedirectResponse:
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    delete_all_notifications()
     return RedirectResponse(url="/notifications", status_code=303)
 
 

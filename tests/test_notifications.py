@@ -202,3 +202,131 @@ class TestNotificationsPage:
         assert response.status_code == 200
         assert "notification-nav-badge" in response.text
         assert ">3<" in response.text
+
+
+class TestNotificationCleanup:
+    @patch("app.delete_notification")
+    def test_delete_single_notification(self, mock_delete: MagicMock) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/notifications/n-1/delete",
+            data={"confirm": "1"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/notifications"
+        mock_delete.assert_called_once_with("n-1")
+
+    @patch("app.delete_notification")
+    def test_delete_single_notification_requires_confirmation(
+        self,
+        mock_delete: MagicMock,
+    ) -> None:
+        client = TestClient(app)
+        response = client.post("/notifications/n-1/delete", data={"confirm": "0"})
+
+        assert response.status_code == 400
+        mock_delete.assert_not_called()
+
+    @patch("app.delete_read_notifications")
+    def test_clear_read_notifications(self, mock_clear_read: MagicMock) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/notifications/clear-read",
+            data={"confirm": "1"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/notifications"
+        mock_clear_read.assert_called_once()
+
+    @patch("app.delete_all_notifications")
+    def test_clear_all_notifications(self, mock_clear_all: MagicMock) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/notifications/clear-all",
+            data={"confirm": "1"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/notifications"
+        mock_clear_all.assert_called_once()
+
+    @patch("app.mark_notification_read")
+    def test_mark_read_remains_team_wide(self, mock_mark_read: MagicMock) -> None:
+        client = TestClient(app)
+        response = client.post("/notifications/n-1/read", follow_redirects=False)
+
+        assert response.status_code == 303
+        mock_mark_read.assert_called_once_with("n-1")
+
+    @patch("app.list_notifications")
+    def test_unread_badge_updates_after_delete(self, mock_list: MagicMock) -> None:
+        from app import templates
+
+        mock_list.return_value = []
+        templates.env.globals["unread_notification_count"] = lambda: 0
+
+        client = TestClient(app)
+        response = client.get("/notifications")
+
+        assert response.status_code == 200
+        assert "notification-nav-badge" not in response.text
+        assert "No notifications." in response.text
+
+    @patch("app.list_notifications")
+    def test_deleted_notifications_no_longer_render(self, mock_list: MagicMock) -> None:
+        mock_list.return_value = [
+            {
+                "id": "n-remaining",
+                "type": "needs_review",
+                "title": "Still here",
+                "message": "Visible",
+                "related_import_log_id": "log-1",
+                "is_read": False,
+                "created_at": "2026-06-27T12:00:00+00:00",
+            }
+        ]
+
+        client = TestClient(app)
+        response = client.get("/notifications")
+
+        assert response.status_code == 200
+        assert "Still here" in response.text
+        assert "Deleted alert" not in response.text
+        assert "Delete" in response.text
+        assert "Clear read notifications" not in response.text
+
+    @patch("app.list_notifications")
+    def test_notifications_page_shows_clear_actions(self, mock_list: MagicMock) -> None:
+        mock_list.return_value = [
+            {
+                "id": "n-read",
+                "type": "excellent_buy",
+                "title": "Read alert",
+                "message": "Done",
+                "related_import_log_id": "log-1",
+                "is_read": True,
+                "created_at": "2026-06-27T12:00:00+00:00",
+            },
+            {
+                "id": "n-unread",
+                "type": "needs_review",
+                "title": "Unread alert",
+                "message": "Pending",
+                "related_import_log_id": "log-2",
+                "is_read": False,
+                "created_at": "2026-06-27T12:00:00+00:00",
+            },
+        ]
+
+        client = TestClient(app)
+        response = client.get("/notifications")
+
+        assert response.status_code == 200
+        assert "Clear read notifications" in response.text
+        assert "Clear all notifications" in response.text
+        assert "Mark all read" in response.text
