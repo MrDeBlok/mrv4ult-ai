@@ -174,20 +174,53 @@ def filter_parser_review_by_issue(
     ]
 
 
+def _format_price_amount(amount: Any) -> str | None:
+    """Format a price amount safely for display."""
+    if amount is None:
+        return None
+    if isinstance(amount, str) and not amount.strip():
+        return None
+    if isinstance(amount, bool):
+        return None
+    if isinstance(amount, int):
+        return f"{amount:,}"
+    if isinstance(amount, float):
+        if amount != amount:
+            return None
+        if amount.is_integer():
+            return f"{int(amount):,}"
+        formatted = f"{amount:,.2f}"
+        return formatted.rstrip("0").rstrip(".")
+    if isinstance(amount, str):
+        cleaned = amount.strip()
+        normalized = cleaned.replace(",", "").replace(" ", "")
+        if normalized.replace(".", "", 1).isdigit():
+            if "." in normalized:
+                value = float(normalized)
+                if value.is_integer():
+                    return f"{int(value):,}"
+                formatted = f"{value:,.2f}"
+                return formatted.rstrip("0").rstrip(".")
+            return f"{int(normalized):,}"
+        return cleaned
+    return str(amount)
+
+
 def _format_parsed_value(field_key: str, watch: Record) -> str | None:
     if field_key == "original_price":
         amount = watch.get("original_price") or watch.get("price")
-        if amount is None:
+        formatted = _format_price_amount(amount)
+        if not formatted:
             return None
         currency = watch.get("original_currency") or watch.get("currency")
         if currency:
-            return f"{amount:,} {currency}"
-        return f"{amount:,}"
+            return f"{formatted} {currency}"
+        return formatted
     if field_key == "usd_price":
-        amount = watch.get("usd_price")
-        if amount is None:
+        formatted = _format_price_amount(watch.get("usd_price"))
+        if not formatted:
             return None
-        return f"${amount:,}"
+        return f"${formatted}"
     value = watch.get(field_key)
     if value is None or value == "":
         return None
