@@ -56,6 +56,7 @@ from request_profit import (
     build_request_profit_summary,
     build_requests_dashboard_summary,
 )
+from condition_normalizer import offer_condition_display, parse_condition_filter
 from search import (
     _display_value,
     _nested_record,
@@ -143,6 +144,7 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         dealer = cheapest_offer.get("dealer") or {}
 
         dealer_contact = format_dealer_contact(dealer)
+        condition_label, raw_condition = offer_condition_display(cheapest_offer.get("condition"))
 
         rows.append(
             {
@@ -154,6 +156,8 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "lowest_price": format_usd_price(group.get("lowest_usd")),
                 "dealer_primary": dealer_contact["primary"],
                 "dealer_secondary": dealer_contact["secondary"],
+                "condition": condition_label,
+                "raw_condition": raw_condition,
                 "card_date": cheapest_offer.get("card_date") or "N/A",
             }
         )
@@ -1115,10 +1119,12 @@ async def home(
     q: str = "",
     cheapest: str | None = None,
     max_price: str = "",
+    condition: str = "all",
 ) -> HTMLResponse:
     search_text = q.strip()
     cheapest_only = _parse_cheapest_only(cheapest)
     max_price_input = max_price.strip()
+    condition_filter_input = condition.strip().lower() or "all"
     searched = bool(request.query_params)
     error: str | None = None
     results: list[dict[str, Any]] = []
@@ -1126,12 +1132,13 @@ async def home(
     if searched:
         try:
             max_price_value = _parse_max_usd_price(max_price_input) if max_price_input else None
+            condition_filter = parse_condition_filter(condition_filter_input)
             query = build_search_query(
                 search_text,
                 cheapest_only=cheapest_only,
                 max_price=max_price_value,
             )
-            offers, cheapest_only_flag = search_offers(query)
+            offers, cheapest_only_flag = search_offers(query, condition=condition_filter)
             enrich_offers_dealer_contacts(offers)
             groups = group_offers_by_watch(offers, cheapest_only=cheapest_only_flag)
             results = build_result_rows(groups)
@@ -1145,6 +1152,7 @@ async def home(
             "search_text": search_text,
             "cheapest_only": cheapest_only,
             "max_price": max_price_input,
+            "condition_filter": condition_filter_input,
             "results": results,
             "searched": searched,
             "error": error,

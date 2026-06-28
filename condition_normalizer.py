@@ -87,3 +87,42 @@ def normalize_condition_value(value: str | None) -> str | None:
     """Normalize a condition value for database storage."""
     normalized, _ = normalize_wear_condition(value)
     return normalized
+
+
+def parse_condition_filter(value: str | None) -> str | None:
+    """Parse a search condition filter into a normalized wear condition."""
+    if value is None:
+        return None
+
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() == "all":
+        return None
+
+    normalized, _ = normalize_wear_condition(cleaned)
+    if normalized in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return normalized
+
+    lowered = cleaned.lower()
+    if lowered == "new":
+        return NEW_CONDITION
+    if lowered in {"pre-owned", "preowned", "pre owned"}:
+        return PRE_OWNED_CONDITION
+
+    raise ValueError("Invalid condition filter. Use All, New, or Pre-Owned.")
+
+
+def offer_matches_condition_filter(
+    stored_condition: str | None,
+    condition_filter: str | None,
+) -> bool:
+    """Return whether an offer matches the normalized condition filter."""
+    if condition_filter is None:
+        return True
+    normalized, _ = normalize_wear_condition(stored_condition)
+    return normalized == condition_filter
+
+
+def offer_condition_display(stored_condition: str | None) -> tuple[str, str | None]:
+    """Return normalized condition label and optional raw condition text."""
+    normalized, raw_condition = normalize_wear_condition(stored_condition)
+    return (normalized or "N/A", raw_condition)

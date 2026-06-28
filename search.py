@@ -7,7 +7,11 @@ import sys
 from typing import Any
 
 from database import get_client
-from condition_normalizer import display_condition
+from condition_normalizer import (
+    display_condition,
+    offer_condition_display,
+    offer_matches_condition_filter,
+)
 
 Record = dict[str, Any]
 WatchGroup = dict[str, Any]
@@ -45,7 +49,11 @@ def read_query() -> str:
     return query
 
 
-def search_offers(query: str) -> tuple[list[Record], bool]:
+def search_offers(
+    query: str,
+    *,
+    condition: str | None = None,
+) -> tuple[list[Record], bool]:
     """Search active offers by watch fields matching all query tokens."""
     tokens, max_usd_price, cheapest_only = parse_query(query)
     response = (
@@ -66,6 +74,8 @@ def search_offers(query: str) -> tuple[list[Record], bool]:
         if not _watch_matches_tokens(watch, tokens):
             continue
         if not _offer_within_max_usd_price(offer, max_usd_price):
+            continue
+        if not offer_matches_condition_filter(offer.get("condition"), condition):
             continue
         offer["watch"] = watch
         offer["dealer"] = _nested_record(offer.get("dealers"))

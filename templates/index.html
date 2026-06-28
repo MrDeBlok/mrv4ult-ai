@@ -24,6 +24,20 @@
                 >
             </div>
 
+            <div class="col-12">
+                <span class="form-label fw-semibold d-block">Condition</span>
+                <div class="d-flex flex-wrap gap-2">
+                    <input type="radio" class="btn-check" name="condition" id="condition-all" value="all" {% if condition_filter == 'all' %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-dark" for="condition-all">All</label>
+
+                    <input type="radio" class="btn-check" name="condition" id="condition-new" value="new" {% if condition_filter == 'new' %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-success" for="condition-new">New</label>
+
+                    <input type="radio" class="btn-check" name="condition" id="condition-pre-owned" value="pre-owned" {% if condition_filter == 'pre-owned' %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-warning" for="condition-pre-owned">Pre-Owned</label>
+                </div>
+            </div>
+
             <div class="col-12 col-sm-6 col-lg-4">
                 <div class="form-check form-switch mt-sm-2 mt-lg-4">
                     <input
@@ -78,9 +92,10 @@
                     <th scope="col">Reference</th>
                     <th scope="col">Dial</th>
                     <th scope="col">Bracelet</th>
+                    <th scope="col">Condition</th>
+                    <th scope="col">Card date</th>
                     <th scope="col">Lowest price</th>
                     <th scope="col">Dealer / WhatsApp</th>
-                    <th scope="col">Card date</th>
                 </tr>
             </thead>
             <tbody>
@@ -95,6 +110,13 @@
                     <td>{{ row.reference }}</td>
                     <td>{{ row.dial }}</td>
                     <td>{{ row.bracelet }}</td>
+                    <td>
+                        <div>{{ row.condition }}</div>
+                        {% if row.raw_condition %}
+                        <div class="text-muted small">{{ row.raw_condition }}</div>
+                        {% endif %}
+                    </td>
+                    <td>{{ row.card_date }}</td>
                     <td class="fw-semibold">{{ row.lowest_price }}</td>
                     <td>
                         <div>{{ row.dealer_primary }}</div>
@@ -102,7 +124,6 @@
                         <div class="text-muted small">{{ row.dealer_secondary }}</div>
                         {% endif %}
                     </td>
-                    <td>{{ row.card_date }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
