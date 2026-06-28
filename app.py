@@ -66,7 +66,12 @@ from database import (
     update_client_profile,
     update_dealer_contact_type,
     update_request_status,
+    list_pending_unknown_brands,
+    mark_unknown_brand_ignored,
+    resolve_unknown_brand_with_alias,
+    watch_knowledge_supported,
 )
+from brand_registry import invalidate_brand_registry_cache, list_canonical_brands
 from evolution_client import (
     EvolutionAPIError,
     create_instance,
@@ -96,9 +101,11 @@ from dealer_intelligence import (
     build_dealer_offer_rows,
     build_dealer_profile,
     compute_dealer_stats,
+    dealer_display_name,
     flatten_offer_intelligence_rows,
     format_dealer_stats,
 )
+from knowledge_intelligence import build_unknown_brand_rows
 from contact_classification import (
     CONTACT_TYPES,
     CONTACT_TYPE_CLIENT,
@@ -1431,6 +1438,53 @@ async def client_delete_permanently(
         return RedirectResponse(url=f"/clients/{client_id}?delete_blocked=1", status_code=303)
 
     return RedirectResponse(url="/clients?deleted=1", status_code=303)
+
+
+@app.get("/knowledge/unknown-brands", response_class=HTMLResponse, name="unknown_brands_list")
+async def unknown_brands_list(request: Request) -> HTMLResponse:
+    rows = list_pending_unknown_brands()
+    dealer_ids = sorted({str(row["dealer_id"]) for row in rows if row.get("dealer_id")})
+    dealers_by_id = {
+        str(dealer["id"]): dealer
+        for dealer in (
+            get_dealer_by_id(dealer_id)
+            for dealer_id in dealer_ids
+        )
+        if dealer
+    }
+    return templates.TemplateResponse(
+        request,
+        "knowledge_unknown_brands.html",
+        {
+            "unknown_brands": build_unknown_brand_rows(rows, dealers_by_id=dealers_by_id),
+            "canonical_brands": list_canonical_brands(),
+            "knowledge_enabled": watch_knowledge_supported(),
+            "saved": request.query_params.get("saved") == "1",
+            "ignored": request.query_params.get("ignored") == "1",
+        },
+    )
+
+
+@app.post("/knowledge/unknown-brands/{unknown_brand_id}/add-alias")
+async def unknown_brand_add_alias(
+    unknown_brand_id: str,
+    brand_name: str = Form(...),
+) -> RedirectResponse:
+    if not brand_name.strip():
+        raise HTTPException(status_code=400, detail="Brand name is required")
+
+    resolve_unknown_brand_with_alias(
+        unknown_brand_id=unknown_brand_id,
+        brand_name=brand_name.strip(),
+    )
+    invalidate_brand_registry_cache()
+    return RedirectResponse(url="/knowledge/unknown-brands?saved=1", status_code=303)
+
+
+@app.post("/knowledge/unknown-brands/{unknown_brand_id}/ignore")
+async def unknown_brand_ignore(unknown_brand_id: str) -> RedirectResponse:
+    mark_unknown_brand_ignored(unknown_brand_id)
+    return RedirectResponse(url="/knowledge/unknown-brands?ignored=1", status_code=303)
 
 
 @app.post("/clients/{client_id}/edit")

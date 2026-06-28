@@ -29,7 +29,8 @@ from contact_classification import (
 from notifications import notify_request_match, record_import_notifications
 from watch_knowledge import enrich_parsed_watch
 from condition_normalizer import normalize_watch_condition
-from watch_parser import parse_message, read_message
+from watch_parser import parse_message
+from unknown_brand_intelligence import record_unknown_brands_for_watches
 
 PARSER_VERSION = "watch_parser_v1"
 DEFAULT_GROUP_NAME = "Default Group"
@@ -204,6 +205,14 @@ def ingest_message(
         parser_version=PARSER_VERSION,
         parse_status=parse_status,
     )
+
+    if business_import:
+        record_unknown_brands_for_watches(
+            parsed_watches,
+            example_message=text,
+            dealer_id=dealer_id,
+            seen_at=message_received_at,
+        )
 
     summary: IngestSummary = {
         "messages_imported": 1,

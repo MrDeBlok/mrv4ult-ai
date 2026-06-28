@@ -64,6 +64,7 @@ def get_client() -> Client:
 
 _contact_type_column_supported: bool | None = None
 _client_profiles_supported: bool | None = None
+_watch_knowledge_supported: bool | None = None
 
 
 def reset_contact_type_column_cache() -> None:
@@ -76,6 +77,12 @@ def reset_client_profiles_cache() -> None:
     """Reset cached client_profiles table detection (for tests)."""
     global _client_profiles_supported
     _client_profiles_supported = None
+
+
+def reset_watch_knowledge_cache() -> None:
+    """Reset cached watch knowledge table detection (for tests)."""
+    global _watch_knowledge_supported
+    _watch_knowledge_supported = None
 
 
 def contact_type_column_supported() -> bool:
@@ -118,6 +125,26 @@ def client_profiles_supported() -> bool:
         else:
             raise
     return _client_profiles_supported
+
+
+def watch_knowledge_supported() -> bool:
+    """Return True when Sprint 30 watch knowledge tables exist."""
+    global _watch_knowledge_supported
+    if _watch_knowledge_supported is not None:
+        return _watch_knowledge_supported
+
+    try:
+        get_client().table("brand_aliases").select("id").limit(1).execute()
+        get_client().table("unknown_brands").select("id").limit(1).execute()
+        _watch_knowledge_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42P01", "PGRST205"} or "brand_aliases" in message or "unknown_brands" in message:
+            _watch_knowledge_supported = False
+        else:
+            raise
+    return _watch_knowledge_supported
 
 
 def _legacy_contact_type(dealer: Record) -> str:
@@ -1340,6 +1367,206 @@ def delete_client_permanently(client_id: str, *, client_name: str) -> None:
         get_client().table("client_profiles").delete().eq("client_id", client_id).execute()
 
     get_client().table("dealers").delete().eq("id", client_id).execute()
+
+
+def list_active_brand_aliases() -> list[Record]:
+    """Return active brand aliases from the database."""
+    if not watch_knowledge_supported():
+        return []
+
+    response = (
+        get_client()
+        .table("brand_aliases")
+        .select("*")
+        .eq("status", "active")
+        .order("alias_key")
+        .execute()
+    )
+    return response.data or []
+
+
+def create_brand_alias(
+    *,
+    alias_key: str,
+    brand_name: str,
+    source: str = "manual",
+) -> Record:
+    """Create or reactivate a brand alias."""
+    if not watch_knowledge_supported():
+        raise RuntimeError(
+            "Brand aliases require watch knowledge tables. Apply "
+            "docs/migrations/sprint_30_watch_knowledge.sql in Supabase."
+        )
+
+    normalized_key = alias_key.strip().lower()
+    if not normalized_key:
+        raise ValueError("Alias key is required")
+    if not brand_name.strip():
+        raise ValueError("Brand name is required")
+
+    existing = (
+        get_client()
+        .table("brand_aliases")
+        .select("*")
+        .eq("alias_key", normalized_key)
+        .limit(1)
+        .execute()
+    )
+    payload = {
+        "alias_key": normalized_key,
+        "brand_name": brand_name.strip(),
+        "status": "active",
+        "source": source,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if existing.data:
+        response = (
+            get_client()
+            .table("brand_aliases")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        response = get_client().table("brand_aliases").insert(payload).execute()
+    return _first_row(response.data, "brand_aliases")
+
+
+def list_pending_unknown_brands() -> list[Record]:
+    """Return pending unknown brand sightings."""
+    if not watch_knowledge_supported():
+        return []
+
+    response = (
+        get_client()
+        .table("unknown_brands")
+        .select("*")
+        .eq("status", "pending")
+        .order("last_seen_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def get_unknown_brand_by_id(unknown_brand_id: str) -> Record | None:
+    if not watch_knowledge_supported():
+        return None
+
+    response = (
+        get_client()
+        .table("unknown_brands")
+        .select("*")
+        .eq("id", unknown_brand_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def record_unknown_brand_sighting(
+    *,
+    detected_text: str,
+    example_message: str,
+    dealer_id: str | None,
+    seen_at: datetime | None = None,
+) -> Record | None:
+    """Insert or increment an unknown brand sighting."""
+    if not watch_knowledge_supported():
+        return None
+
+    normalized_text = detected_text.strip().lower()
+    if not normalized_text:
+        return None
+
+    timestamp = (seen_at or datetime.now(timezone.utc)).isoformat()
+    existing = (
+        get_client()
+        .table("unknown_brands")
+        .select("*")
+        .eq("normalized_text", normalized_text)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        row = existing.data[0]
+        if row.get("status") != "pending":
+            return row
+        response = (
+            get_client()
+            .table("unknown_brands")
+            .update(
+                {
+                    "occurrence_count": int(row.get("occurrence_count") or 0) + 1,
+                    "last_seen_at": timestamp,
+                    "example_message": example_message[:2000],
+                    "dealer_id": dealer_id or row.get("dealer_id"),
+                }
+            )
+            .eq("id", row["id"])
+            .execute()
+        )
+        return _first_row(response.data, "unknown_brands")
+
+    response = (
+        get_client()
+        .table("unknown_brands")
+        .insert(
+            {
+                "detected_text": detected_text.strip(),
+                "normalized_text": normalized_text,
+                "example_message": example_message[:2000],
+                "dealer_id": dealer_id,
+                "occurrence_count": 1,
+                "first_seen_at": timestamp,
+                "last_seen_at": timestamp,
+                "status": "pending",
+            }
+        )
+        .execute()
+    )
+    return _first_row(response.data, "unknown_brands")
+
+
+def mark_unknown_brand_ignored(unknown_brand_id: str) -> Record:
+    if not watch_knowledge_supported():
+        raise RuntimeError("Watch knowledge tables are not available.")
+
+    response = (
+        get_client()
+        .table("unknown_brands")
+        .update({"status": "ignored"})
+        .eq("id", unknown_brand_id)
+        .execute()
+    )
+    return _first_row(response.data, "unknown_brands")
+
+
+def resolve_unknown_brand_with_alias(
+    *,
+    unknown_brand_id: str,
+    brand_name: str,
+) -> tuple[Record, Record]:
+    """Create a brand alias from an unknown brand sighting."""
+    unknown = get_unknown_brand_by_id(unknown_brand_id)
+    if unknown is None:
+        raise ValueError("Unknown brand entry not found")
+
+    alias = create_brand_alias(
+        alias_key=str(unknown.get("detected_text") or ""),
+        brand_name=brand_name,
+        source="unknown_brand",
+    )
+    response = (
+        get_client()
+        .table("unknown_brands")
+        .update({"status": "resolved"})
+        .eq("id", unknown_brand_id)
+        .execute()
+    )
+    updated = _first_row(response.data, "unknown_brands")
+    return updated, alias
 
 
 def _first_row(data: list[Record] | None, table: str) -> Record:

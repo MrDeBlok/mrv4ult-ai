@@ -303,3 +303,62 @@ class TestWearConditionAccessorySeparation:
         assert watch["raw_condition"] == "Used"
         assert watch["papers"] is True
         assert watch["notes"] == "papers"
+
+
+class TestEuropeanPriceParsing:
+    EXAMPLE_LINE = (
+        "*10.600 Euro 2024 Used Rolex Explorer 36mm 124273* Full Set"
+    )
+
+    def test_european_price_before_brand_example(self) -> None:
+        watch = parse_watch_line(self.EXAMPLE_LINE)
+
+        assert watch is not None
+        assert watch["original_price"] == 10_600
+        assert watch["original_currency"] == "EUR"
+        assert watch["brand"] == "Rolex"
+        assert watch["model"] == "Explorer"
+        assert watch["reference"] == "124273"
+        assert watch["production_year"] == 2024
+        assert watch["condition"] == "Used"
+        assert watch["full_set"] is True
+        assert watch["notes"] == "full set"
+
+    def test_european_price_before_brand_via_parse_message(self) -> None:
+        watches = parse_message(self.EXAMPLE_LINE)["watches"]
+
+        assert len(watches) == 1
+        watch = watches[0]
+        assert watch["original_price"] == 10_600
+        assert watch["original_currency"] == "EUR"
+        assert watch["brand"] == "Rolex"
+        assert watch["reference"] == "124273"
+
+    @pytest.mark.parametrize(
+        ("line", "expected_price"),
+        [
+            ("10.600 Euro Rolex Explorer 124273 full set", 10_600),
+            ("10.600 EUR Rolex Explorer 124273 full set", 10_600),
+            ("€10.600 Rolex Explorer 124273 full set", 10_600),
+            ("EUR 10.600 Rolex Explorer 124273 full set", 10_600),
+            ("10600 Euro Rolex Explorer 124273 full set", 10_600),
+            ("10,600 Euro Rolex Explorer 124273 full set", 10_600),
+        ],
+    )
+    def test_european_price_formats(self, line: str, expected_price: int) -> None:
+        watch = parse_watch_line(line)
+
+        assert watch is not None
+        assert watch["original_price"] == expected_price
+        assert watch["original_currency"] == "EUR"
+
+    def test_existing_usd_and_hkd_price_formats_remain_supported(self) -> None:
+        usd_watch = parse_watch_line("126500LN 305k usd")
+        hkd_watch = parse_watch_line("5711/1A HK$1,880,000 full set")
+
+        assert usd_watch is not None
+        assert usd_watch["original_price"] == 305_000
+        assert usd_watch["original_currency"] == "USD"
+        assert hkd_watch is not None
+        assert hkd_watch["original_price"] == 1_880_000
+        assert hkd_watch["original_currency"] == "HKD"

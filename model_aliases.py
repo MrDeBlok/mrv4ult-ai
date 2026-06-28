@@ -22,18 +22,41 @@ ALIAS_DISPLAY_FIELDS: list[tuple[str, str]] = [
 
 @lru_cache(maxsize=1)
 def _load_alias_index() -> list[tuple[str, dict[str, Any]]]:
-    if not ALIASES_PATH.exists():
-        return []
+    aliases: list[tuple[str, dict[str, Any]]] = {}
 
-    with ALIASES_PATH.open(encoding="utf-8") as handle:
-        raw = json.load(handle)
+    if ALIASES_PATH.exists():
+        with ALIASES_PATH.open(encoding="utf-8") as handle:
+            raw = json.load(handle)
+        for alias_key, entry in raw.items():
+            if isinstance(entry, dict):
+                aliases[alias_key.lower().strip()] = entry
 
-    aliases: list[tuple[str, dict[str, Any]]] = []
-    for alias_key, entry in raw.items():
-        if isinstance(entry, dict):
-            aliases.append((alias_key.lower().strip(), entry))
-    aliases.sort(key=lambda item: len(item[0]), reverse=True)
-    return aliases
+    try:
+        from database import list_active_brand_aliases, watch_knowledge_supported
+
+        if watch_knowledge_supported():
+            for row in list_active_brand_aliases():
+                alias_key = str(row.get("alias_key") or "").strip().lower()
+                brand_name = str(row.get("brand_name") or "").strip()
+                if alias_key and brand_name:
+                    aliases.setdefault(
+                        alias_key,
+                        {
+                            "brand": brand_name,
+                            "confidence_note": "Identified by database brand alias",
+                        },
+                    )
+    except ImportError:  # pragma: no cover
+        pass
+
+    indexed = [(key, entry) for key, entry in aliases.items()]
+    indexed.sort(key=lambda item: len(item[0]), reverse=True)
+    return indexed
+
+
+def invalidate_alias_cache() -> None:
+    """Clear cached alias index so database aliases load immediately."""
+    _load_alias_index.cache_clear()
 
 
 def _watch_alias_text(watch: dict[str, Any]) -> str:

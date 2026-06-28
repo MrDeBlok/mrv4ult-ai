@@ -8,35 +8,12 @@ import sys
 from typing import Any
 
 from model_aliases import find_alias_match
+from brand_registry import get_brand_aliases, get_brand_pattern, lookup_brand
 
 WatchDict = dict[str, Any]
 ParseResult = dict[str, Any]
 
-BRAND_ALIASES: dict[str, str] = {
-    "rolex": "Rolex",
-    "rlx": "Rolex",
-    "patek": "Patek Philippe",
-    "patek philippe": "Patek Philippe",
-    "pp": "Patek Philippe",
-    "ap": "Audemars Piguet",
-    "audemars": "Audemars Piguet",
-    "audemars piguet": "Audemars Piguet",
-    "vc": "Vacheron Constantin",
-    "vacheron": "Vacheron Constantin",
-    "vacheron constantin": "Vacheron Constantin",
-    "richard mille": "Richard Mille",
-    "rm": "Richard Mille",
-    "fp journe": "F.P. Journe",
-    "fpj": "F.P. Journe",
-    "f.p. journe": "F.P. Journe",
-    "f p journe": "F.P. Journe",
-    "als": "A. Lange & Söhne",
-    "a lange": "A. Lange & Söhne",
-    "a lange & sohne": "A. Lange & Söhne",
-    "a. lange & sohne": "A. Lange & Söhne",
-    "lange": "A. Lange & Söhne",
-}
-
+BRAND_ALIASES: dict[str, str] = get_brand_aliases()
 SUPPORTED_BRANDS = frozenset(BRAND_ALIASES.values())
 
 DIAL_ABBREVIATIONS: dict[str, str] = {
@@ -150,16 +127,6 @@ USED_YEAR_PATTERN = re.compile(r"\bused\s+(\d{4})y\b", re.I)
 YEAR_SUFFIX_PATTERN = re.compile(r"\b(19|20)\d{2}\s*y\b", re.I)
 STANDALONE_YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
 
-BRAND_PATTERN = re.compile(
-    r"\b("
-    r"rolex|rlx|patek(?:\s+philippe)?|pp|audemars(?:\s+piguet)?|ap|"
-    r"vacheron(?:\s+constantin)?|vc|"
-    r"a\.?\s*lange(?:\s*&\s*s[öo]hne)?|lange|"
-    r"richard\s+mille|rm|fp\s*journe|fpj|f\.?\s*p\.?\s*journe"
-    r")\b",
-    re.I,
-)
-
 ALS_UPPER_PATTERN = re.compile(r"\bALS\b")
 ALS_CONTEXT_TERMS = re.compile(
     r"\b(?:lange|saxonia|datograph|zeitwerk|odysseus|1815|chrono(?:graph)?)\b",
@@ -195,7 +162,7 @@ EXCHANGE_RATES_TO_USD: dict[str, float] = {
     "JPY": 0.0064,
 }
 
-CURRENCY_CODE_PATTERN = r"usd|hkd|eur|chf|gbp|sgd|aed|jpy"
+CURRENCY_CODE_PATTERN = r"usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
 FPJOURNE_REF_PATTERN = re.compile(
     r"\b(CB|CST|RS|CBPT|Tourbillon\s+Souverain|Chronom[eè]tre\s+Bleu|Octa)\b",
@@ -245,6 +212,7 @@ CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"¥"), "JPY"),
     (re.compile(r"€"), "EUR"),
     (re.compile(r"\beur\b", re.I), "EUR"),
+    (re.compile(r"\beuro\b", re.I), "EUR"),
     (re.compile(r"\$"), "USD"),
     (re.compile(r"\busd\b", re.I), "USD"),
     (re.compile(r"£"), "GBP"),
@@ -268,13 +236,6 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*£"), "GBP"),
     (
         re.compile(
-            rf"\b({CURRENCY_CODE_PATTERN})\s*([\d.,]+)\s*(k|K|m|M)?\b",
-            re.I,
-        ),
-        None,
-    ),
-    (
-        re.compile(
             rf"\b([\d.,]+)\s*(k|K|m|M)\s*({CURRENCY_CODE_PATTERN})\b",
             re.I,
         ),
@@ -287,12 +248,26 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
         ),
         None,
     ),
+    (
+        re.compile(
+            rf"\b({CURRENCY_CODE_PATTERN})\s*([\d.,]+)\s*(k|K|m|M)?\b",
+            re.I,
+        ),
+        None,
+    ),
     (re.compile(r"\b(\d+(?:\.\d+)?)\s*(m|M)\b"), None),
     (re.compile(r"\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
 ]
 
 BULLET_PREFIX = re.compile(r"^[-*•]\s*")
-NUMBER_PREFIX = re.compile(r"^\d+[\.)]\s*")
+NUMBER_PREFIX = re.compile(r"^\d+[\.)]\s+(?=[A-Za-z*])")
+MARKDOWN_EMPHASIS = re.compile(r"\*+")
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove lightweight markdown emphasis markers from dealer text."""
+    cleaned = MARKDOWN_EMPHASIS.sub("", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 NOTES_REMOVE_PATTERNS = [
     NEW_CARD_DATE_PATTERN,
@@ -300,7 +275,7 @@ NOTES_REMOVE_PATTERNS = [
     CARD_MMYyyy_PATTERN,
     USED_YEAR_PATTERN,
     YEAR_SUFFIX_PATTERN,
-    BRAND_PATTERN,
+    get_brand_pattern(),
     DIAL_ABBREV_PATTERN,
     DIAL_PATTERN,
     re.compile(r"\b(fs|for\s+sale|obo)\b", re.I),
@@ -359,6 +334,7 @@ def parse_message(message: str) -> ParseResult:
 
     for line in blocks:
         if watch := parse_watch_line(line, current_brand=current_brand):
+            watch["source_line"] = line
             watches.append(watch)
 
     message_type = classify_message(text, watches, is_request)
@@ -468,6 +444,7 @@ def iter_content_lines(message: str) -> list[str]:
             continue
         line = BULLET_PREFIX.sub("", line)
         line = NUMBER_PREFIX.sub("", line)
+        line = _strip_markdown(line)
         if HEADER_PATTERN.match(line):
             continue
         for part in re.split(r"\s*;\s*", line):
@@ -482,7 +459,7 @@ def _is_brand_only_line(line: str) -> str | None:
     brand = _extract_brand(line)
     if brand is None:
         return None
-    remaining = BRAND_PATTERN.sub("", line).strip(" :.-")
+    remaining = get_brand_pattern().sub("", line).strip(" :.-")
     if remaining:
         return None
     return brand
@@ -506,7 +483,7 @@ def _looks_like_watch_line(line: str) -> bool:
 
 def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict | None:
     """Parse a single watch line into a structured watch dict."""
-    text = line.strip()
+    text = _strip_markdown(line.strip())
     if not text:
         return None
 
@@ -606,7 +583,7 @@ def _line_dealer_note_fragment(line: str, watch: WatchDict) -> str | None:
     remaining = line
     for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS:
         remaining = pattern.sub(" ", remaining)
-    remaining = BRAND_PATTERN.sub(" ", remaining)
+    remaining = get_brand_pattern().sub(" ", remaining)
     remaining = WATCH_MODEL_PATTERN.sub(" ", remaining)
     if watch.get("reference"):
         remaining = re.sub(re.escape(watch["reference"]), " ", remaining, flags=re.I)
@@ -772,10 +749,10 @@ def _normalize_brand_alias(alias: str) -> str:
 
 
 def _extract_brand(text: str) -> str | None:
-    match = BRAND_PATTERN.search(text)
+    match = get_brand_pattern().search(text)
     if match:
         alias = _normalize_brand_alias(match.group(1))
-        brand = BRAND_ALIASES.get(alias)
+        brand = lookup_brand(alias)
         if brand:
             return brand
     return _extract_als_brand(text)
@@ -783,18 +760,22 @@ def _extract_brand(text: str) -> str | None:
 
 def _extract_als_brand(text: str) -> str | None:
     """Detect ALS as A. Lange & Söhne without matching Dutch 'als'."""
+    als_brand = lookup_brand("als")
+    if not als_brand:
+        return None
+
     if ALS_UPPER_PATTERN.search(text):
-        return BRAND_ALIASES["als"]
+        return als_brand
 
     if not re.search(r"\bals\b", text):
         return None
 
     if _extract_reference(text)[0]:
-        return BRAND_ALIASES["als"]
+        return als_brand
     if ALS_CONTEXT_TERMS.search(text):
-        return BRAND_ALIASES["als"]
+        return als_brand
     if _extract_price(text)[0] is not None:
-        return BRAND_ALIASES["als"]
+        return als_brand
     return None
 
 
@@ -956,14 +937,53 @@ def _is_amount_suffix(value: str | None) -> bool:
     return value is not None and value.lower() in {"k", "m"}
 
 
+def _looks_like_year_amount(price: int, suffix: str | None) -> bool:
+    return suffix is None and 1990 <= price <= 2035
+
+
+def _normalize_currency_code(currency_code: str | None) -> str | None:
+    if currency_code is None:
+        return None
+    normalized = currency_code.upper()
+    if normalized == "EURO":
+        return "EUR"
+    return normalized
+
+
+def _amount_before_currency_needs_signal(amount_text: str, suffix: str | None) -> bool:
+    if suffix and suffix.lower() in {"k", "m"}:
+        return True
+    raw = amount_text.strip()
+    if "," in raw or re.fullmatch(r"\d{1,3}(?:\.\d{3})+", raw):
+        return True
+    normalized = _normalize_amount(raw, suffix)
+    return normalized is not None and normalized >= 10_000
+
+
 def _extract_price(text: str) -> tuple[int | None, str | None]:
     for pattern, default_currency in PRICE_WITH_CURRENCY_PATTERNS:
         match = pattern.search(text)
         if not match:
             continue
         price, currency_code = _parse_price_match(match, default_currency)
-        if price is not None:
-            return price, currency_code
+        if price is None:
+            continue
+        groups = match.groups()
+        if (
+            groups
+            and groups[0]
+            and _is_currency_code(groups[0])
+            and _looks_like_year_amount(price, groups[2] if len(groups) > 2 else None)
+        ):
+            continue
+        if (
+            len(groups) >= 3
+            and groups[-1]
+            and _is_currency_code(groups[-1])
+            and not _amount_before_currency_needs_signal(groups[0], groups[1])
+        ):
+            continue
+        return price, _normalize_currency_code(currency_code)
     return None, None
 
 
@@ -1010,7 +1030,7 @@ def _parse_price_match(
 
     if currency_code is None:
         currency_code = _extract_currency(match.string)
-    return price, currency_code
+    return price, _normalize_currency_code(currency_code)
 
 
 def _normalize_amount(amount_text: str, suffix: str | None) -> int | None:
