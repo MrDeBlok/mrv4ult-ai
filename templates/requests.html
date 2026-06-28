@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block title %}Client requests · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+            <div>
+                <h1 class="h3 mb-1">Client requests</h1>
+                <p class="text-muted mb-0">Track wanted watches and review profit opportunities from matched offers.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="row g-3 mb-4">
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 request-summary-card">
+            <div class="card-body">
+                <div class="request-summary-label">Open requests</div>
+                <div class="request-summary-value">{{ summary.open_requests }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 request-summary-card">
+            <div class="card-body">
+                <div class="request-summary-label">Matched requests</div>
+                <div class="request-summary-value">{{ summary.matched_requests }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 request-summary-card">
+            <div class="card-body">
+                <div class="request-summary-label">Total potential profit</div>
+                <div class="request-summary-value text-success">{{ summary.total_potential_profit }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card shadow-sm h-100 request-summary-card">
+            <div class="card-body">
+                <div class="request-summary-label">Biggest opportunity</div>
+                <div class="request-summary-value request-summary-opportunity">{{ summary.biggest_opportunity.potential_profit }}</div>
+                <div class="text-muted small mt-1">
+                    {{ summary.biggest_opportunity.client_name }} · {{ summary.biggest_opportunity.offer_label }}
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+{% if saved %}
+<div class="alert alert-success" role="alert">Request saved.</div>
+{% endif %}
+
+<section class="card shadow-sm mb-4">
+    <div class="card-header bg-white py-3">
+        <h2 class="h5 mb-0">New request</h2>
+    </div>
+    <div class="card-body p-3 p-md-4">
+        <form method="post" action="/requests" class="row g-3">
+            <div class="col-12 col-md-6">
+                <label class="form-label fw-semibold" for="client-name">Client name</label>
+                <input type="text" class="form-control" id="client-name" name="client_name" required>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label fw-semibold" for="brand">Brand</label>
+                <input type="text" class="form-control" id="brand" name="brand" placeholder="Rolex">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="reference">Reference</label>
+                <input type="text" class="form-control" id="reference" name="reference" placeholder="116508">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="model">Model</label>
+                <input type="text" class="form-control" id="model" name="model" placeholder="GMT-Master II">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="alias">Alias / nickname</label>
+                <input type="text" class="form-control" id="alias" name="alias" placeholder="Pepsi">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="dial">Dial</label>
+                <input type="text" class="form-control" id="dial" name="dial" placeholder="Blue">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="min-year">Min year</label>
+                <input type="number" class="form-control" id="min-year" name="min_year" min="1900" max="2100">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="max-year">Max year</label>
+                <input type="number" class="form-control" id="max-year" name="max_year" min="1900" max="2100">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="max-price">Max price</label>
+                <input type="number" class="form-control" id="max-price" name="max_price" min="0">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="currency">Currency</label>
+                <select class="form-select" id="currency" name="currency">
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="HKD">HKD</option>
+                    <option value="CHF">CHF</option>
+                    <option value="GBP">GBP</option>
+                </select>
+            </div>
+            <div class="col-12">
+                <label class="form-label fw-semibold" for="notes">Notes</label>
+                <textarea class="form-control" id="notes" name="notes" rows="3"></textarea>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Save request</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<section class="card shadow-sm mb-3">
+    <div class="card-body py-3">
+        <div class="d-flex flex-wrap gap-2">
+            <a href="/requests" class="btn btn-sm {% if status_filter == 'all' %}btn-dark{% else %}btn-outline-dark{% endif %}">All</a>
+            <a href="/requests?status=open" class="btn btn-sm {% if status_filter == 'open' %}btn-primary{% else %}btn-outline-primary{% endif %}">Open</a>
+            <a href="/requests?status=matched" class="btn btn-sm {% if status_filter == 'matched' %}btn-success{% else %}btn-outline-success{% endif %}">Matched</a>
+            <a href="/requests?status=closed" class="btn btn-sm {% if status_filter == 'closed' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Closed</a>
+        </div>
+    </div>
+</section>
+
+{% if requests %}
+{% for item in requests %}
+<section class="card shadow-sm mb-3">
+    <div class="card-body p-3 p-md-4">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+            <div>
+                <h2 class="h5 mb-1">{{ item.client_name }}</h2>
+                <div class="text-muted small">Created {{ item.created_at }}</div>
+            </div>
+            <span class="badge rounded-pill text-bg-{{ item.status_class }}">{{ item.status }}</span>
+        </div>
+
+        {% if item.has_matches %}
+        <div class="row g-3 mb-3 request-profit-highlight">
+            <div class="col-6 col-md-3">
+                <div class="request-profit-metric-label">Best offer</div>
+                <div class="request-profit-metric-value">{{ item.best_offer }}</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="request-profit-metric-label">Potential profit</div>
+                <div class="request-profit-metric-value text-success">{{ item.best_potential_profit }}</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="request-profit-metric-label">Margin</div>
+                <div class="request-profit-metric-value">{{ item.best_margin }}</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="request-profit-metric-label">Matching offers</div>
+                <div class="request-profit-metric-value">{{ item.match_count }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <dl class="row mb-0 request-fields">
+            <dt class="col-sm-3 col-md-2">Brand</dt><dd class="col-sm-9 col-md-4">{{ item.brand }}</dd>
+            <dt class="col-sm-3 col-md-2">Reference</dt><dd class="col-sm-9 col-md-4">{{ item.reference }}</dd>
+            <dt class="col-sm-3 col-md-2">Model</dt><dd class="col-sm-9 col-md-4">{{ item.model }}</dd>
+            <dt class="col-sm-3 col-md-2">Alias</dt><dd class="col-sm-9 col-md-4">{{ item.alias }}</dd>
+            <dt class="col-sm-3 col-md-2">Dial</dt><dd class="col-sm-9 col-md-4">{{ item.dial }}</dd>
+            <dt class="col-sm-3 col-md-2">Year range</dt><dd class="col-sm-9 col-md-4">{{ item.year_range }}</dd>
+            <dt class="col-sm-3 col-md-2">Max price</dt><dd class="col-sm-9 col-md-4">{{ item.max_price }}</dd>
+        </dl>
+
+        {% if item.notes %}
+        <p class="text-muted mt-3 mb-0">{{ item.notes }}</p>
+        {% endif %}
+
+        {% if item.has_matches %}
+        <hr class="my-3">
+        <h3 class="h6">Matched offers</h3>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Dealer</th>
+                        <th>Offer</th>
+                        <th>Offer price</th>
+                        <th>Budget</th>
+                        <th>Potential profit</th>
+                        <th>Margin</th>
+                        <th>Received</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for match in item.matched_offers %}
+                    <tr>
+                        <td>{{ match.dealer }}</td>
+                        <td>{{ match.offer_label }}</td>
+                        <td>{{ match.price }}</td>
+                        <td>{{ match.budget }}</td>
+                        <td>{{ match.potential_profit }}</td>
+                        <td>{{ match.margin }}</td>
+                        <td>
+                            {% if match.import_log_id %}
+                            <a href="/activity/{{ match.import_log_id }}">{{ match.import_time }}</a>
+                            {% else %}
+                            {{ match.import_time }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge text-bg-{{ match.status_class }}">{{ match.status_label }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if item.status != 'Closed' %}
+        <form method="post" action="/requests/{{ item.id }}/close" class="mt-3">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Mark closed</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+{% endfor %}
+{% else %}
+<div class="alert alert-secondary" role="alert">No client requests yet.</div>
+{% endif %}
+{% endblock %}

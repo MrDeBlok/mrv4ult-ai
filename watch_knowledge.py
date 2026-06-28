@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from model_aliases import enrich_with_model_alias
+
 KNOWLEDGE_PATH = Path(__file__).resolve().parent / "data" / "watch_knowledge.json"
 
 KNOWLEDGE_FIELD_LABELS: list[tuple[str, str]] = [
@@ -70,9 +72,9 @@ def lookup_reference(reference: str | None) -> dict[str, Any] | None:
 
 
 def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
-    """Attach reference knowledge to a parsed watch without changing parser output."""
-    enriched = dict(watch)
-    knowledge = lookup_reference(watch.get("reference"))
+    """Attach model aliases and reference knowledge to a parsed watch."""
+    enriched = enrich_with_model_alias(dict(watch))
+    knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:
         enriched["knowledge"] = knowledge
     return enriched

@@ -14,7 +14,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+from condition_normalizer import normalize_condition_value
+from request_matching import match_offer_against_requests
+
 Record = dict[str, Any]
+
+REQUEST_STATUSES = frozenset({"open", "matched", "closed", "active"})
+OPEN_REQUEST_STATUSES = ("open", "active")
 
 WATCH_IDENTITY_FIELDS = ("brand", "reference", "dial", "bracelet")
 
@@ -187,7 +193,7 @@ def find_duplicate_offer(
     for field, value in (
         ("original_price", original_price),
         ("original_currency", _storage_value(original_currency)),
-        ("condition", _storage_value(condition)),
+        ("condition", _storage_value(normalize_condition_value(condition))),
         ("card_date", _storage_value(card_date)),
         ("production_year", production_year),
     ):
@@ -200,76 +206,6 @@ def find_duplicate_offer(
     if response.data:
         return response.data[0]
     return None
-
-
-def find_matching_requests(
-    *,
-    brand: str | None,
-    reference: str | None,
-    dial: str | None = None,
-    bracelet: str | None = None,
-    usd_price: int | None = None,
-) -> list[Record]:
-    """Return active requests that match the given offer watch fields."""
-    response = (
-        get_client().table("requests").select("*").eq("status", "active").execute()
-    )
-    requests = response.data or []
-
-    matches: list[Record] = []
-    for request in requests:
-        if _request_matches_offer(
-            request,
-            brand=brand,
-            reference=reference,
-            dial=dial,
-            bracelet=bracelet,
-            usd_price=usd_price,
-        ):
-            matches.append(request)
-    return matches
-
-
-def _request_matches_offer(
-    request: Record,
-    *,
-    brand: str | None,
-    reference: str | None,
-    dial: str | None,
-    bracelet: str | None,
-    usd_price: int | None,
-) -> bool:
-    if not _required_field_matches(brand, request.get("brand")):
-        return False
-    if not _required_field_matches(reference, request.get("reference")):
-        return False
-    if not _optional_field_matches(dial, request.get("dial")):
-        return False
-    if not _optional_field_matches(bracelet, request.get("bracelet")):
-        return False
-
-    max_usd_price = request.get("max_usd_price")
-    if max_usd_price is not None:
-        if usd_price is None or usd_price > max_usd_price:
-            return False
-    return True
-
-
-def _required_field_matches(
-    offer_value: str | None,
-    request_value: str | None,
-) -> bool:
-    return _normalize_watch_value(offer_value) == _normalize_watch_value(request_value)
-
-
-def _optional_field_matches(
-    offer_value: str | None,
-    request_value: str | None,
-) -> bool:
-    request_normalized = _normalize_watch_value(request_value)
-    if request_normalized is None:
-        return True
-    return _normalize_watch_value(offer_value) == request_normalized
 
 
 def get_watch_by_id(watch_id: str) -> Record | None:
@@ -297,6 +233,325 @@ def get_active_offers_for_watch(watch_id: str) -> list[Record]:
         .execute()
     )
     return response.data or []
+
+
+def create_request(
+    *,
+    client_name: str,
+    brand: str | None = None,
+    reference: str | None = None,
+    model: str | None = None,
+    alias: str | None = None,
+    dial: str | None = None,
+    condition: str | None = None,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    max_price: int | None = None,
+    currency: str | None = None,
+    notes: str | None = None,
+    status: str = "open",
+) -> Record:
+    """Create a manual client request."""
+    payload: Record = {
+        "client_name": client_name.strip(),
+        "brand": _storage_value(brand),
+        "reference": _storage_value(reference),
+        "model": _storage_value(model),
+        "alias": _storage_value(alias),
+        "dial": _storage_value(dial),
+        "condition": _storage_value(normalize_condition_value(condition)),
+        "min_year": min_year,
+        "max_year": max_year,
+        "max_price": max_price,
+        "currency": _storage_value(currency),
+        "notes": _storage_value(notes),
+        "status": status,
+    }
+    response = get_client().table("requests").insert(payload).execute()
+    return _first_row(response.data, "requests")
+
+
+def list_requests(*, status: str | None = None) -> list[Record]:
+    """Return client requests, optionally filtered by status."""
+    query = get_client().table("requests").select("*").order("created_at", desc=True)
+    if status:
+        if status == "open":
+            query = query.in_("status", list(OPEN_REQUEST_STATUSES))
+        else:
+            query = query.eq("status", status)
+    response = query.execute()
+    return response.data or []
+
+
+def get_open_requests() -> list[Record]:
+    """Return requests eligible for offer matching."""
+    response = (
+        get_client()
+        .table("requests")
+        .select("*")
+        .in_("status", list(OPEN_REQUEST_STATUSES))
+        .execute()
+    )
+    return response.data or []
+
+
+def update_request_status(request_id: str, status: str) -> Record:
+    """Update the status of a client request."""
+    response = (
+        get_client()
+        .table("requests")
+        .update({"status": status})
+        .eq("id", request_id)
+        .execute()
+    )
+    return _first_row(response.data, "requests")
+
+
+def create_request_match(
+    *,
+    request_id: str,
+    offer_id: str,
+    import_log_id: str | None,
+    match_strength: str,
+    match_reason: str,
+) -> Record:
+    """Persist a match between a request and an offer."""
+    payload: Record = {
+        "request_id": request_id,
+        "offer_id": offer_id,
+        "import_log_id": import_log_id,
+        "match_strength": match_strength,
+        "match_reason": match_reason,
+    }
+    response = get_client().table("request_matches").insert(payload).execute()
+    return _first_row(response.data, "request_matches")
+
+
+def list_request_matches_by_request_ids(request_ids: list[str]) -> list[Record]:
+    """Return raw request_matches rows for the given request ids."""
+    if not request_ids:
+        return []
+
+    response = (
+        get_client()
+        .table("request_matches")
+        .select("*")
+        .in_("request_id", request_ids)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
+    """Return offers keyed by id."""
+    if not offer_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("offers")
+        .select("id, watch_id, original_price, original_currency, usd_price, condition, card_date")
+        .in_("id", offer_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or []}
+
+
+def get_watches_by_ids(watch_ids: list[str]) -> dict[str, Record]:
+    """Return watches keyed by id."""
+    if not watch_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("watches")
+        .select("id, brand, reference, model, dial")
+        .in_("id", watch_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or []}
+
+
+def get_import_logs_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
+    """Return import logs keyed by id."""
+    if not import_log_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("import_logs")
+        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp")
+        .in_("id", import_log_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or []}
+
+
+def combine_request_match_records(
+    matches: list[Record],
+    *,
+    offers_by_id: dict[str, Record],
+    watches_by_id: dict[str, Record],
+    import_logs_by_id: dict[str, Record],
+) -> list[Record]:
+    """Attach offer, watch, and import log data to request match rows."""
+    enriched: list[Record] = []
+    for match in matches:
+        offer = offers_by_id.get(str(match.get("offer_id")), {})
+        watch_id = offer.get("watch_id")
+        watch = watches_by_id.get(str(watch_id), {}) if watch_id else {}
+        import_log_id = match.get("import_log_id")
+        import_log = (
+            import_logs_by_id.get(str(import_log_id), {})
+            if import_log_id
+            else {}
+        )
+        enriched.append(
+            {
+                **match,
+                "offer": offer,
+                "watch": watch,
+                "import_log": import_log,
+            }
+        )
+    return enriched
+
+
+def load_enriched_request_matches_by_request_ids(
+    request_ids: list[str],
+) -> dict[str, list[Record]]:
+    """Load request matches with related offer, watch, and import log data."""
+    matches = list_request_matches_by_request_ids(request_ids)
+    if not matches:
+        return {}
+
+    offer_ids = sorted({str(match["offer_id"]) for match in matches if match.get("offer_id")})
+    import_log_ids = sorted(
+        {str(match["import_log_id"]) for match in matches if match.get("import_log_id")}
+    )
+
+    offers_by_id = get_offers_by_ids(offer_ids)
+    watch_ids = sorted(
+        {str(offer["watch_id"]) for offer in offers_by_id.values() if offer.get("watch_id")}
+    )
+    watches_by_id = get_watches_by_ids(watch_ids)
+    import_logs_by_id = get_import_logs_by_ids(import_log_ids)
+
+    enriched = combine_request_match_records(
+        matches,
+        offers_by_id=offers_by_id,
+        watches_by_id=watches_by_id,
+        import_logs_by_id=import_logs_by_id,
+    )
+
+    grouped: dict[str, list[Record]] = {}
+    for match in enriched:
+        request_id = str(match["request_id"])
+        grouped.setdefault(request_id, []).append(match)
+    return grouped
+
+
+def list_request_matches_for_request(request_id: str) -> list[Record]:
+    """Return enriched offer matches linked to a client request."""
+    return load_enriched_request_matches_by_request_ids([request_id]).get(request_id, [])
+
+
+def list_request_matches_for_import(import_log_id: str) -> list[Record]:
+    """Return all request matches recorded during an import."""
+    response = (
+        get_client()
+        .table("request_matches")
+        .select("*, requests(id, client_name, brand, reference, model, alias, status)")
+        .eq("import_log_id", import_log_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def list_request_matches_for_offer(offer_id: str) -> list[Record]:
+    """Return request matches linked to a single offer."""
+    response = (
+        get_client()
+        .table("request_matches")
+        .select("*, requests(id, client_name, brand, reference, model, alias, status)")
+        .eq("offer_id", offer_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def process_offer_request_matches(
+    *,
+    import_log_id: str,
+    offer_id: str,
+    offer: Record,
+) -> list[Record]:
+    """Match a new offer against open requests and persist matches."""
+    open_requests = get_open_requests()
+    request_lookup = {str(request["id"]): request for request in open_requests}
+    matches = match_offer_against_requests(offer, open_requests)
+    created: list[Record] = []
+    for match in matches:
+        record = create_request_match(
+            request_id=match["request_id"],
+            offer_id=offer_id,
+            import_log_id=import_log_id,
+            match_strength=match["match_strength"],
+            match_reason=match["match_reason"],
+        )
+        update_request_status(match["request_id"], "matched")
+        request = request_lookup.get(match["request_id"], {})
+        created.append(
+            {
+                **record,
+                "request_id": match["request_id"],
+                "client_name": request.get("client_name") or "Client",
+                "match_strength": match["match_strength"],
+                "match_reason": match["match_reason"],
+            }
+        )
+        logger.info(
+            "Request match: request=%s offer=%s strength=%s",
+            match["request_id"],
+            offer_id,
+            match["match_strength"],
+        )
+    return created
+
+
+def update_import_log(
+    import_log_id: str,
+    *,
+    matched_requests: int,
+    summary: Record,
+) -> Record:
+    """Update import log counters and summary after request matching."""
+    response = (
+        get_client()
+        .table("import_logs")
+        .update({"matched_requests": matched_requests, "summary": summary})
+        .eq("id", import_log_id)
+        .execute()
+    )
+    return _first_row(response.data, "import_logs")
+
+
+def get_request(request_id: str) -> Record | None:
+    """Return one client request by id."""
+    response = (
+        get_client()
+        .table("requests")
+        .select("*")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
 
 
 def insert_import_log(
@@ -419,14 +674,10 @@ def insert_offer(
     is_duplicate: bool = False,
     duplicate_of_id: str | None = None,
     status: str = "active",
-) -> tuple[Record, bool, int]:
-    """Insert an offer unless an identical active offer already exists.
-
-    Returns the offer record, whether it was newly created, and the number of
-    matched active requests.
-    """
+) -> tuple[Record, bool]:
+    """Insert an offer unless an identical active offer already exists."""
     normalized_currency = _storage_value(original_currency)
-    normalized_condition = _storage_value(condition)
+    normalized_condition = _storage_value(normalize_condition_value(condition))
     normalized_card_date = _storage_value(card_date)
 
     existing = find_duplicate_offer(
@@ -440,7 +691,7 @@ def insert_offer(
     )
     if existing:
         print("Duplicate offer found")
-        return existing, False, 0
+        return existing, False
 
     payload: Record = {
         "message_id": message_id,
@@ -464,19 +715,7 @@ def insert_offer(
     response = get_client().table("offers").insert(payload).execute()
     created = _first_row(response.data, "offers")
     print("Created new offer")
-
-    watch = _get_watch_by_id(watch_id)
-    matches = find_matching_requests(
-        brand=watch.get("brand"),
-        reference=watch.get("reference"),
-        dial=watch.get("dial"),
-        bracelet=watch.get("bracelet"),
-        usd_price=usd_price,
-    )
-    for request in matches:
-        print(f"Match found for request {request['id']}")
-
-    return created, True, len(matches)
+    return created, True
 
 
 def _first_row(data: list[Record] | None, table: str) -> Record:

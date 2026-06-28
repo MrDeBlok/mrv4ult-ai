@@ -1,0 +1,89 @@
+{
+  "odysseus": {
+    "brand": "A. Lange & Söhne",
+    "collection": "Odysseus",
+    "model": "Odysseus",
+    "confidence_note": "Identified by model alias: Odysseus"
+  },
+  "pepsi": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Pepsi",
+    "confidence_note": "Identified by nickname alias: Pepsi"
+  },
+  "batman": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Batman",
+    "confidence_note": "Identified by nickname alias: Batman"
+  },
+  "sprite": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Sprite",
+    "confidence_note": "Identified by nickname alias: Sprite"
+  },
+  "hulk": {
+    "brand": "Rolex",
+    "collection": "Submariner",
+    "model": "Submariner",
+    "nickname": "Hulk",
+    "confidence_note": "Identified by nickname alias: Hulk"
+  },
+  "panda": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Panda",
+    "confidence_note": "Identified by nickname alias: Panda"
+  },
+  "john mayer": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "John Mayer",
+    "reference": "116508",
+    "confidence_note": "Identified by nickname alias: John Mayer"
+  },
+  "cubitus": {
+    "brand": "Patek Philippe",
+    "collection": "Cubitus",
+    "model": "Cubitus",
+    "confidence_note": "Identified by model alias: Cubitus"
+  },
+  "nautilus": {
+    "brand": "Patek Philippe",
+    "collection": "Nautilus",
+    "model": "Nautilus",
+    "confidence_note": "Identified by model alias: Nautilus"
+  },
+  "aquanaut": {
+    "brand": "Patek Philippe",
+    "collection": "Aquanaut",
+    "model": "Aquanaut",
+    "confidence_note": "Identified by model alias: Aquanaut"
+  },
+  "royal oak jumbo": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak Jumbo",
+    "nickname": "Jumbo",
+    "confidence_note": "Identified by model alias: Royal Oak Jumbo"
+  },
+  "royal oak": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak",
+    "confidence_note": "Identified by model alias: Royal Oak"
+  },
+  "jumbo": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak Jumbo",
+    "nickname": "Jumbo",
+    "confidence_note": "Identified by nickname alias: Jumbo"
+  }
+}

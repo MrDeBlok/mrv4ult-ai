@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 from database import get_client
+from condition_normalizer import display_condition
 
 Record = dict[str, Any]
 WatchGroup = dict[str, Any]
@@ -264,7 +265,7 @@ def print_watch_group(group: WatchGroup) -> None:
         usd_price = format_usd_price(offer.get("usd_price"))
         dealer_name = offer.get("dealer", {}).get("display_name") or "Unknown dealer"
         card_date = offer.get("card_date") or "N/A"
-        condition = offer.get("condition") or "N/A"
+        condition = display_condition(offer.get("condition"))
         print(
             f"  - Original: {original} | USD price: {usd_price} | "
             f"Dealer: {dealer_name} | Card: {card_date} | Condition: {condition}"

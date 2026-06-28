@@ -99,35 +99,49 @@ CREATE TABLE offers (
 );
 
 CREATE TABLE requests (
-    id                      UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_id              UUID            REFERENCES messages (id) ON DELETE SET NULL,
-    client_name             TEXT,
-    client_phone            TEXT,
-    brand                   TEXT,
-    reference               TEXT,
-    model                   TEXT,
-    dial                    TEXT,
-    bracelet                TEXT,
-    condition               TEXT,
-    production_year         INTEGER,
-    card_date               TEXT,
-    notes                   TEXT,
-    max_price               INTEGER,
-    max_currency            TEXT,
-    max_usd_price           INTEGER,
-    exchange_rate_to_usd    NUMERIC(12, 6),
-    source                  TEXT            NOT NULL DEFAULT 'manual',
-    status                  TEXT            NOT NULL DEFAULT 'active',
-    created_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
-    updated_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
-    expires_at              TIMESTAMPTZ,
-
-    CONSTRAINT requests_source_check
-        CHECK (source IN ('whatsapp', 'manual', 'import')),
+    id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_name     TEXT            NOT NULL,
+    brand           TEXT,
+    reference       TEXT,
+    model           TEXT,
+    alias           TEXT,
+    dial            TEXT,
+    condition       TEXT,
+    min_year        INTEGER,
+    max_year        INTEGER,
+    max_price       INTEGER,
+    currency        TEXT,
+    notes           TEXT,
+    status          TEXT            NOT NULL DEFAULT 'open',
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
 
     CONSTRAINT requests_status_check
-        CHECK (status IN ('active', 'matched', 'fulfilled', 'cancelled'))
+        CHECK (status IN ('open', 'matched', 'closed', 'active'))
 );
+
+CREATE TABLE request_matches (
+    id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_id      UUID            NOT NULL REFERENCES requests (id) ON DELETE CASCADE,
+    offer_id        UUID            NOT NULL REFERENCES offers (id) ON DELETE CASCADE,
+    import_log_id   UUID            REFERENCES import_logs (id) ON DELETE SET NULL,
+    match_strength  TEXT            NOT NULL,
+    match_reason    TEXT            NOT NULL,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
+
+    CONSTRAINT request_matches_strength_check
+        CHECK (match_strength IN ('strong', 'medium')),
+
+    CONSTRAINT request_matches_unique UNIQUE (request_id, offer_id)
+);
+
+-- Migration for existing databases (Sprint 24):
+-- ALTER TABLE requests ADD COLUMN IF NOT EXISTS alias TEXT;
+-- ALTER TABLE requests ADD COLUMN IF NOT EXISTS min_year INTEGER;
+-- ALTER TABLE requests ADD COLUMN IF NOT EXISTS max_year INTEGER;
+-- ALTER TABLE requests ADD COLUMN IF NOT EXISTS currency TEXT;
+-- UPDATE requests SET status = 'open' WHERE status = 'active';
+-- CREATE TABLE request_matches (...);
 
 CREATE TABLE import_logs (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -225,24 +239,22 @@ CREATE INDEX idx_import_logs_message_id
 -- Indexes — requests
 -- ---------------------------------------------------------------------------
 
-CREATE INDEX idx_requests_message_id
-    ON requests (message_id)
-    WHERE message_id IS NOT NULL;
-
-CREATE INDEX idx_requests_brand
-    ON requests (brand)
-    WHERE brand IS NOT NULL;
-
-CREATE INDEX idx_requests_reference
-    ON requests (reference)
-    WHERE reference IS NOT NULL;
-
 CREATE INDEX idx_requests_status
     ON requests (status);
 
 CREATE INDEX idx_requests_brand_reference
     ON requests (brand, reference)
     WHERE brand IS NOT NULL AND reference IS NOT NULL;
+
+CREATE INDEX idx_request_matches_request_id
+    ON request_matches (request_id);
+
+CREATE INDEX idx_request_matches_offer_id
+    ON request_matches (offer_id);
+
+CREATE INDEX idx_request_matches_import_log_id
+    ON request_matches (import_log_id)
+    WHERE import_log_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Updated-at trigger

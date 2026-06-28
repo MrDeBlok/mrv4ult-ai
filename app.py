@@ -14,6 +14,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from condition_normalizer import display_condition
+from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
 from activity_feed import (
     activity_feed_counts,
@@ -28,12 +30,17 @@ from import_status import (
     normalize_import_status,
 )
 from database import (
+    create_request,
     get_active_offers_for_watch,
     get_client,
     get_import_log,
     get_message_by_id,
     get_watch_by_id,
     list_import_logs,
+    list_request_matches_for_offer,
+    load_enriched_request_matches_by_request_ids,
+    list_requests,
+    update_request_status,
 )
 from evolution_client import (
     EvolutionAPIError,
@@ -44,6 +51,11 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from request_profit import (
+    attach_profit_to_matches,
+    build_request_profit_summary,
+    build_requests_dashboard_summary,
+)
 from search import (
     _display_value,
     _nested_record,
@@ -226,7 +238,7 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "usd_price": format_usd_price(offer.get("usd_price")),
                 "card_date": offer.get("card_date") or "N/A",
-                "condition": offer.get("condition") or "N/A",
+                "condition": display_condition(offer.get("condition")),
                 "received_at": format_received_at(offer.get("received_at")),
             }
         )
@@ -290,29 +302,53 @@ def _card_text(row: dict[str, Any], watch: dict[str, Any], row_key: str, watch_k
     return str(value)
 
 
+def _reference_card_value(row: dict[str, Any], watch: dict[str, Any]) -> str | None:
+    reference = row.get("reference")
+    if not _has_display_value(reference) or reference == "N/A":
+        reference = watch.get("reference")
+    if _has_display_value(reference) and reference != "N/A":
+        return _display_value(str(reference))
+
+    model_alias = watch.get("model_alias")
+    if isinstance(model_alias, dict):
+        if model_alias.get("reference_status") == "Unknown":
+            return "Unknown"
+        possible_reference = model_alias.get("possible_reference")
+        if _has_display_value(possible_reference):
+            return str(possible_reference)
+
+    return None
+
+
 def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: int) -> dict[str, Any]:
+    enriched_watch = (
+        watch
+        if isinstance(watch.get("model_alias"), dict)
+        else enrich_with_model_alias(dict(watch))
+    )
+
     original_price = row.get("original_price")
     if original_price is None:
-        original_price = watch.get("original_price") or watch.get("price")
-    original_currency = row.get("original_currency") or watch.get("original_currency") or watch.get("currency")
+        original_price = enriched_watch.get("original_price") or enriched_watch.get("price")
+    original_currency = row.get("original_currency") or enriched_watch.get("original_currency") or enriched_watch.get("currency")
     usd_price = row.get("usd_price")
     if usd_price is None:
-        usd_price = watch.get("usd_price")
+        usd_price = enriched_watch.get("usd_price")
 
     merged = {
-        "brand": _card_text(row, watch, "brand", "brand"),
-        "reference": _card_text(row, watch, "reference", "reference"),
-        "model": _card_text(row, watch, "model", "model"),
-        "nickname": _card_text(row, watch, "nickname", "nickname"),
-        "dial": _card_text(row, watch, "dial", "dial"),
-        "bracelet": _card_text(row, watch, "bracelet", "bracelet"),
-        "condition": _card_text(row, watch, "condition", "condition"),
-        "card_date": _card_text(row, watch, "card_date", "card_date"),
+        "brand": _card_text(row, enriched_watch, "brand", "brand"),
+        "reference": _reference_card_value(row, enriched_watch),
+        "model": _card_text(row, enriched_watch, "model", "model"),
+        "nickname": _card_text(row, enriched_watch, "nickname", "nickname"),
+        "dial": _card_text(row, enriched_watch, "dial", "dial"),
+        "bracelet": _card_text(row, enriched_watch, "bracelet", "bracelet"),
+        "condition": _card_text(row, enriched_watch, "condition", "condition"),
+        "card_date": _card_text(row, enriched_watch, "card_date", "card_date"),
         "original_price_display": row.get("price")
         or (format_price(original_price, original_currency) if original_price is not None else None),
         "original_currency": original_currency if _has_display_value(original_currency) else None,
         "usd_price_display": format_usd_price(usd_price) if usd_price is not None else None,
-        "notes": _card_text(row, watch, "notes", "notes"),
+        "notes": _card_text(row, enriched_watch, "notes", "notes"),
     }
 
     fields = [
@@ -321,7 +357,11 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         if _has_display_value(merged.get(key))
     ]
 
-    title_parts = [part for part in (merged.get("brand"), merged.get("reference")) if part]
+    title_parts = [
+        part
+        for part in (merged.get("brand"), merged.get("reference") or merged.get("model"))
+        if _has_display_value(part)
+    ]
     title = " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
 
     intelligence_fields: list[dict[str, str]] = []
@@ -334,20 +374,192 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         if _has_display_value(value):
             intelligence_fields.append({"label": label, "value": str(value)})
 
-    knowledge = watch.get("knowledge")
+    knowledge = enriched_watch.get("knowledge")
     if not isinstance(knowledge, dict):
-        knowledge = lookup_reference(watch.get("reference") or row.get("reference"))
+        knowledge = lookup_reference(enriched_watch.get("reference") or row.get("reference"))
     knowledge_fields = knowledge_display_fields(knowledge) if isinstance(knowledge, dict) else []
+
+    model_alias = enriched_watch.get("model_alias")
+    alias_fields = alias_display_fields(model_alias) if isinstance(model_alias, dict) else []
 
     return {
         "title": title,
         "fields": fields,
+        "alias_fields": alias_fields,
         "knowledge_fields": knowledge_fields,
         "intelligence_fields": intelligence_fields,
         "price_label": row.get("price_label"),
         "price_label_class": row.get("price_label_class"),
         "results": row.get("results") or [],
+        "matched_requests": _matched_request_fields(row, enriched_watch),
     }
+
+
+def _matched_request_fields(
+    row: dict[str, Any],
+    watch: dict[str, Any],
+) -> list[dict[str, str]]:
+    stored_matches = row.get("request_matches")
+    if isinstance(stored_matches, list) and stored_matches:
+        return [
+            {
+                "client_name": match.get("client_name") or "Client",
+                "match_strength": match.get("match_strength") or "",
+                "match_reason": match.get("match_reason") or "",
+            }
+            for match in stored_matches
+            if isinstance(match, dict)
+        ]
+
+    offer_id = row.get("offer_id")
+    if not offer_id:
+        return []
+
+    return [
+        {
+            "client_name": (match.get("requests") or {}).get("client_name") or "Client",
+            "match_strength": match.get("match_strength") or "",
+            "match_reason": match.get("match_reason") or "",
+        }
+        for match in list_request_matches_for_offer(str(offer_id))
+    ]
+
+
+REQUEST_STATUS_LABELS = {
+    "open": "Open",
+    "active": "Open",
+    "matched": "Matched",
+    "closed": "Closed",
+}
+
+
+def request_status_label(status: str | None) -> str:
+    if not status:
+        return "Unknown"
+    return REQUEST_STATUS_LABELS.get(status.lower(), status.replace("_", " ").title())
+
+
+def request_status_class(status: str | None) -> str:
+    return {
+        "open": "primary",
+        "active": "primary",
+        "matched": "success",
+        "closed": "secondary",
+    }.get((status or "").lower(), "secondary")
+
+
+def _format_dealer_name(import_log: dict[str, Any]) -> str:
+    alias = (import_log.get("dealer_alias") or "").strip()
+    if alias:
+        return alias
+    whatsapp = (import_log.get("dealer_whatsapp") or "").strip()
+    if whatsapp:
+        return whatsapp
+    group_name = (import_log.get("group_name") or "").strip()
+    return group_name or "Unknown dealer"
+
+
+def build_request_row(
+    request: dict[str, Any],
+    *,
+    matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if matches is None:
+        matches = load_enriched_request_matches_by_request_ids([str(request["id"])]).get(
+            str(request["id"]),
+            [],
+        )
+
+    profit_matches = attach_profit_to_matches(request, matches)
+    matched_offers: list[dict[str, Any]] = []
+    for match in profit_matches:
+        offer = match.get("offer") or {}
+        watch = match.get("watch") or {}
+        import_log = match.get("import_log") or {}
+        profit = match.get("profit") or {}
+        matched_offers.append(
+            {
+                "match_strength": match.get("match_strength") or "",
+                "match_reason": match.get("match_reason") or "",
+                "offer_label": " · ".join(
+                    part
+                    for part in (
+                        watch.get("brand"),
+                        watch.get("reference") or watch.get("model"),
+                    )
+                    if part
+                )
+                or "Offer",
+                "dealer": _format_dealer_name(import_log),
+                "price": profit.get("offer_price") or "N/A",
+                "budget": profit.get("budget") or "—",
+                "potential_profit": profit.get("potential_profit") or "—",
+                "potential_profit_usd": profit.get("potential_profit_usd"),
+                "margin": profit.get("margin") or "—",
+                "budget_difference": profit.get("budget_difference") or "—",
+                "import_time": format_timestamp(import_log.get("import_time")),
+                "import_log_id": import_log.get("id"),
+                "status_label": profit.get("status_label") or "—",
+                "status_class": profit.get("status_class") or "secondary",
+            }
+        )
+
+    profit_summary = build_request_profit_summary({"matched_offers": matched_offers})
+
+    return {
+        "id": request["id"],
+        "client_name": request.get("client_name") or "N/A",
+        "brand": request.get("brand") or "—",
+        "reference": request.get("reference") or "—",
+        "model": request.get("model") or "—",
+        "alias": request.get("alias") or "—",
+        "dial": request.get("dial") or "—",
+        "condition": display_condition(request.get("condition")) if request.get("condition") else "—",
+        "year_range": _format_year_range(request.get("min_year"), request.get("max_year")),
+        "max_price": _format_request_budget(request.get("max_price"), request.get("currency")),
+        "notes": request.get("notes") or "",
+        "status": request_status_label(request.get("status")),
+        "status_class": request_status_class(request.get("status")),
+        "created_at": format_timestamp(request.get("created_at")),
+        "matched_offers": matched_offers,
+        "has_matches": bool(matched_offers),
+        "best_offer": profit_summary["best_offer"],
+        "best_potential_profit": profit_summary["best_potential_profit"],
+        "best_margin": profit_summary["best_margin"],
+        "match_count": profit_summary["match_count"],
+    }
+
+
+def build_request_rows(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    request_ids = [str(request["id"]) for request in requests]
+    matches_by_request = load_enriched_request_matches_by_request_ids(request_ids)
+    return [
+        build_request_row(request, matches=matches_by_request.get(str(request["id"]), []))
+        for request in requests
+    ]
+
+
+def _format_year_range(min_year: Any, max_year: Any) -> str:
+    if min_year and max_year:
+        return f"{min_year}–{max_year}"
+    if min_year:
+        return f"{min_year}+"
+    if max_year:
+        return f"Up to {max_year}"
+    return "—"
+
+
+def _format_request_budget(max_price: Any, currency: Any) -> str:
+    if max_price is None:
+        return "—"
+    return format_price(int(max_price), str(currency) if currency else None)
+
+
+def _parse_optional_int(value: str) -> int | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return int(cleaned)
 
 
 def build_deal_analysis_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -607,6 +819,11 @@ def build_activity_detail(
         "deal_analyses": build_deal_analysis_cards(summary),
         "watch_cards": build_watch_offer_cards(summary),
         "rows": rows,
+        "match_notification": (
+            f"{import_log.get('matched_requests', 0)} client request(s) matched this import."
+            if import_log.get("matched_requests", 0)
+            else None
+        ),
     }
 
 
@@ -695,6 +912,73 @@ async def evolution_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "reason": str(exc)}, status_code=200)
 
     return JSONResponse(result, status_code=200)
+
+
+@app.get("/requests", response_class=HTMLResponse, name="requests_list")
+async def requests_list(request: Request, status: str = "") -> HTMLResponse:
+    status_filter = status.strip().lower() or None
+    all_requests = list_requests()
+    all_rows = build_request_rows(all_requests)
+    if status_filter:
+        filtered_ids = {
+            str(item["id"])
+            for item in all_requests
+            if (item.get("status") or "").lower() == status_filter
+        }
+        request_rows = [row for row in all_rows if str(row["id"]) in filtered_ids]
+    else:
+        request_rows = all_rows
+    summary = build_requests_dashboard_summary(all_rows, raw_requests=all_requests)
+    return templates.TemplateResponse(
+        request,
+        "requests.html",
+        {
+            "requests": request_rows,
+            "summary": summary,
+            "status_filter": status_filter or "all",
+            "saved": request.query_params.get("saved") == "1",
+        },
+    )
+
+
+@app.post("/requests", response_class=HTMLResponse)
+async def requests_create(
+    request: Request,
+    client_name: str = Form(""),
+    brand: str = Form(""),
+    reference: str = Form(""),
+    model: str = Form(""),
+    alias: str = Form(""),
+    dial: str = Form(""),
+    min_year: str = Form(""),
+    max_year: str = Form(""),
+    max_price: str = Form(""),
+    currency: str = Form("USD"),
+    notes: str = Form(""),
+) -> RedirectResponse:
+    if not client_name.strip():
+        return RedirectResponse(url="/requests?error=client", status_code=303)
+
+    create_request(
+        client_name=client_name,
+        brand=brand or None,
+        reference=reference or None,
+        model=model or None,
+        alias=alias or None,
+        dial=dial or None,
+        min_year=_parse_optional_int(min_year),
+        max_year=_parse_optional_int(max_year),
+        max_price=_parse_optional_int(max_price),
+        currency=currency or None,
+        notes=notes or None,
+    )
+    return RedirectResponse(url="/requests?saved=1", status_code=303)
+
+
+@app.post("/requests/{request_id}/close")
+async def requests_close(request_id: str) -> RedirectResponse:
+    update_request_status(request_id, "closed")
+    return RedirectResponse(url="/requests", status_code=303)
 
 
 @app.get("/activity", response_class=HTMLResponse, name="activity_list")

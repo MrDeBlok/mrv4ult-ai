@@ -90,6 +90,54 @@ body {
     color: #0d6efd;
 }
 
+.watch-alias-fields dt {
+    color: #6f42c1;
+}
+
+.request-fields dt {
+    font-weight: 600;
+    color: #495057;
+}
+
+.request-summary-card .request-summary-label {
+    color: #6c757d;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+    text-transform: uppercase;
+}
+
+.request-summary-card .request-summary-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.request-summary-card .request-summary-opportunity {
+    font-size: 1.25rem;
+}
+
+.request-profit-highlight {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 0.75rem;
+    margin-left: 0;
+    margin-right: 0;
+    padding: 1rem 0.75rem;
+}
+
+.request-profit-metric-label {
+    color: #6c757d;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+    text-transform: uppercase;
+}
+
+.request-profit-metric-value {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
 .watch-offer-card .watch-offer-fields dt {
     font-weight: 600;
     color: #495057;

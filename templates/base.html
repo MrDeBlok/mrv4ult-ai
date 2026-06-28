@@ -14,6 +14,7 @@
             <div class="navbar-nav flex-row gap-3 ms-auto">
                 <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/">Search</a>
                 <a class="nav-link{% if request.url.path == '/import' %} active{% endif %}" href="/import">Import</a>
+                <a class="nav-link{% if request.url.path.startswith('/requests') %} active{% endif %}" href="/requests">Requests</a>
                 <a class="nav-link{% if request.url.path.startswith('/activity') %} active{% endif %}" href="/activity">Activity</a>
                 <a class="nav-link{% if request.url.path.startswith('/whatsapp') %} active{% endif %}" href="/whatsapp">WhatsApp</a>
             </div>

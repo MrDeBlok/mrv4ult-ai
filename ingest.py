@@ -13,8 +13,11 @@ from database import (
     insert_import_log,
     insert_message,
     insert_offer,
+    process_offer_request_matches,
+    update_import_log,
 )
 from watch_knowledge import enrich_parsed_watch
+from condition_normalizer import normalize_watch_condition
 from watch_parser import parse_message, read_message
 
 PARSER_VERSION = "watch_parser_v1"
@@ -110,7 +113,10 @@ def ingest_message(
     """Parse a message and save it with all offers to Supabase."""
     started_at = time.perf_counter()
     parsed = parse_message(text)
-    parsed_watches = [enrich_parsed_watch(watch) for watch in parsed["watches"]]
+    parsed_watches = [
+        normalize_watch_condition(enrich_parsed_watch(watch))
+        for watch in parsed["watches"]
+    ]
 
     if group_name is not None and dealer_whatsapp is not None:
         normalized_group_name = group_name.strip()
@@ -164,6 +170,8 @@ def ingest_message(
         "rows": [],
     }
 
+    new_offers_for_matching: list[dict[str, Any]] = []
+
     for line_index, watch in enumerate(parsed_watches):
         summary["watches_parsed"] += 1
         watch_row, watch_created = find_or_create_watch(
@@ -178,7 +186,7 @@ def ingest_message(
 
         active_offers = _get_active_offers(watch_row["id"])
 
-        offer_row, offer_created, matched_requests = insert_offer(
+        offer_row, offer_created = insert_offer(
             message_id=message["id"],
             watch_id=watch_row["id"],
             dealer_id=dealer_id,
@@ -194,9 +202,15 @@ def ingest_message(
         )
         if offer_created:
             summary["new_offers"] += 1
+            new_offers_for_matching.append(
+                {
+                    "line_index": line_index,
+                    "offer_id": offer_row["id"],
+                    "offer": _offer_match_payload(watch, watch_row, offer_row),
+                }
+            )
         else:
             summary["duplicate_offers"] += 1
-        summary["matched_requests"] += matched_requests
 
         comparable_usd_prices = _comparable_usd_prices(
             active_offers,
@@ -208,7 +222,8 @@ def ingest_message(
                 watch,
                 watch_created=watch_created,
                 offer_created=offer_created,
-                request_matched=matched_requests > 0,
+                offer_id=offer_row["id"],
+                request_matches=[],
                 price_intelligence=_build_price_intelligence(
                     watch.get("usd_price"),
                     comparable_usd_prices,
@@ -235,12 +250,33 @@ def ingest_message(
         watches_parsed=summary["watches_parsed"],
         new_offers=summary["new_offers"],
         duplicate_offers=summary["duplicate_offers"],
-        matched_requests=summary["matched_requests"],
+        matched_requests=0,
         processing_time=summary["processing_time"],
         processing_time_ms=summary["processing_time_ms"],
         status=import_status,
         summary=summary,
     )
+
+    matched_request_count = 0
+    for item in new_offers_for_matching:
+        matches = process_offer_request_matches(
+            import_log_id=import_log["id"],
+            offer_id=item["offer_id"],
+            offer=item["offer"],
+        )
+        matched_request_count += len(matches)
+        row = summary["rows"][item["line_index"]]
+        row["request_matches"] = _summary_request_matches(matches)
+        row["results"] = _append_request_match_result(row.get("results") or [], matches)
+
+    summary["matched_requests"] = matched_request_count
+    if matched_request_count:
+        update_import_log(
+            import_log["id"],
+            matched_requests=matched_request_count,
+            summary=summary,
+        )
+
     summary["import_log_id"] = import_log["id"]
     summary["status"] = import_status
     return summary
@@ -367,29 +403,75 @@ def _price_label_class(label: str) -> str:
     }.get(label, "secondary")
 
 
+def _offer_match_payload(
+    watch: dict[str, Any],
+    watch_row: dict[str, Any],
+    offer_row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "brand": watch.get("brand") or watch_row.get("brand"),
+        "reference": watch.get("reference") or watch_row.get("reference"),
+        "model": watch.get("model") or watch_row.get("model"),
+        "dial": watch.get("dial") or watch_row.get("dial"),
+        "nickname": watch.get("nickname"),
+        "model_alias": watch.get("model_alias"),
+        "condition": watch.get("condition") or offer_row.get("condition"),
+        "production_year": watch.get("production_year") or offer_row.get("production_year"),
+        "card_date": watch.get("card_date") or offer_row.get("card_date"),
+        "original_price": watch.get("original_price") or watch.get("price"),
+        "original_currency": watch.get("original_currency") or watch.get("currency"),
+        "price": watch.get("price"),
+        "currency": watch.get("currency"),
+        "usd_price": watch.get("usd_price") or offer_row.get("usd_price"),
+    }
+
+
+def _summary_request_matches(matches: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "client_name": match.get("client_name") or "Client",
+            "match_strength": match.get("match_strength", ""),
+            "match_reason": match.get("match_reason", ""),
+            "request_id": match.get("request_id", ""),
+        }
+        for match in matches
+    ]
+
+
+def _append_request_match_result(
+    results: list[str],
+    matches: list[dict[str, Any]],
+) -> list[str]:
+    if matches and "Request matched" not in results:
+        results = [*results, "Request matched"]
+    return results
+
+
 def _build_watch_row(
     watch: dict[str, Any],
     *,
     watch_created: bool,
     offer_created: bool,
-    request_matched: bool,
+    offer_id: str,
+    request_matches: list[dict[str, str]],
     price_intelligence: dict[str, str],
 ) -> dict[str, Any]:
     results = [
         "New watch" if watch_created else "Existing watch",
         "New offer" if offer_created else "Duplicate offer",
     ]
-    if request_matched:
+    if request_matches:
         results.append("Request matched")
 
     return {
-        "reference": _display_value(watch.get("reference")),
+        "reference": _reference_row_value(watch),
         "brand": _display_value(watch.get("brand")),
         "model": _optional_display_value(watch.get("model")),
         "nickname": watch.get("nickname"),
         "dial": _optional_display_value(watch.get("dial")),
         "bracelet": _optional_display_value(watch.get("bracelet")),
         "condition": watch.get("condition"),
+        "raw_condition": watch.get("raw_condition"),
         "card_date": watch.get("card_date"),
         "original_price": watch.get("original_price") or watch.get("price"),
         "original_currency": watch.get("original_currency") or watch.get("currency"),
@@ -405,7 +487,21 @@ def _build_watch_row(
         "price_difference": price_intelligence["price_difference"],
         "price_label": price_intelligence["label"],
         "price_label_class": price_intelligence["label_class"],
+        "offer_id": offer_id,
+        "request_matches": request_matches,
     }
+
+
+def _reference_row_value(watch: dict[str, Any]) -> str:
+    reference = watch.get("reference")
+    if reference:
+        return _display_value(str(reference))
+
+    model_alias = watch.get("model_alias")
+    if isinstance(model_alias, dict) and model_alias.get("reference_status") == "Unknown":
+        return "Unknown"
+
+    return "N/A"
 
 
 def _optional_display_value(value: str | None) -> str | None:
