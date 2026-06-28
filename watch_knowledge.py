@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from model_aliases import enrich_with_model_alias
+from watch_identifier import apply_identification_to_watch
 
 KNOWLEDGE_PATH = Path(__file__).resolve().parent / "data" / "watch_knowledge.json"
 
@@ -72,8 +73,8 @@ def lookup_reference(reference: str | None) -> dict[str, Any] | None:
 
 
 def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
-    """Attach model aliases and reference knowledge to a parsed watch."""
-    enriched = enrich_with_model_alias(dict(watch))
+    """Attach model aliases, identification, and reference knowledge to a parsed watch."""
+    enriched = apply_identification_to_watch(enrich_with_model_alias(dict(watch)))
     knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:
         enriched["knowledge"] = knowledge

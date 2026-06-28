@@ -1,0 +1,226 @@
+{
+  "john mayer": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "John Mayer",
+    "likely_references": ["116508"],
+    "confidence": 0.98,
+    "match_type": "collector"
+  },
+  "paul newman": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Paul Newman",
+    "likely_references": ["6239", "6241", "6262", "6263", "6264", "6265"],
+    "confidence": 0.85,
+    "alternatives": [{"nickname": "Big Red", "confidence": 0.35}],
+    "match_type": "collector"
+  },
+  "pepsi": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Pepsi",
+    "likely_references": ["126710BLRO", "16710", "16700"],
+    "confidence": 0.95,
+    "alternatives": [{"nickname": "Coke", "collection": "GMT-Master II", "confidence": 0.35}],
+    "match_type": "nickname"
+  },
+  "batman": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Batman",
+    "likely_references": ["126710BLNR", "116710BLNR"],
+    "confidence": 0.95,
+    "match_type": "nickname"
+  },
+  "bruce wayne": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Batman",
+    "likely_references": ["126710BLNR", "116710BLNR"],
+    "confidence": 0.9,
+    "match_type": "collector"
+  },
+  "sprite": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Sprite",
+    "likely_references": ["126720VTNR"],
+    "confidence": 0.95,
+    "match_type": "nickname"
+  },
+  "starbucks": {
+    "brand": "Rolex",
+    "collection": "GMT-Master II",
+    "model": "GMT-Master II",
+    "nickname": "Starbucks",
+    "likely_references": ["126710GRNR"],
+    "confidence": 0.92,
+    "match_type": "nickname"
+  },
+  "panda": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Panda",
+    "likely_references": ["116500LN", "126500LN"],
+    "confidence": 0.92,
+    "alternatives": [{"nickname": "Reverse Panda", "likely_references": ["116506", "126506"], "confidence": 0.45}],
+    "match_type": "nickname"
+  },
+  "reverse panda": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Reverse Panda",
+    "likely_references": ["116506", "126506"],
+    "confidence": 0.9,
+    "match_type": "nickname"
+  },
+  "hulk": {
+    "brand": "Rolex",
+    "collection": "Submariner",
+    "model": "Submariner",
+    "nickname": "Hulk",
+    "likely_references": ["116610LV"],
+    "confidence": 0.95,
+    "match_type": "nickname"
+  },
+  "smurf": {
+    "brand": "Rolex",
+    "collection": "Submariner",
+    "model": "Submariner",
+    "nickname": "Smurf",
+    "likely_references": ["116619LB"],
+    "confidence": 0.93,
+    "match_type": "nickname"
+  },
+  "cookie monster": {
+    "brand": "Rolex",
+    "collection": "Submariner",
+    "model": "Submariner",
+    "nickname": "Cookie Monster",
+    "likely_references": ["116619LB"],
+    "confidence": 0.88,
+    "match_type": "nickname"
+  },
+  "ghost": {
+    "brand": "Rolex",
+    "collection": "Milgauss",
+    "model": "Milgauss",
+    "nickname": "Ghost",
+    "likely_references": ["116400GV"],
+    "confidence": 0.9,
+    "match_type": "nickname"
+  },
+  "rainbow": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Rainbow",
+    "likely_references": ["116595RBOW", "116598RBOW"],
+    "confidence": 0.88,
+    "match_type": "nickname"
+  },
+  "platona": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Platona",
+    "likely_references": ["116506", "126506"],
+    "confidence": 0.85,
+    "match_type": "nickname"
+  },
+  "skeleton": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak",
+    "nickname": "Skeleton",
+    "likely_references": ["15407ST", "16204ST"],
+    "confidence": 0.75,
+    "alternatives": [{"brand": "Richard Mille", "confidence": 0.3}],
+    "match_type": "nickname"
+  },
+  "openworked": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak",
+    "nickname": "Openworked",
+    "likely_references": ["15407ST", "16204ST"],
+    "confidence": 0.75,
+    "match_type": "nickname"
+  },
+  "jumbo": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak Jumbo",
+    "nickname": "Jumbo",
+    "likely_references": ["15202ST", "16202ST"],
+    "confidence": 0.9,
+    "match_type": "nickname"
+  },
+  "jumbo extra thin": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak Jumbo Extra Thin",
+    "nickname": "Jumbo Extra Thin",
+    "likely_references": ["15202ST", "16202ST"],
+    "confidence": 0.92,
+    "match_type": "nickname"
+  },
+  "le mans": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "nickname": "Le Mans",
+    "likely_references": ["126528LN"],
+    "confidence": 0.88,
+    "match_type": "nickname"
+  },
+  "odysseus": {
+    "brand": "A. Lange & Söhne",
+    "collection": "Odysseus",
+    "model": "Odysseus",
+    "likely_references": ["363.179", "363.068"],
+    "confidence": 0.9,
+    "match_type": "nickname"
+  },
+  "nautilus": {
+    "brand": "Patek Philippe",
+    "collection": "Nautilus",
+    "model": "Nautilus",
+    "likely_references": ["5711/1A", "5712/1A", "5980/1A"],
+    "confidence": 0.85,
+    "match_type": "nickname"
+  },
+  "aquanaut": {
+    "brand": "Patek Philippe",
+    "collection": "Aquanaut",
+    "model": "Aquanaut",
+    "likely_references": ["5167A", "5168G"],
+    "confidence": 0.85,
+    "match_type": "nickname"
+  },
+  "cubitus": {
+    "brand": "Patek Philippe",
+    "collection": "Cubitus",
+    "model": "Cubitus",
+    "likely_references": [],
+    "confidence": 0.8,
+    "match_type": "nickname"
+  },
+  "royal oak": {
+    "brand": "Audemars Piguet",
+    "collection": "Royal Oak",
+    "model": "Royal Oak",
+    "likely_references": ["15500ST", "15400ST"],
+    "confidence": 0.8,
+    "match_type": "nickname"
+  }
+}

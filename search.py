@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 from database import contact_type_column_supported, get_client, is_business_dealer_relation
+from watch_identifier import expand_search_token
 from condition_normalizer import (
     display_condition,
     offer_condition_display,
@@ -66,7 +67,8 @@ def search_offers(
         .table("offers")
         .select(
             "watch_id, original_price, original_currency, usd_price, card_date, condition, "
-            f"watches(brand, reference, dial, bracelet), {dealer_fields}"
+            "watches(brand, reference, model, dial, bracelet), "
+            f"{dealer_fields}"
         )
         .eq("status", "active")
         .execute()
@@ -199,16 +201,19 @@ def _watch_matches_tokens(watch: Record, tokens: list[str]) -> bool:
 
 
 def _token_matches_watch(token: str, watch: Record) -> bool:
-    token_lower = token.lower()
-    expanded = {token_lower, TERM_ALIASES.get(token_lower, token_lower)}
-
-    brand_alias = BRAND_ALIASES.get(token_lower)
+    expanded = expand_search_token(token)
+    brand_alias = BRAND_ALIASES.get(token.lower())
     if brand_alias:
         expanded.add(brand_alias.lower())
+
+    term_alias = TERM_ALIASES.get(token.lower())
+    if term_alias:
+        expanded.add(term_alias.lower())
 
     fields = [
         watch.get("brand"),
         watch.get("reference"),
+        watch.get("model"),
         watch.get("dial"),
         watch.get("bracelet"),
     ]
@@ -217,9 +222,12 @@ def _token_matches_watch(token: str, watch: Record) -> bool:
         if not field:
             continue
         field_lower = field.lower()
-        field_compact = re.sub(r"\s+", "", field_lower)
+        field_compact = re.sub(r"[\s\-/]", "", field_lower)
         for term in expanded:
+            term_compact = re.sub(r"[\s\-/]", "", term)
             if term in field_lower or term in field_compact:
+                return True
+            if term_compact and (term_compact in field_compact or field_compact.startswith(term_compact)):
                 return True
     return False
 

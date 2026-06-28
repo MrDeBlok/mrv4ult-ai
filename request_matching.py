@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from condition_normalizer import normalize_wear_condition
+from watch_identifier import identify_text
 
 EXCHANGE_RATES_TO_USD: dict[str, float] = {
     "USD": 1.0,
@@ -166,6 +167,42 @@ def _model_or_alias_matches(offer: dict[str, Any], request: dict[str, Any]) -> b
     return False
 
 
+def _request_identification_text(request: dict[str, Any]) -> str:
+    parts = [request.get("alias"), request.get("model"), request.get("reference")]
+    return " ".join(str(part) for part in parts if part)
+
+
+def _offer_matches_request_identification(
+    offer: dict[str, Any],
+    request: dict[str, Any],
+) -> tuple[bool, float]:
+    """Return True when an offer reference matches a nickname-identified request."""
+    if normalize_reference(request.get("reference")):
+        return False, 0.0
+
+    text = _request_identification_text(request)
+    if not text.strip():
+        return False, 0.0
+
+    identification = identify_text(text)
+    if not identification:
+        return False, 0.0
+
+    offer_reference = normalize_reference(offer.get("reference"))
+    if not offer_reference:
+        return False, 0.0
+
+    likely_references = [
+        normalize_reference(reference)
+        for reference in identification.get("likely_references") or []
+    ]
+    likely_references = [reference for reference in likely_references if reference]
+    if offer_reference not in likely_references:
+        return False, 0.0
+
+    return True, float(identification.get("confidence") or 0.85)
+
+
 def evaluate_request_match(
     offer: dict[str, Any],
     request: dict[str, Any],
@@ -196,6 +233,19 @@ def evaluate_request_match(
 
     if not _brand_matches(offer, request):
         return None
+
+    identified, confidence = _offer_matches_request_identification(offer, request)
+    if identified:
+        label = request.get("alias") or request.get("model") or request.get("brand")
+        strength = "strong" if confidence >= 0.9 else "medium"
+        return {
+            "request_id": str(request["id"]),
+            "match_strength": strength,
+            "match_reason": (
+                f"Nickname identification match: {label} → {offer.get('reference')}"
+            ),
+        }
+
     if not _model_or_alias_matches(offer, request):
         return None
 
@@ -250,6 +300,19 @@ def _core_match_without_budget(
 
     if not _brand_matches(offer, request):
         return None
+
+    identified, confidence = _offer_matches_request_identification(offer, request)
+    if identified:
+        label = request.get("alias") or request.get("model") or request.get("brand")
+        strength = "strong" if confidence >= 0.9 else "medium"
+        return {
+            "request_id": str(request["id"]),
+            "match_strength": strength,
+            "match_reason": (
+                f"Nickname identification match: {label} → {offer.get('reference')}"
+            ),
+        }
+
     if not _model_or_alias_matches(offer, request):
         return None
 

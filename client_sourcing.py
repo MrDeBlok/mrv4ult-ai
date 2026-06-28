@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from dealer_intelligence import dealer_display_name, format_activity_timestamp
-from model_aliases import enrich_with_model_alias
+from watch_knowledge import enrich_parsed_watch
 from request_matching import evaluate_sourcing_match
 from request_profit import calculate_match_profit
 from search import _display_value, _nested_record, format_usd_price
@@ -25,7 +25,7 @@ def count_open_requests(requests: list[Record]) -> int:
 
 def build_sourcing_offer_payload(offer: Record) -> Record:
     """Build a flat offer payload for the matching engine from a database row."""
-    watch = enrich_with_model_alias(_nested_record(offer.get("watches")))
+    watch = enrich_parsed_watch(_nested_record(offer.get("watches")))
     return {
         "brand": watch.get("brand"),
         "reference": watch.get("reference"),
@@ -33,6 +33,7 @@ def build_sourcing_offer_payload(offer: Record) -> Record:
         "dial": watch.get("dial"),
         "nickname": watch.get("nickname"),
         "model_alias": watch.get("model_alias"),
+        "watch_identification": watch.get("watch_identification"),
         "condition": offer.get("condition"),
         "production_year": offer.get("production_year"),
         "card_date": offer.get("card_date"),

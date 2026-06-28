@@ -23,6 +23,12 @@ from activity_feed import (
     filter_activity_feed_imports,
     filter_ignored_import_logs,
 )
+from parser_review import (
+    PARSER_REVIEW_FILTERS,
+    build_parser_review_row,
+    filter_parser_review_by_issue,
+    parser_review_counts,
+)
 from import_status import (
     format_import_status,
     import_status_class,
@@ -62,19 +68,27 @@ from database import (
     list_requests_for_client,
     mark_all_notifications_read,
     mark_notification_read,
+    mark_import_parser_issue_ignored,
+    mark_import_parser_reviewed,
     delete_all_notifications,
     delete_notification,
     delete_read_notifications,
+    create_brand_alias,
     update_client_name,
     update_client_profile,
     update_dealer_contact_type,
     update_request_status,
     list_pending_unknown_brands,
+    list_pending_unknown_nicknames,
     mark_unknown_brand_ignored,
+    mark_unknown_nickname_ignored,
     resolve_unknown_brand_with_alias,
+    resolve_unknown_nickname_with_alias,
     watch_knowledge_supported,
+    watch_identification_supported,
 )
 from brand_registry import invalidate_brand_registry_cache, list_canonical_brands
+from watch_identifier import invalidate_identifier_cache
 from evolution_client import (
     EvolutionAPIError,
     create_instance,
@@ -108,7 +122,7 @@ from dealer_intelligence import (
     flatten_offer_intelligence_rows,
     format_dealer_stats,
 )
-from knowledge_intelligence import build_unknown_brand_rows
+from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
 from contact_classification import (
     CONTACT_TYPES,
     CONTACT_TYPE_CLIENT,
@@ -1137,6 +1151,82 @@ async def activity_ignored(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/parser-review", response_class=HTMLResponse, name="parser_review")
+async def parser_review_page(request: Request, filter: str = "all") -> HTMLResponse:
+    filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
+    import_logs = _business_import_logs(list_import_logs())
+    counts = parser_review_counts(import_logs)
+    filtered_logs = filter_parser_review_by_issue(import_logs, filter_key)
+    rows: list[dict[str, Any]] = []
+    for import_log in filtered_logs:
+        message = get_message_by_id(import_log["message_id"])
+        rows.append(
+            build_parser_review_row(
+                import_log,
+                message,
+                format_timestamp=format_timestamp,
+            )
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "parser_review.html",
+        {
+            "rows": rows,
+            "counts": counts,
+            "active_filter": filter_key,
+            "canonical_brands": list_canonical_brands(),
+            "knowledge_enabled": watch_knowledge_supported(),
+            "reviewed": request.query_params.get("reviewed") == "1",
+            "ignored": request.query_params.get("ignored") == "1",
+            "alias_saved": request.query_params.get("alias_saved") == "1",
+        },
+    )
+
+
+@app.post("/parser-review/{import_id}/reviewed")
+async def parser_review_mark_reviewed(import_id: str) -> RedirectResponse:
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    mark_import_parser_reviewed(import_id)
+    return RedirectResponse(url="/parser-review?reviewed=1", status_code=303)
+
+
+@app.post("/parser-review/{import_id}/ignore")
+async def parser_review_ignore_issue(import_id: str) -> RedirectResponse:
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    mark_import_parser_issue_ignored(import_id)
+    return RedirectResponse(url="/parser-review?ignored=1", status_code=303)
+
+
+@app.post("/parser-review/{import_id}/add-brand-alias")
+async def parser_review_add_brand_alias(
+    import_id: str,
+    brand_name: str = Form(...),
+    alias_text: str = Form(...),
+) -> RedirectResponse:
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not brand_name.strip():
+        raise HTTPException(status_code=400, detail="Brand name is required")
+    if not alias_text.strip():
+        raise HTTPException(status_code=400, detail="Alias text is required")
+
+    create_brand_alias(
+        alias_key=alias_text.strip(),
+        brand_name=brand_name.strip(),
+        source="parser_review",
+    )
+    invalidate_brand_registry_cache()
+    return RedirectResponse(url="/parser-review?alias_saved=1", status_code=303)
+
+
 @app.get("/activity/{import_id}", response_class=HTMLResponse, name="activity_detail")
 async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
     import_log = get_import_log(import_id)
@@ -1514,6 +1604,66 @@ async def unknown_brand_add_alias(
 async def unknown_brand_ignore(unknown_brand_id: str) -> RedirectResponse:
     mark_unknown_brand_ignored(unknown_brand_id)
     return RedirectResponse(url="/knowledge/unknown-brands?ignored=1", status_code=303)
+
+
+@app.get("/knowledge/unknown-nicknames", response_class=HTMLResponse, name="unknown_nicknames_list")
+async def unknown_nicknames_list(request: Request) -> HTMLResponse:
+    rows = list_pending_unknown_nicknames()
+    dealer_ids = sorted({str(row["dealer_id"]) for row in rows if row.get("dealer_id")})
+    dealers_by_id = {
+        str(dealer["id"]): dealer
+        for dealer in (
+            get_dealer_by_id(dealer_id)
+            for dealer_id in dealer_ids
+        )
+        if dealer
+    }
+    return templates.TemplateResponse(
+        request,
+        "knowledge_unknown_nicknames.html",
+        {
+            "unknown_nicknames": build_unknown_nickname_rows(rows, dealers_by_id=dealers_by_id),
+            "canonical_brands": list_canonical_brands(),
+            "identification_enabled": watch_identification_supported(),
+            "saved": request.query_params.get("saved") == "1",
+            "ignored": request.query_params.get("ignored") == "1",
+        },
+    )
+
+
+@app.post("/knowledge/unknown-nicknames/{unknown_nickname_id}/map")
+async def unknown_nickname_map(
+    unknown_nickname_id: str,
+    brand_name: str = Form(...),
+    collection: str = Form(""),
+    model_name: str = Form(""),
+    nickname: str = Form(""),
+    likely_references: str = Form(""),
+) -> RedirectResponse:
+    if not brand_name.strip():
+        raise HTTPException(status_code=400, detail="Brand name is required")
+
+    references = [
+        reference.strip().upper()
+        for reference in likely_references.split(",")
+        if reference.strip()
+    ]
+    resolve_unknown_nickname_with_alias(
+        unknown_nickname_id=unknown_nickname_id,
+        brand_name=brand_name.strip(),
+        collection=collection.strip() or None,
+        model_name=model_name.strip() or None,
+        nickname=nickname.strip() or None,
+        likely_references=references,
+    )
+    invalidate_identifier_cache()
+    return RedirectResponse(url="/knowledge/unknown-nicknames?saved=1", status_code=303)
+
+
+@app.post("/knowledge/unknown-nicknames/{unknown_nickname_id}/ignore")
+async def unknown_nickname_ignore(unknown_nickname_id: str) -> RedirectResponse:
+    mark_unknown_nickname_ignored(unknown_nickname_id)
+    return RedirectResponse(url="/knowledge/unknown-nicknames?ignored=1", status_code=303)
 
 
 @app.post("/clients/{client_id}/edit")
