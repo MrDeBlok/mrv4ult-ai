@@ -219,6 +219,11 @@ async def require_authenticated_user(request: Request, call_next):
 app.add_middleware(SessionMiddleware, secret_key=session_secret_key())
 
 
+@app.get("/health")
+async def health_check() -> JSONResponse:
+    return JSONResponse({"status": "ok", "app": "MRV4ULT AI"})
+
+
 @app.get("/login", response_class=HTMLResponse, name="login_page")
 async def login_page(request: Request, error: str = "") -> HTMLResponse:
     if get_current_user(request) is not None:

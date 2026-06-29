@@ -14,7 +14,7 @@ SESSION_USER_ID_KEY = "user_id"
 USER_ROLE_ADMIN = "admin"
 USER_ROLE_TRADER = "trader"
 LOGIN_PATH = "/login"
-PUBLIC_PATH_PREFIXES = ("/login", "/static", "/webhook/")
+PUBLIC_PATH_PREFIXES = ("/login", "/static", "/webhook/", "/health")
 
 
 def session_secret_key() -> str:
@@ -22,7 +22,7 @@ def session_secret_key() -> str:
 
 
 def is_public_path(path: str) -> bool:
-    if path == LOGIN_PATH or path.startswith("/static/"):
+    if path in {LOGIN_PATH, "/health"} or path.startswith("/static/"):
         return True
     return path.startswith("/webhook/")
 
