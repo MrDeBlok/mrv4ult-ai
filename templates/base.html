@@ -14,13 +14,28 @@
             <div class="navbar-nav flex-row gap-3 ms-auto">
                 <a class="nav-link{% if request.url.path == '/dashboard' %} active{% endif %}" href="/dashboard">Dashboard</a>
                 <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/">Search</a>
-                <a class="nav-link{% if request.url.path == '/import' %} active{% endif %}" href="/import">Import</a>
+                <a class="nav-link{% if request.url.path.startswith('/activity') %} active{% endif %}" href="/activity">Activity</a>
+                {% set user = current_user(request) %}
+                {% if user and can_view_page(user, '/import') %}
+                <a class="nav-link{% if request.url.path.startswith('/import') %} active{% endif %}" href="/import">Import</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/requests') %}
                 <a class="nav-link{% if request.url.path.startswith('/requests') %} active{% endif %}" href="/requests">Requests</a>
+                {% endif %}
                 <a class="nav-link{% if request.url.path.startswith('/market-requests') %} active{% endif %}" href="/market-requests">Market Requests</a>
+                {% if user and can_view_page(user, '/dealers') %}
                 <a class="nav-link{% if request.url.path.startswith('/dealers') %} active{% endif %}" href="/dealers">Dealers</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/clients') %}
                 <a class="nav-link{% if request.url.path.startswith('/clients') %} active{% endif %}" href="/clients">Clients</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/knowledge/unknown-brands') %}
                 <a class="nav-link{% if request.url.path.startswith('/knowledge') %} active{% endif %}" href="/knowledge/unknown-brands">Knowledge</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/contacts') %}
                 <a class="nav-link{% if request.url.path.startswith('/contacts') %} active{% endif %}" href="/contacts">People</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/notifications') %}
                 <a class="nav-link position-relative{% if request.url.path.startswith('/notifications') %} active{% endif %}" href="/notifications">
                     Notifications
                     {% set notification_count = unread_notification_count() %}
@@ -28,13 +43,16 @@
                     <span class="badge rounded-pill text-bg-danger notification-nav-badge">{{ notification_count }}</span>
                     {% endif %}
                 </a>
-                <a class="nav-link{% if request.url.path.startswith('/activity') %} active{% endif %}" href="/activity">Activity</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/parser-review') %}
                 <a class="nav-link{% if request.url.path.startswith('/parser-review') %} active{% endif %}" href="/parser-review">Parser review</a>
+                {% endif %}
+                {% if user and can_view_page(user, '/whatsapp') %}
                 <a class="nav-link{% if request.url.path.startswith('/whatsapp') %} active{% endif %}" href="/whatsapp">WhatsApp</a>
-                {% set user = current_user(request) %}
+                {% endif %}
                 {% if user %}
-                {% if is_admin(user) %}
-                <a class="nav-link{% if request.url.path.startswith('/users') %} active{% endif %}" href="/users">Users</a>
+                {% if can_manage_team(user) %}
+                <a class="nav-link{% if request.url.path.startswith('/settings/team') %} active{% endif %}" href="/settings/team">Settings · Team</a>
                 {% endif %}
                 <span class="nav-link text-light-emphasis">{{ user.name }}</span>
                 <form method="post" action="/logout" class="d-inline">

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from auth import is_admin
+from permissions import is_admin
 from contact_classification import (
     CONTACT_TYPE_CLIENT,
     CONTACT_TYPE_DEALER,

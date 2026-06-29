@@ -8,13 +8,18 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from permissions import is_active_user, is_admin
+
 Record = dict[str, Any]
 
 SESSION_USER_ID_KEY = "user_id"
-USER_ROLE_ADMIN = "admin"
-USER_ROLE_TRADER = "trader"
 LOGIN_PATH = "/login"
 PUBLIC_PATH_PREFIXES = ("/login", "/static", "/webhook/", "/health")
+
+# Backward-compatible re-exports for existing imports.
+USER_ROLE_ADMIN = "admin"
+USER_ROLE_TRADER = "trader"
+USER_ROLE_VIEWER = "viewer"
 
 
 def session_secret_key() -> str:
@@ -42,7 +47,7 @@ def get_current_user(request: Request) -> Record | None:
         return None
 
     user = get_user_by_id(str(user_id))
-    if user is None:
+    if user is None or not is_active_user(user):
         request.session.pop(SESSION_USER_ID_KEY, None)
     return user
 
@@ -59,16 +64,15 @@ def login_user(request: Request, user: Record) -> None:
     if "session" not in request.scope:
         return
     request.session[SESSION_USER_ID_KEY] = user["id"]
+    from database import record_user_login
+
+    record_user_login(str(user["id"]))
 
 
 def logout_user(request: Request) -> None:
     if "session" not in request.scope:
         return
     request.session.pop(SESSION_USER_ID_KEY, None)
-
-
-def is_admin(user: Record | None) -> bool:
-    return bool(user and user.get("role") == USER_ROLE_ADMIN)
 
 
 def authenticate_email(email: str) -> Record | None:
@@ -80,7 +84,10 @@ def authenticate_email(email: str) -> Record | None:
     normalized = email.strip().lower()
     if not normalized:
         return None
-    return get_user_by_email(normalized)
+    user = get_user_by_email(normalized)
+    if user is None or not is_active_user(user):
+        return None
+    return user
 
 
 def redirect_to_login() -> RedirectResponse:

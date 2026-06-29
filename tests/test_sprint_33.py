@@ -186,7 +186,7 @@ class TestSprint33Routes:
         mock_list_users.return_value = [ADMIN_USER, TRADER_ONE]
         client = TestClient(app)
 
-        admin_response = client.get("/users")
+        admin_response = client.get("/settings/team")
         assert admin_response.status_code == 200
         assert "Admin User" in admin_response.text
 
@@ -198,7 +198,7 @@ class TestSprint33Routes:
         _mock_user: MagicMock,
     ) -> None:
         client = TestClient(app)
-        response = client.get("/users")
+        response = client.get("/settings/team")
 
         assert response.status_code == 403
         mock_list_users.assert_not_called()

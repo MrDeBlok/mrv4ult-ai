@@ -11,7 +11,9 @@ ADMIN_USER = {
     "name": "Admin User",
     "email": "admin@mrvault.local",
     "role": "admin",
+    "status": "active",
     "created_at": "2026-06-27T12:00:00+00:00",
+    "last_login_at": None,
 }
 
 TRADER_ONE = {
@@ -19,7 +21,9 @@ TRADER_ONE = {
     "name": "Trader One",
     "email": "trader1@mrvault.local",
     "role": "trader",
+    "status": "active",
     "created_at": "2026-06-27T12:00:00+00:00",
+    "last_login_at": None,
 }
 
 TRADER_TWO = {
@@ -27,7 +31,19 @@ TRADER_TWO = {
     "name": "Trader Two",
     "email": "trader2@mrvault.local",
     "role": "trader",
+    "status": "active",
     "created_at": "2026-06-27T12:00:00+00:00",
+    "last_login_at": None,
+}
+
+VIEWER_USER = {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "name": "Viewer User",
+    "email": "viewer@mrvault.local",
+    "role": "viewer",
+    "status": "active",
+    "created_at": "2026-06-27T12:00:00+00:00",
+    "last_login_at": None,
 }
 
 

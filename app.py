@@ -73,6 +73,10 @@ from database import (
     list_requests,
     list_requests_for_client,
     list_users,
+    create_user,
+    update_user,
+    set_user_status,
+    reset_user_password,
     mark_all_notifications_read,
     mark_notification_read,
     mark_import_parser_issue_ignored,
@@ -154,10 +158,26 @@ from contact_classification import (
     should_redact_import_sender,
 )
 from notifications import build_notification_display, get_unread_notification_count
+from permissions import (
+    USER_ROLE_ADMIN,
+    USER_ROLE_TRADER,
+    USER_ROLE_VIEWER,
+    USER_STATUS_ACTIVE,
+    USER_STATUS_DISABLED,
+    can_manage_team,
+    can_view_page,
+    can_write,
+    is_admin,
+    is_viewer,
+)
+from team_management import (
+    build_team_user_rows,
+    validate_new_user,
+    validate_user_update,
+)
 from auth import (
     authenticate_email,
     get_current_user,
-    is_admin,
     is_public_path,
     login_user,
     logout_user,
@@ -203,8 +223,44 @@ app = FastAPI(title="MRV4ULT AI Dashboard", lifespan=app_lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["unread_notification_count"] = get_unread_notification_count
-templates.env.globals["current_user"] = get_current_user
+
+
+def _template_current_user(request: Request):
+    return get_current_user(request)
+
+
+templates.env.globals["current_user"] = _template_current_user
 templates.env.globals["is_admin"] = is_admin
+templates.env.globals["is_viewer"] = is_viewer
+templates.env.globals["can_manage_team"] = can_manage_team
+templates.env.globals["can_view_page"] = can_view_page
+templates.env.globals["can_write"] = can_write
+
+
+def _forbidden_response(detail: str) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": detail})
+
+
+@app.middleware("http")
+async def enforce_role_permissions(request: Request, call_next):
+    if is_public_path(request.url.path):
+        return await call_next(request)
+
+    user = get_current_user(request)
+    if user is None:
+        return await call_next(request)
+
+    path = request.url.path
+    if request.method == "GET" and not can_view_page(user, path):
+        return _forbidden_response("Access denied")
+
+    if request.method == "POST":
+        if not can_write(user, path, method="POST"):
+            return _forbidden_response("Read-only access")
+        if path.startswith("/settings/team") and not can_manage_team(user):
+            return _forbidden_response("Admin access required")
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -251,14 +307,97 @@ async def logout_submit(request: Request) -> RedirectResponse:
 
 
 @app.get("/users", response_class=HTMLResponse, name="users_page")
-async def users_page(request: Request) -> HTMLResponse:
+async def users_page(request: Request) -> RedirectResponse:
     user = get_current_user(request)
-    if user is None or not is_admin(user):
+    if not can_manage_team(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return RedirectResponse(url="/settings/team", status_code=303)
+
+
+@app.get("/settings/team", response_class=HTMLResponse, name="settings_team")
+async def settings_team_page(
+    request: Request,
+    created: str = "",
+    updated: str = "",
+    status_changed: str = "",
+    password_reset: str = "",
+    error: str = "",
+) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_manage_team(user):
         raise HTTPException(status_code=403, detail="Admin access required")
     return templates.TemplateResponse(
         request,
-        "users.html",
-        {"users": list_users()},
+        "settings_team.html",
+        {
+            "users": build_team_user_rows(list_users()),
+            "roles": [
+                {"value": USER_ROLE_ADMIN, "label": "Admin"},
+                {"value": USER_ROLE_TRADER, "label": "Trader"},
+                {"value": USER_ROLE_VIEWER, "label": "Viewer"},
+            ],
+            "flash_created": created == "1",
+            "flash_updated": updated == "1",
+            "flash_status_changed": status_changed == "1",
+            "flash_password_reset": password_reset,
+            "error": error.strip() or None,
+        },
+    )
+
+
+@app.post("/settings/team/create")
+async def settings_team_create(
+    request: Request,
+    name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form(USER_ROLE_TRADER),
+) -> RedirectResponse:
+    validation_error = validate_new_user(name, email, role)
+    if validation_error:
+        return RedirectResponse(
+            url=f"/settings/team?error={quote(validation_error)}",
+            status_code=303,
+        )
+    create_user(name=name, email=email, role=role)
+    return RedirectResponse(url="/settings/team?created=1", status_code=303)
+
+
+@app.post("/settings/team/{user_id}/update")
+async def settings_team_update(
+    user_id: str,
+    name: str = Form(...),
+    role: str = Form(...),
+) -> RedirectResponse:
+    validation_error = validate_user_update(name, role)
+    if validation_error:
+        return RedirectResponse(
+            url=f"/settings/team?error={quote(validation_error)}",
+            status_code=303,
+        )
+    update_user(user_id, name=name, role=role)
+    return RedirectResponse(url="/settings/team?updated=1", status_code=303)
+
+
+@app.post("/settings/team/{user_id}/toggle-status")
+async def settings_team_toggle_status(
+    user_id: str,
+    action: str = Form(...),
+) -> RedirectResponse:
+    if action == "disable":
+        set_user_status(user_id, USER_STATUS_DISABLED)
+    elif action == "enable":
+        set_user_status(user_id, USER_STATUS_ACTIVE)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid status action")
+    return RedirectResponse(url="/settings/team?status_changed=1", status_code=303)
+
+
+@app.post("/settings/team/{user_id}/reset-password")
+async def settings_team_reset_password(user_id: str) -> RedirectResponse:
+    message = reset_user_password(user_id)
+    return RedirectResponse(
+        url=f"/settings/team?password_reset={quote(message)}",
+        status_code=303,
     )
 
 

@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from timezone_utils import ensure_utc_datetime
+from permissions import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, normalize_role, normalize_status
 from typing import Any
 
 from dotenv import load_dotenv
@@ -1136,11 +1137,18 @@ def list_users() -> list[Record]:
     response = (
         get_client()
         .table("users")
-        .select("id, name, email, role, created_at")
+        .select("id, name, email, role, status, created_at, last_login_at")
         .order("name")
         .execute()
     )
-    return response.data or []
+    return [_normalize_user_record(row) for row in response.data or []]
+
+
+def _normalize_user_record(row: Record) -> Record:
+    normalized = dict(row)
+    normalized["role"] = normalize_role(normalized.get("role"))
+    normalized["status"] = normalize_status(normalized.get("status"))
+    return normalized
 
 
 def get_user_by_id(user_id: str) -> Record | None:
@@ -1150,14 +1158,14 @@ def get_user_by_id(user_id: str) -> Record | None:
     response = (
         get_client()
         .table("users")
-        .select("id, name, email, role, created_at")
+        .select("id, name, email, role, status, created_at, last_login_at")
         .eq("id", user_id)
         .limit(1)
         .execute()
     )
     if not response.data:
         return None
-    return response.data[0]
+    return _normalize_user_record(response.data[0])
 
 
 def get_user_by_email(email: str) -> Record | None:
@@ -1167,14 +1175,83 @@ def get_user_by_email(email: str) -> Record | None:
     response = (
         get_client()
         .table("users")
-        .select("id, name, email, role, created_at")
+        .select("id, name, email, role, status, created_at, last_login_at")
         .eq("email", email.strip().lower())
         .limit(1)
         .execute()
     )
     if not response.data:
         return None
-    return response.data[0]
+    return _normalize_user_record(response.data[0])
+
+
+def create_user(*, name: str, email: str, role: str) -> Record:
+    """Create a dashboard user invitation/account."""
+    payload = {
+        "name": name.strip(),
+        "email": email.strip().lower(),
+        "role": normalize_role(role),
+        "status": USER_STATUS_ACTIVE,
+    }
+    response = get_client().table("users").insert(payload).execute()
+    if not response.data:
+        raise RuntimeError("Failed to create user.")
+    return _normalize_user_record(response.data[0])
+
+
+def update_user(
+    user_id: str,
+    *,
+    name: str,
+    role: str,
+) -> Record:
+    """Update a user's name and role."""
+    payload = {
+        "name": name.strip(),
+        "role": normalize_role(role),
+    }
+    response = (
+        get_client()
+        .table("users")
+        .update(payload)
+        .eq("id", user_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError("User not found.")
+    return _normalize_user_record(response.data[0])
+
+
+def set_user_status(user_id: str, status: str) -> Record:
+    """Enable or disable a dashboard user."""
+    normalized_status = normalize_status(status)
+    if normalized_status not in {USER_STATUS_ACTIVE, USER_STATUS_DISABLED}:
+        raise ValueError("Invalid user status.")
+    response = (
+        get_client()
+        .table("users")
+        .update({"status": normalized_status})
+        .eq("id", user_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError("User not found.")
+    return _normalize_user_record(response.data[0])
+
+
+def record_user_login(user_id: str) -> None:
+    """Persist the latest login timestamp for one user."""
+    if not users_table_supported():
+        return
+    timestamp = datetime.now(timezone.utc).isoformat()
+    get_client().table("users").update({"last_login_at": timestamp}).eq("id", user_id).execute()
+
+
+def reset_user_password(user_id: str) -> str:
+    """Placeholder until password auth is enabled."""
+    if get_user_by_id(user_id) is None:
+        raise RuntimeError("User not found.")
+    return "Password reset is not enabled during the pilot. Users sign in with email only."
 
 
 def list_contacts_for_import_lookup() -> list[Record]:
