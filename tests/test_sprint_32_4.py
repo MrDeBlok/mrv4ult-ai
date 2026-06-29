@@ -68,6 +68,10 @@ class TestNoiseClassification:
         summary = ingest_message("14k", group_name="Chat", dealer_whatsapp="+31612345678")
 
         assert summary["status"] == "no_watch_detected"
+        assert summary["saved"] is False
+        assert summary["import_log_id"] is None
+        mock_insert_message.assert_not_called()
+        mock_insert_import_log.assert_not_called()
         mock_insert_offer.assert_not_called()
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])

@@ -10,8 +10,9 @@
 <body>
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <a class="navbar-brand fw-semibold" href="/">MRV4ULT AI</a>
+            <a class="navbar-brand fw-semibold" href="/dashboard">MRV4ULT AI</a>
             <div class="navbar-nav flex-row gap-3 ms-auto">
+                <a class="nav-link{% if request.url.path == '/dashboard' %} active{% endif %}" href="/dashboard">Dashboard</a>
                 <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/">Search</a>
                 <a class="nav-link{% if request.url.path == '/import' %} active{% endif %}" href="/import">Import</a>
                 <a class="nav-link{% if request.url.path.startswith('/requests') %} active{% endif %}" href="/requests">Requests</a>

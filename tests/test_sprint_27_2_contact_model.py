@@ -329,7 +329,9 @@ class TestIngestContactRules:
         )
 
         mock_find_dealer.assert_not_called()
-        mock_placeholder.assert_called_once()
+        mock_placeholder.assert_not_called()
+        mock_insert_message.assert_not_called()
+        mock_insert_import_log.assert_not_called()
 
     @patch("ingest._get_active_offers", return_value=[])
     @patch("ingest.record_import_notifications")

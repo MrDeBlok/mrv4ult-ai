@@ -32,9 +32,11 @@ from parser_review import (
     parser_review_counts,
 )
 from import_status import (
+    filter_discarded_import_logs,
     format_import_status,
     import_status_class,
     import_status_reason,
+    is_discarded_no_watch_import,
     normalize_import_status,
 )
 from database import (
@@ -125,6 +127,7 @@ from dealer_intelligence import (
     flatten_offer_intelligence_rows,
     format_dealer_stats,
 )
+from dashboard import load_dashboard_cards
 from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
 from contact_classification import (
     CONTACT_TYPES,
@@ -207,7 +210,7 @@ app.add_middleware(SessionMiddleware, secret_key=session_secret_key())
 @app.get("/login", response_class=HTMLResponse, name="login_page")
 async def login_page(request: Request, error: str = "") -> HTMLResponse:
     if get_current_user(request) is not None:
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/dashboard", status_code=303)
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -221,7 +224,7 @@ async def login_submit(request: Request, email: str = Form(...)) -> RedirectResp
     if user is None:
         return RedirectResponse(url="/login?error=unknown-email", status_code=303)
     login_user(request, user)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 
 @app.post("/logout")
@@ -239,6 +242,19 @@ async def users_page(request: Request) -> HTMLResponse:
         request,
         "users.html",
         {"users": list_users()},
+    )
+
+
+@app.get("/dashboard", response_class=HTMLResponse, name="dashboard")
+async def dashboard_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "dashboard_user": user,
+            "cards": load_dashboard_cards(user),
+        },
     )
 
 
@@ -1179,7 +1195,8 @@ async def requests_close(request_id: str) -> RedirectResponse:
 
 
 def _visible_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
-    return filter_imports_for_user(list_import_logs(), user)
+    logs = filter_imports_for_user(list_import_logs(), user)
+    return filter_discarded_import_logs(logs)
 
 
 def _parser_review_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1340,7 +1357,11 @@ async def parser_review_add_brand_alias(
 async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
     user = get_current_user(request)
     import_log = get_import_log(import_id)
-    if import_log is None or not _can_access_import_log(user, import_log):
+    if (
+        import_log is None
+        or not _can_access_import_log(user, import_log)
+        or is_discarded_no_watch_import(import_log)
+    ):
         raise HTTPException(status_code=404, detail="Import not found")
 
     message = get_message_by_id(import_log["message_id"])

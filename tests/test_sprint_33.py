@@ -172,9 +172,9 @@ class TestSprint33Routes:
 
         login = client.post("/login", data={"email": TRADER_ONE["email"]}, follow_redirects=False)
         assert login.status_code == 303
-        assert login.headers["location"] == "/"
+        assert login.headers["location"] == "/dashboard"
 
-        home = client.get("/")
+        home = client.get("/dashboard")
         assert home.status_code == 200
 
         logout = client.post("/logout", follow_redirects=False)

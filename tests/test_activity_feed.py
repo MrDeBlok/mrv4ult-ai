@@ -95,7 +95,7 @@ class TestActivityFeedFilters:
 
         filtered = filter_ignored_activity_imports(logs)
 
-        assert [row["id"] for row in filtered] == ["3", "4", "5", "6", "7"]
+        assert [row["id"] for row in filtered] == ["5", "6", "7"]
 
     def test_reviewed_feed_includes_parser_reviewed_imports(self) -> None:
         logs = [
@@ -154,7 +154,7 @@ class TestActivityFeedCounts:
         assert activity_feed_counts(logs) == {
             "offers": 2,
             "needs_review": 1,
-            "ignored": 2,
+            "ignored": 1,
         }
 
 

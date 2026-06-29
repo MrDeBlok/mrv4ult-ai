@@ -116,6 +116,15 @@ body {
     font-size: 1.25rem;
 }
 
+.dashboard-summary-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dashboard-card-link:hover .dashboard-summary-card {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+}
+
 .request-profit-highlight {
     background: #f8f9fa;
     border: 1px solid #dee2e6;

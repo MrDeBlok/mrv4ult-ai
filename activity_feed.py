@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_status import import_status_reason, normalize_import_status
+from import_status import import_status_reason, is_discarded_no_watch_import, normalize_import_status
 from contact_classification import format_import_sender_label, should_redact_import_sender
 
 ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
-IGNORED_ACTIVITY_STATUSES = frozenset({"no_watch_detected", "noise", "request_intent"})
+IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent"})
+
+
+def filter_discarded_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop legacy no-watch imports that should never appear in Activity."""
+    return [
+        import_log
+        for import_log in import_logs
+        if not is_discarded_no_watch_import(import_log)
+    ]
 
 
 def message_preview(text: str | None, *, max_length: int = 80) -> str:
@@ -61,6 +70,7 @@ def is_active_needs_review(import_log: dict[str, Any]) -> bool:
 
 def filter_active_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return imports for the default Activity tab."""
+    import_logs = filter_discarded_activity_imports(import_logs)
     return [
         import_log
         for import_log in import_logs
@@ -70,11 +80,13 @@ def filter_active_activity_imports(import_logs: list[dict[str, Any]]) -> list[di
 
 def filter_reviewed_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return imports marked as reviewed after parser review."""
+    import_logs = filter_discarded_activity_imports(import_logs)
     return [import_log for import_log in import_logs if is_parser_reviewed(import_log)]
 
 
 def filter_ignored_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return dismissed parser issues and non-offer imports."""
+    import_logs = filter_discarded_activity_imports(import_logs)
     return [
         import_log
         for import_log in import_logs
@@ -85,11 +97,12 @@ def filter_ignored_activity_imports(import_logs: list[dict[str, Any]]) -> list[d
 
 def filter_all_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the full business-visible audit trail."""
-    return list(import_logs)
+    return filter_discarded_activity_imports(import_logs)
 
 
 def activity_feed_counts(import_logs: list[dict[str, Any]]) -> dict[str, int]:
     """Count offers, needs-review, and ignored imports."""
+    import_logs = filter_discarded_activity_imports(import_logs)
     return {
         "offers": sum(1 for import_log in import_logs if is_active_success_import(import_log)),
         "needs_review": sum(1 for import_log in import_logs if is_active_needs_review(import_log)),

@@ -66,3 +66,13 @@ def import_status_reason(import_log: dict[str, Any]) -> str:
     if watches_parsed:
         return f"Successfully parsed {watches_parsed} watch offer(s)."
     return "Import completed."
+
+
+def is_discarded_no_watch_import(import_log: dict[str, Any]) -> bool:
+    """Return True when an import should never appear in Activity or import history."""
+    return normalize_import_status(import_log) == "no_watch_detected"
+
+
+def filter_discarded_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove discarded no-watch imports from app-visible import history."""
+    return [import_log for import_log in import_logs if not is_discarded_no_watch_import(import_log)]

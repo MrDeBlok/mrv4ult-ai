@@ -143,6 +143,50 @@ def get_import_placeholder_dealer_id() -> tuple[str, str]:
     )
 
 
+def _build_discarded_ingest_summary(
+    *,
+    started_at: float,
+    group_name: str | None,
+    dealer_whatsapp: str | None,
+    dealer_alias: str | None,
+    parsed: dict[str, Any],
+    status_reason: str,
+) -> IngestSummary:
+    """Return a summary for private/non-watch messages that are not persisted."""
+    elapsed = time.perf_counter() - started_at
+    if group_name is not None and dealer_whatsapp is not None:
+        summary_group = group_name.strip()
+        summary_whatsapp = _normalize_whatsapp_number(dealer_whatsapp)
+        summary_alias = dealer_alias.strip() if dealer_alias else None
+        if summary_alias == "":
+            summary_alias = None
+    else:
+        summary_group = DEFAULT_GROUP_NAME
+        summary_whatsapp = DEFAULT_DEALER_WHATSAPP_ID
+        summary_alias = DEFAULT_DEALER_NAME
+
+    return {
+        "messages_imported": 0,
+        "watches_parsed": 0,
+        "new_watches": 0,
+        "new_offers": 0,
+        "duplicate_offers": 0,
+        "matched_requests": 0,
+        "processing_time": _format_processing_time(elapsed),
+        "processing_time_ms": int(elapsed * 1000),
+        "group": summary_group,
+        "dealer_whatsapp": "",
+        "dealer_alias": None,
+        "rows": [],
+        "status_reason": status_reason,
+        "parsed_watches": list(parsed.get("watches") or []),
+        "message_type": parsed.get("message_type") or "unknown",
+        "import_log_id": None,
+        "status": "no_watch_detected",
+        "saved": False,
+    }
+
+
 def ingest_message(
     text: str,
     *,
@@ -161,6 +205,22 @@ def ingest_message(
     ]
     offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
     has_valid_offers = has_valid_parsed_offers(len(offer_watches))
+    parse_status = _parse_status(parsed)
+    preliminary_status, preliminary_reason = _import_status(
+        {"watches_parsed": len(offer_watches), "duplicate_offers": 0},
+        parse_status,
+        offer_watches,
+        classification=import_classification,
+    )
+    if preliminary_status == "no_watch_detected":
+        return _build_discarded_ingest_summary(
+            started_at=started_at,
+            group_name=group_name,
+            dealer_whatsapp=dealer_whatsapp,
+            dealer_alias=dealer_alias,
+            parsed=parsed,
+            status_reason=preliminary_reason,
+        )
 
     if group_name is not None and dealer_whatsapp is not None:
         normalized_group_name = group_name.strip()
@@ -196,8 +256,6 @@ def ingest_message(
 
     now = datetime.now(timezone.utc)
     message_received_at = received_at or now
-
-    parse_status = _parse_status(parsed)
 
     message = insert_message(
         group_id=group_id,
