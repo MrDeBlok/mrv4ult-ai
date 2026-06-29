@@ -64,11 +64,8 @@
                                 <option value="{{ brand }}">{{ brand }}</option>
                                 {% endfor %}
                             </select>
-                            <input class="form-control form-control-sm" type="text" name="collection" placeholder="Collection (optional)">
-                            <input class="form-control form-control-sm" type="text" name="model_name" placeholder="Model (optional)">
-                            <input class="form-control form-control-sm" type="text" name="nickname" placeholder="Nickname (optional)" value="{{ row.detected_text }}">
-                            <input class="form-control form-control-sm" type="text" name="likely_references" placeholder="Likely references, comma-separated">
-                            <button type="submit" class="btn btn-sm btn-primary">Map nickname</button>
+                            <input class="form-control form-control-sm" type="text" name="reference" placeholder="Reference" required>
+                            <button type="submit" class="btn btn-sm btn-primary">Teach AI</button>
                         </form>
                         <form method="post" action="/knowledge/unknown-nicknames/{{ row.id }}/ignore" class="mt-2">
                             <button type="submit" class="btn btn-sm btn-outline-secondary">Mark as ignored</button>

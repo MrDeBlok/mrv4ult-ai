@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,7 @@ from evolution_client import (
 )
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
+from whatsapp_listener import start_whatsapp_listener, stop_whatsapp_listener
 from client_sourcing import (
     build_client_sourcing_dashboard,
     build_matching_offer_rows,
@@ -128,6 +130,7 @@ from dealer_intelligence import (
     format_dealer_stats,
 )
 from dashboard import load_dashboard_cards
+from market_requests import load_market_request_detail, load_market_request_rows
 from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
 from contact_classification import (
     CONTACT_TYPES,
@@ -187,7 +190,15 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_WHATSAPP_INSTANCE = get_default_instance_name()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MRV4ULT AI Dashboard")
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    start_whatsapp_listener()
+    yield
+    stop_whatsapp_listener()
+
+
+app = FastAPI(title="MRV4ULT AI Dashboard", lifespan=app_lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["unread_notification_count"] = get_unread_notification_count
@@ -255,6 +266,47 @@ async def dashboard_page(request: Request) -> HTMLResponse:
             "dashboard_user": user,
             "cards": load_dashboard_cards(user),
         },
+    )
+
+
+@app.get("/market-requests", response_class=HTMLResponse, name="market_requests")
+async def market_requests_page(
+    request: Request,
+    brand: str = "",
+    reference: str = "",
+    group: str = "",
+) -> HTMLResponse:
+    user = get_current_user(request)
+    brand_filter = brand.strip()
+    reference_filter = reference.strip()
+    group_filter = group.strip()
+    return templates.TemplateResponse(
+        request,
+        "market_requests.html",
+        {
+            "market_requests": load_market_request_rows(
+                user,
+                brand=brand_filter,
+                reference=reference_filter,
+                group=group_filter,
+            ),
+            "brand_filter": brand_filter,
+            "reference_filter": reference_filter,
+            "group_filter": group_filter,
+        },
+    )
+
+
+@app.get("/market-requests/{import_id}", response_class=HTMLResponse, name="market_request_detail")
+async def market_request_detail_page(request: Request, import_id: str) -> HTMLResponse:
+    user = get_current_user(request)
+    detail = load_market_request_detail(user, import_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Market request not found")
+    return templates.TemplateResponse(
+        request,
+        "market_request_detail.html",
+        {"detail": detail},
     )
 
 
@@ -1092,15 +1144,18 @@ async def whatsapp_status() -> JSONResponse:
 
 @app.post("/webhook/evolution")
 async def evolution_webhook(request: Request) -> JSONResponse:
+    logger.info("[WhatsApp ingest] Webhook HTTP POST received")
     try:
         payload = await request.json()
     except Exception:
+        logger.warning("[WhatsApp ingest] Message skipped: reason=invalid JSON body")
         return JSONResponse(
             {"status": "error", "reason": "invalid JSON"},
             status_code=400,
         )
 
     if not isinstance(payload, dict):
+        logger.warning("[WhatsApp ingest] Message skipped: reason=payload must be a JSON object")
         return JSONResponse(
             {"status": "error", "reason": "payload must be a JSON object"},
             status_code=400,
@@ -1109,12 +1164,19 @@ async def evolution_webhook(request: Request) -> JSONResponse:
     try:
         result = handle_evolution_webhook(payload)
     except WebhookProcessingError as exc:
-        logger.warning("Evolution webhook skipped: %s", exc)
+        logger.warning("[WhatsApp ingest] Message skipped: reason=%s", exc)
         return JSONResponse({"status": "ignored", "reason": str(exc)}, status_code=200)
     except Exception as exc:
-        logger.exception("Evolution webhook failed")
+        logger.exception("[WhatsApp ingest] Ingest failed with unexpected error")
         return JSONResponse({"status": "error", "reason": str(exc)}, status_code=200)
 
+    logger.info(
+        "[WhatsApp ingest] Webhook handled: status=%s watches_parsed=%s new_offers=%s import_log_id=%s",
+        result.get("status"),
+        result.get("watches_parsed"),
+        result.get("new_offers"),
+        result.get("import_log_id"),
+    )
     return JSONResponse(result, status_code=200)
 
 
@@ -1768,25 +1830,17 @@ async def unknown_nicknames_list(request: Request) -> HTMLResponse:
 async def unknown_nickname_map(
     unknown_nickname_id: str,
     brand_name: str = Form(...),
-    collection: str = Form(""),
-    model_name: str = Form(""),
-    nickname: str = Form(""),
-    likely_references: str = Form(""),
+    reference: str = Form(...),
 ) -> RedirectResponse:
     if not brand_name.strip():
         raise HTTPException(status_code=400, detail="Brand name is required")
+    if not reference.strip():
+        raise HTTPException(status_code=400, detail="Reference is required")
 
-    references = [
-        reference.strip().upper()
-        for reference in likely_references.split(",")
-        if reference.strip()
-    ]
+    references = [reference.strip().upper()]
     resolve_unknown_nickname_with_alias(
         unknown_nickname_id=unknown_nickname_id,
         brand_name=brand_name.strip(),
-        collection=collection.strip() or None,
-        model_name=model_name.strip() or None,
-        nickname=nickname.strip() or None,
         likely_references=references,
     )
     invalidate_identifier_cache()

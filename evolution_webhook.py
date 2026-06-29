@@ -16,7 +16,7 @@ from evolution_client import (
     get_default_instance_name,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mrv4ult.whatsapp.ingest")
 
 PRIVATE_OFFERS_GROUP_NAME = "Private Offers"
 
@@ -28,11 +28,10 @@ class WebhookProcessingError(Exception):
 
 
 def log_webhook_payload(payload: dict[str, Any]) -> None:
-    """Print the full webhook payload for debugging."""
-    print(
-        "[Evolution webhook] "
-        + json.dumps(payload, ensure_ascii=False, default=str),
-        flush=True,
+    """Log the webhook payload for debugging."""
+    logger.debug(
+        "[WhatsApp ingest] Raw webhook payload: %s",
+        json.dumps(payload, ensure_ascii=False, default=str),
     )
 
 
@@ -40,35 +39,76 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     """Process one Evolution API webhook payload."""
     log_webhook_payload(payload)
     event = normalize_event_name(payload.get("event"))
+    instance_name = str(payload.get("instance") or "")
+    logger.info(
+        "[WhatsApp ingest] New webhook received: event=%s instance=%s",
+        event or "missing",
+        instance_name or "unknown",
+    )
 
     if event in {"groups.upsert", "groups.update", "group.update"}:
         update_group_name_cache(payload.get("data"))
+        logger.info("[WhatsApp ingest] Message skipped: reason=group metadata event=%s", event)
         return {"status": "ignored", "reason": "group metadata event"}
 
     if event in {"chats.upsert", "chats.update"}:
         update_group_name_cache(payload.get("data"))
+        logger.info("[WhatsApp ingest] Message skipped: reason=chat metadata event=%s", event)
         return {"status": "ignored", "reason": "chat metadata event"}
 
     if event not in {"messages.upsert"}:
+        logger.info(
+            "[WhatsApp ingest] Message skipped: reason=unsupported event=%s",
+            event or "missing",
+        )
         return {"status": "ignored", "reason": f"unsupported event: {event or 'missing'}"}
 
     data = unwrap_message_data(payload.get("data"))
     if not isinstance(data, dict):
+        logger.info("[WhatsApp ingest] Message skipped: reason=missing message data")
         return {"status": "ignored", "reason": "missing message data"}
 
     if is_from_me(data):
+        logger.info("[WhatsApp ingest] Message skipped: reason=outgoing message")
         return {"status": "ignored", "reason": "outgoing message"}
 
     message_text = extract_message_text(data)
     if not message_text:
+        logger.info("[WhatsApp ingest] Message skipped: reason=no text content")
         return {"status": "ignored", "reason": "no text content"}
 
+    key = data.get("key") or {}
+    remote_jid = str(key.get("remoteJid") or "")
+    logger.info(
+        "[WhatsApp ingest] New message detected: remote_jid=%s text_len=%s push_name=%s",
+        remote_jid or "unknown",
+        len(message_text),
+        extract_dealer_alias(data) or "N/A",
+    )
+
     whatsapp_message = map_payload_to_whatsapp_message(payload, data, message_text)
+    logger.info(
+        "[WhatsApp ingest] Sending to ingest: group=%s dealer=%s alias=%s",
+        whatsapp_message.group_name,
+        whatsapp_message.dealer_whatsapp,
+        whatsapp_message.dealer_alias or "N/A",
+    )
     summary = collect_message(whatsapp_message)
+
+    logger.info(
+        "[WhatsApp ingest] Ingest result: status=%s watches_parsed=%s new_offers=%s "
+        "duplicate_offers=%s import_log_id=%s saved=%s",
+        summary.get("status"),
+        summary.get("watches_parsed"),
+        summary.get("new_offers"),
+        summary.get("duplicate_offers"),
+        summary.get("import_log_id"),
+        summary.get("saved", summary.get("import_log_id") is not None),
+    )
 
     if whatsapp_message.group_name == PRIVATE_OFFERS_GROUP_NAME:
         logger.info(
-            "[Evolution webhook private] Private offer imported: dealer=%s watches_parsed=%s new_offers=%s",
+            "[WhatsApp ingest] Private offer imported: dealer=%s watches_parsed=%s new_offers=%s",
             summary.get("dealer_whatsapp"),
             summary.get("watches_parsed"),
             summary.get("new_offers"),
@@ -76,6 +116,7 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "status": "imported",
+        "ingest_status": summary.get("status"),
         "group": summary.get("group"),
         "dealer_whatsapp": summary.get("dealer_whatsapp"),
         "watches_parsed": summary.get("watches_parsed"),
@@ -246,8 +287,12 @@ def resolve_dealer_whatsapp(
     candidates = [
         key.get("participantAlt"),
         key.get("participant"),
+        key.get("participantPn"),
+        key.get("senderPn"),
         data.get("participant"),
         data.get("participantAlt"),
+        data.get("participantPn"),
+        data.get("senderPn"),
         payload.get("sender"),
     ]
 
@@ -256,6 +301,11 @@ def resolve_dealer_whatsapp(
         if phone:
             return phone
 
+    logger.warning(
+        "[WhatsApp ingest] Could not resolve dealer phone from key=%s data_participant=%s",
+        {field: key.get(field) for field in ("participant", "participantAlt", "participantPn", "senderPn")},
+        data.get("participant"),
+    )
     return None
 
 
@@ -266,6 +316,7 @@ def resolve_private_dealer_whatsapp(
     candidates = [
         key.get("remoteJidAlt"),
         key.get("remoteJid"),
+        key.get("senderPn"),
         payload.get("sender"),
     ]
 
@@ -274,6 +325,10 @@ def resolve_private_dealer_whatsapp(
         if phone:
             return phone
 
+    logger.warning(
+        "[WhatsApp ingest] Could not resolve private chat dealer phone from key=%s",
+        {field: key.get(field) for field in ("remoteJid", "remoteJidAlt", "senderPn")},
+    )
     return None
 
 

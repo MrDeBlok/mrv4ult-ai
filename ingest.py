@@ -212,7 +212,7 @@ def ingest_message(
         offer_watches,
         classification=import_classification,
     )
-    if preliminary_status == "no_watch_detected":
+    if preliminary_status == "no_watch_detected" and import_classification is None:
         return _build_discarded_ingest_summary(
             started_at=started_at,
             group_name=group_name,
@@ -235,6 +235,12 @@ def ingest_message(
         summary_alias = normalized_alias
 
         if has_valid_offers:
+            dealer_id, contact_type = find_or_create_dealer(
+                normalized_whatsapp,
+                display_name=normalized_alias,
+                default_contact_type=CONTACT_TYPE_DEALER,
+            )
+        elif import_classification == "request_intent":
             dealer_id, contact_type = find_or_create_dealer(
                 normalized_whatsapp,
                 display_name=normalized_alias,
@@ -379,9 +385,10 @@ def ingest_message(
     if import_classification:
         summary["import_classification"] = import_classification
 
-    log_dealer_whatsapp = summary_whatsapp if has_valid_offers else ""
-    log_dealer_alias = summary_alias if has_valid_offers else None
-    if not has_valid_offers:
+    preserve_sender = has_valid_offers or import_classification == "request_intent"
+    log_dealer_whatsapp = summary_whatsapp if preserve_sender else ""
+    log_dealer_alias = summary_alias if preserve_sender else None
+    if not preserve_sender:
         summary["dealer_whatsapp"] = ""
         summary["dealer_alias"] = None
 

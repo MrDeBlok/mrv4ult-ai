@@ -6,11 +6,14 @@ No parsing or database logic lives here.
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ingest import IngestSummary, ingest_message
+
+logger = logging.getLogger("mrv4ult.whatsapp.ingest")
 
 
 @dataclass(frozen=True)
@@ -45,13 +48,27 @@ def collect_message(message: WhatsAppMessage) -> IngestSummary:
     if dealer_alias == "":
         dealer_alias = None
 
-    return ingest_message(
+    logger.info(
+        "[WhatsApp ingest] collect_message: group=%s dealer=%s alias=%s chars=%s",
+        group_name,
+        dealer_whatsapp,
+        dealer_alias or "N/A",
+        len(message_text),
+    )
+
+    summary = ingest_message(
         message_text,
         group_name=group_name,
         dealer_whatsapp=dealer_whatsapp,
         dealer_alias=dealer_alias,
         received_at=received_at,
     )
+    logger.info(
+        "[WhatsApp ingest] collect_message complete: status=%s import_log_id=%s",
+        summary.get("status"),
+        summary.get("import_log_id"),
+    )
+    return summary
 
 
 def simulate_incoming_message() -> WhatsAppMessage:

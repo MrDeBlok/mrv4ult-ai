@@ -15,6 +15,13 @@ Record = dict[str, Any]
 
 DEFAULT_INSTANCE_NAME = "mrv4ult"
 
+DEFAULT_WEBHOOK_EVENTS = [
+    "MESSAGES_UPSERT",
+    "GROUPS_UPSERT",
+    "GROUP_UPDATE",
+    "CHATS_UPSERT",
+]
+
 
 class EvolutionAPIError(Exception):
     """Raised when Evolution API returns an error response."""
@@ -291,3 +298,55 @@ def extract_group_subject(payload: Record) -> str | None:
             return candidate.strip()
 
     return None
+
+
+def find_webhook(instance_name: str) -> Record:
+    """Return the current webhook configuration for an instance."""
+    name = instance_name.strip() or get_default_instance_name()
+    payload = _request("GET", f"/webhook/find/{name}")
+    if isinstance(payload, dict):
+        webhook = payload.get("webhook")
+        if isinstance(webhook, dict):
+            return webhook
+    return payload if isinstance(payload, dict) else {}
+
+
+def set_webhook(
+    instance_name: str,
+    url: str,
+    *,
+    events: list[str] | None = None,
+) -> Record:
+    """Register or update the Evolution API webhook for an instance."""
+    name = instance_name.strip() or get_default_instance_name()
+    webhook_url = url.strip()
+    if not webhook_url:
+        raise EvolutionAPIError("Webhook URL is required.")
+
+    return _request(
+        "POST",
+        f"/webhook/set/{name}",
+        json={
+            "webhook": {
+                "enabled": True,
+                "url": webhook_url,
+                "byEvents": False,
+                "base64": False,
+                "events": events or DEFAULT_WEBHOOK_EVENTS,
+            }
+        },
+    )
+
+
+def ensure_webhook_registered(instance_name: str, url: str) -> Record:
+    """Ensure Evolution API posts message events to the given webhook URL."""
+    existing = find_webhook(instance_name)
+    current_url = str(existing.get("url") or "").strip()
+    enabled = bool(existing.get("enabled"))
+    target_url = url.strip()
+
+    if enabled and current_url == target_url:
+        return {"enabled": True, "url": target_url, "updated": False}
+
+    set_webhook(instance_name, target_url)
+    return {"enabled": True, "url": target_url, "updated": True}

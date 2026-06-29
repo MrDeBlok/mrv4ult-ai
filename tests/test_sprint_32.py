@@ -343,7 +343,8 @@ class TestUnknownNicknamesPage:
         assert response.status_code == 200
         assert "Unknown Nicknames" in response.text
         assert "Thunderbolt" in response.text
-        assert "Map nickname" in response.text
+        assert "Map nickname" not in response.text
+        assert "Teach AI" in response.text
 
     @patch("app.resolve_unknown_nickname_with_alias")
     @patch("app.invalidate_identifier_cache")
@@ -357,10 +358,7 @@ class TestUnknownNicknamesPage:
             "/knowledge/unknown-nicknames/unk-1/map",
             data={
                 "brand_name": "Rolex",
-                "collection": "GMT-Master II",
-                "model_name": "GMT-Master II",
-                "nickname": "Thunderbolt",
-                "likely_references": "126710BLRO",
+                "reference": "126710BLRO",
             },
             follow_redirects=False,
         )

@@ -14,7 +14,7 @@ BUYER_REQUEST_PATTERN = re.compile(
     r"looking\s+for|"
     r"lf\b|"
     r"iso\b|"
-    r"need\s+(?:a\s+)?|"
+    r"need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch)|"
     r"searching\s+for"
     r")\b",
     re.I,
@@ -34,51 +34,85 @@ def watch_has_price_signal(watch: Record) -> bool:
     )
 
 
-def watch_has_identity_signal(watch: Record) -> bool:
-    """Return True when a parsed watch looks like a real watch offer line."""
-    if watch.get("brand") or watch.get("reference") or watch.get("model") or watch.get("nickname"):
+def watch_has_substantive_identity(watch: Record) -> bool:
+    """Return True when parsed data shows the message is actually about a watch."""
+    if watch.get("reference"):
+        return True
+    if watch.get("model"):
+        return True
+    if watch.get("nickname"):
+        return True
+    if watch.get("dial") or watch.get("bracelet"):
+        return True
+
+    if watch.get("brand") and watch_has_price_signal(watch):
         return True
 
     model_alias = watch.get("model_alias") or {}
     if model_alias.get("nickname") or model_alias.get("alias") or model_alias.get("model"):
         return True
+    if model_alias.get("reference_status") == "Unknown":
+        return True
 
     watch_identification = watch.get("watch_identification") or {}
-    if watch_identification.get("brand") or watch_identification.get("nickname"):
+    if watch_identification.get("nickname"):
         return True
     if watch_identification.get("likely_references"):
         return True
+    if watch_identification.get("model") or watch_identification.get("collection"):
+        return True
 
     try:
-        from watch_identifier import identify_text
+        from unknown_brand_intelligence import extract_unknown_brand_text
 
-        source_line = watch.get("source_line") or ""
-        if source_line:
-            result = identify_text(source_line)
-            if result and (result.get("brand") or result.get("likely_references")):
-                return True
+        if extract_unknown_brand_text(watch):
+            return True
     except ImportError:  # pragma: no cover
         pass
 
+    source_line = watch.get("source_line") or ""
+    if source_line:
+        try:
+            from watch_identifier import identify_text
+
+            result = identify_text(source_line)
+            if result:
+                if result.get("likely_references"):
+                    return True
+                if result.get("nickname") or result.get("model") or result.get("collection"):
+                    return True
+        except ImportError:  # pragma: no cover
+            pass
+
     return False
+
+
+def watch_has_identity_signal(watch: Record) -> bool:
+    """Return True when a parsed watch looks like a real watch offer line."""
+    return watch_has_substantive_identity(watch)
 
 
 def is_noise_watch(watch: Record) -> bool:
     """Return True for price-only lines without brand/reference/model signals."""
     if not watch_has_price_signal(watch):
         return False
-    return not watch_has_identity_signal(watch)
+
+    hard_fields = ("brand", "reference", "model", "nickname", "dial", "bracelet")
+    if not any(watch.get(field) for field in hard_fields):
+        return True
+
+    return not watch_has_substantive_identity(watch)
 
 
 def is_buyer_request_message(text: str, parsed: Record) -> bool:
     """Return True when the message is a buyer request rather than a dealer offer."""
-    if parsed.get("message_type") == "request":
-        return True
-    if not BUYER_REQUEST_PATTERN.search(text):
-        return False
     if OFFER_INTENT_PATTERN.search(text):
         return False
-    return True
+    if BUYER_REQUEST_PATTERN.search(text):
+        return True
+    if parsed.get("message_type") == "request":
+        return True
+    return False
 
 
 def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tuple[list[Record], str | None]:
@@ -89,11 +123,23 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
     if not watches:
         return [], None
 
-    offer_watches = [watch for watch in watches if not is_noise_watch(watch)]
+    substantive_watches = [watch for watch in watches if watch_has_substantive_identity(watch)]
+    brand_only_watches = [
+        watch
+        for watch in watches
+        if watch.get("brand") and not watch_has_substantive_identity(watch)
+    ]
+
+    if not substantive_watches:
+        if brand_only_watches or any(is_noise_watch(watch) for watch in watches):
+            return [], "noise"
+        return [], None
+
+    offer_watches = [watch for watch in substantive_watches if not is_noise_watch(watch)]
     if offer_watches:
         return offer_watches, None
 
-    if any(is_noise_watch(watch) for watch in watches):
+    if brand_only_watches or any(is_noise_watch(watch) for watch in watches):
         return [], "noise"
 
     return [], None
@@ -105,4 +151,4 @@ def looks_like_parser_review_offer(import_log: Record) -> bool:
     watches = summary.get("parsed_watches") or summary.get("rows") or []
     if not watches:
         return False
-    return any(watch_has_identity_signal(watch) for watch in watches)
+    return any(watch_has_substantive_identity(watch) for watch in watches)

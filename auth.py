@@ -14,7 +14,7 @@ SESSION_USER_ID_KEY = "user_id"
 USER_ROLE_ADMIN = "admin"
 USER_ROLE_TRADER = "trader"
 LOGIN_PATH = "/login"
-PUBLIC_PATH_PREFIXES = ("/login", "/static")
+PUBLIC_PATH_PREFIXES = ("/login", "/static", "/webhook/")
 
 
 def session_secret_key() -> str:
@@ -22,7 +22,9 @@ def session_secret_key() -> str:
 
 
 def is_public_path(path: str) -> bool:
-    return path == LOGIN_PATH or path.startswith("/static/")
+    if path == LOGIN_PATH or path.startswith("/static/"):
+        return True
+    return path.startswith("/webhook/")
 
 
 def get_current_user(request: Request) -> Record | None:
