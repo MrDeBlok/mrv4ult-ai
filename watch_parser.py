@@ -138,18 +138,27 @@ DIAL_PATTERN = re.compile(
     re.I,
 )
 
+CURRENCY_CODE_PATTERN = r"usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
+
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
     (re.compile(r"\b(\d{4}/[0-9A-Z]+)\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{4}[A-Za-z]-\d{3,})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b([12]\d{5}[A-Za-z]{0,4})\b", re.I), "Rolex"),
-    (re.compile(r"\b(\d{5}[A-Za-z]{2,4})\b", re.I), "Audemars Piguet"),
+    (
+        re.compile(
+            rf"\b(\d{{5}}(?!{CURRENCY_CODE_PATTERN}\b)[A-Za-z]{{2,4}})\b",
+            re.I,
+        ),
+        "Audemars Piguet",
+    ),
     (re.compile(r"\b(\d{4}[A-Za-z])\b", re.I), None),
     (re.compile(r"\b([3456]\d{3})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{5})\b", re.I), None),
 ]
 
 SUPPORTED_CURRENCIES = frozenset({"USD", "HKD", "EUR", "CHF", "GBP", "SGD", "AED", "JPY"})
+DEFAULT_IMPLICIT_CURRENCY = "EUR"
 
 EXCHANGE_RATES_TO_USD: dict[str, float] = {
     "USD": 1.0,
@@ -161,8 +170,6 @@ EXCHANGE_RATES_TO_USD: dict[str, float] = {
     "AED": 0.272,
     "JPY": 0.0064,
 }
-
-CURRENCY_CODE_PATTERN = r"usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
 FPJOURNE_REF_PATTERN = re.compile(
     r"\b(CB|CST|RS|CBPT|Tourbillon\s+Souverain|Chronom[eè]tre\s+Bleu|Octa)\b",
@@ -255,8 +262,19 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
         ),
         None,
     ),
+    (
+        re.compile(
+            r"\b([\d.,]+)\s*(k|K|m|M)?\s*"
+            r"(?:net(?:t)?|shipped|\+\s*(?:ship(?:ped)?|label|your\s+label))\b",
+            re.I,
+        ),
+        None,
+    ),
+    (re.compile(r"\b(\d{1,3}(?:\.\d{3})+)\b"), None),
+    (re.compile(r"\b(\d{1,3}(?:,\d{3})+)\b"), None),
     (re.compile(r"\b(\d+(?:\.\d+)?)\s*(m|M)\b"), None),
     (re.compile(r"\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
+    (re.compile(r"\b(\d{4,7})\b"), None),
 ]
 
 RETAIL_PRICE_LABEL_PATTERN = re.compile(
@@ -875,16 +893,25 @@ def _apply_price_fields(watch: WatchDict, text: str) -> None:
 
     watch["retail_price_only"] = retail_only
     watch["original_price"] = original_price
-    watch["original_currency"] = original_currency
+    watch["original_currency"] = _resolve_implicit_currency(
+        original_price,
+        original_currency,
+    )
     watch["price"] = original_price
-    watch["currency"] = original_currency
+    watch["currency"] = watch["original_currency"]
 
-    if original_price is None or original_currency is None:
+    if retail_prices:
+        watch["retail_currency"] = _resolve_implicit_currency(
+            watch["retail_price"],
+            watch["retail_currency"],
+        )
+
+    if original_price is None or watch["original_currency"] is None:
         watch["usd_price"] = None
         watch["exchange_rate_to_usd"] = None
         return
 
-    rate = EXCHANGE_RATES_TO_USD.get(original_currency)
+    rate = EXCHANGE_RATES_TO_USD.get(watch["original_currency"])
     watch["exchange_rate_to_usd"] = rate
     watch["usd_price"] = int(round(original_price * rate)) if rate is not None else None
 
@@ -949,7 +976,7 @@ def _infer_brand_from_reference(reference: str) -> str | None:
 def _mask_price_spans(text: str) -> str:
     """Remove price segments so numeric references are not confused with prices."""
     masked = text
-    for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS:
+    for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS[:-1]:
         masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
     return masked
 
@@ -1089,6 +1116,76 @@ def _looks_like_year_amount(price: int, suffix: str | None) -> bool:
     return suffix is None and 1990 <= price <= 2035
 
 
+def _resolve_implicit_currency(
+    price: int | None,
+    currency: str | None,
+) -> str | None:
+    if price is None:
+        return None
+    return currency or DEFAULT_IMPLICIT_CURRENCY
+
+
+def _reference_numeric_values(text: str) -> set[int]:
+    values: set[int] = set()
+    for pattern, _ in REFERENCE_PATTERNS[:-1]:
+        for match in pattern.finditer(text):
+            reference = match.group(1).upper().replace(" ", "")
+            if _reference_token_has_currency_suffix(reference):
+                continue
+            numeric = re.match(r"(\d+)", reference)
+            if numeric:
+                values.add(int(numeric.group(1)))
+            if "/" in reference:
+                prefix = reference.split("/", 1)[0]
+                if prefix.isdigit():
+                    values.add(int(prefix))
+    return values
+
+
+def _reference_token_has_currency_suffix(reference: str) -> bool:
+    alpha_suffix = re.sub(r"[\d./\s-]", "", reference.upper())
+    if not alpha_suffix:
+        return False
+    return alpha_suffix.lower() in CURRENCY_CODE_PATTERN.split("|")
+
+
+def _price_match_has_strong_signal(match: re.Match[str]) -> bool:
+    matched_text = match.group(0)
+    if re.search(r"\d{1,3}(?:\.\d{3})+", matched_text):
+        return True
+    if re.search(r"\d{1,3}(?:,\d{3})+", matched_text):
+        return True
+    if re.search(
+        r"net(?:t)?|shipped|\+\s*(?:ship(?:ped)?|label|your\s+label)",
+        matched_text,
+        re.I,
+    ):
+        return True
+    groups = match.groups()
+    if len(groups) >= 2 and groups[1] and _is_amount_suffix(groups[1]):
+        return True
+    return False
+
+
+def _should_reject_price_candidate(
+    text: str,
+    price: int,
+    suffix: str | None,
+    match: re.Match[str],
+) -> bool:
+    if _looks_like_year_amount(price, suffix):
+        return True
+    if suffix is not None and _is_amount_suffix(suffix):
+        return False
+    if _extract_currency(match.group(0)) is not None:
+        return False
+    if _price_match_has_strong_signal(match):
+        return False
+    if price in _reference_numeric_values(text):
+        return True
+    return False
+
+
 def _normalize_currency_code(currency_code: str | None) -> str | None:
     if currency_code is None:
         return None
@@ -1106,6 +1203,13 @@ def _amount_before_currency_needs_signal(amount_text: str, suffix: str | None) -
         return True
     normalized = _normalize_amount(raw, suffix)
     return normalized is not None and normalized >= 10_000
+
+
+def _match_amount_suffix(match: re.Match[str]) -> str | None:
+    for group in match.groups()[1:]:
+        if group and _is_amount_suffix(group):
+            return group
+    return None
 
 
 def _extract_price(text: str) -> tuple[int | None, str | None]:
@@ -1129,6 +1233,13 @@ def _extract_price(text: str) -> tuple[int | None, str | None]:
             and groups[-1]
             and _is_currency_code(groups[-1])
             and not _amount_before_currency_needs_signal(groups[0], groups[1])
+        ):
+            continue
+        if _should_reject_price_candidate(
+            text,
+            price,
+            _match_amount_suffix(match),
+            match,
         ):
             continue
         return price, _normalize_currency_code(currency_code)
