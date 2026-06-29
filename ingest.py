@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import time
 from datetime import datetime, timezone
+
+from timezone_utils import ensure_utc_datetime
 from typing import Any
 
 from database import (
@@ -261,7 +263,7 @@ def ingest_message(
     business_import = has_valid_offers and should_process_business_import(contact_type)
 
     now = datetime.now(timezone.utc)
-    message_received_at = received_at or now
+    message_received_at = ensure_utc_datetime(received_at) if received_at else now
 
     message = insert_message(
         group_id=group_id,

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from timezone_utils import format_display_timestamp
 from condition_normalizer import display_condition
 from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
@@ -465,13 +466,7 @@ def build_watch_stats(offers: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def format_received_at(value: str | None) -> str:
-    if not value:
-        return "N/A"
-    try:
-        received_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return received_at.strftime("%Y-%m-%d %H:%M")
-    except ValueError:
-        return value
+    return format_display_timestamp(value)
 
 
 def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -511,13 +506,7 @@ def build_watch_display(watch: dict[str, Any]) -> dict[str, str]:
 
 
 def format_timestamp(value: str | None) -> str:
-    if not value:
-        return "N/A"
-    try:
-        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return timestamp.strftime("%Y-%m-%d %H:%M")
-    except ValueError:
-        return value
+    return format_display_timestamp(value)
 
 
 WATCH_OFFER_CARD_FIELDS: list[tuple[str, str]] = [

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from timezone_utils import format_display_timestamp
 from typing import Any
 
 from search import _display_value, _nested_record, _sort_key_usd_price, format_price, format_usd_price
@@ -61,13 +61,7 @@ def compute_dealer_stats(offer_rows: list[Record]) -> dict[str, Any]:
 
 
 def format_activity_timestamp(value: str | None) -> str:
-    if not value:
-        return "N/A"
-    try:
-        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return timestamp.strftime("%Y-%m-%d %H:%M")
-    except ValueError:
-        return value
+    return format_display_timestamp(value)
 
 
 def dealer_display_name(dealer: Record) -> str:

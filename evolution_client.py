@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+
+from timezone_utils import format_display_timestamp
 
 load_dotenv()
 
@@ -250,11 +251,8 @@ def _extract_phone_number(record: Record) -> str | None:
 def _format_timestamp(value: str | None) -> str | None:
     if not value:
         return None
-    try:
-        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return timestamp.strftime("%Y-%m-%d %H:%M")
-    except ValueError:
-        return value
+    formatted = format_display_timestamp(value, missing="")
+    return formatted or value
 
 
 def _format_state_label(state: str) -> str:

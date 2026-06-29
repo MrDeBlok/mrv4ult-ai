@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+
+from timezone_utils import ensure_utc_datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -265,8 +267,10 @@ def insert_message(
         "message_type": message_type,
         "source": source,
         "whatsapp_message_id": whatsapp_message_id,
-        "received_at": (received_at or datetime.now(timezone.utc)).isoformat(),
-        "parsed_at": parsed_at.isoformat() if parsed_at else None,
+        "received_at": ensure_utc_datetime(
+            received_at or datetime.now(timezone.utc)
+        ).isoformat(),
+        "parsed_at": ensure_utc_datetime(parsed_at).isoformat() if parsed_at else None,
         "parser_version": parser_version,
         "parse_status": parse_status,
         "parse_error": parse_error,
@@ -925,7 +929,7 @@ def insert_import_log(
     """Persist a completed import for the activity dashboard."""
     payload: Record = {
         "message_id": message_id,
-        "import_time": import_time.isoformat(),
+        "import_time": ensure_utc_datetime(import_time).isoformat(),
         "group_name": group_name,
         "dealer_whatsapp": dealer_whatsapp,
         "dealer_alias": dealer_alias,

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_status import import_status_reason, is_discarded_no_watch_import, normalize_import_status
 from contact_classification import format_import_sender_label, should_redact_import_sender
+from dealer_intelligence import format_activity_timestamp
+from import_status import import_status_reason, is_discarded_no_watch_import, normalize_import_status
 
 ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
 IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent"})
@@ -127,7 +128,7 @@ def build_ignored_activity_row(
     """Format one ignored import for the ignored-messages page."""
     return {
         "id": import_log["id"],
-        "import_time": import_log.get("import_time"),
+        "import_time": format_activity_timestamp(import_log.get("import_time")),
         "group_name": import_log.get("group_name") or "N/A",
         "dealer": format_dealer_label(import_log),
         "dealer_redacted": should_redact_import_sender(import_log),

@@ -14,6 +14,13 @@ EXAMPLE_MESSAGE = (
     "12.700 + your label"
 )
 
+PLAIN_MULTILINE_MESSAGE = (
+    "Rolex Submariner 126610LN\n"
+    "2025\n"
+    "Full set\n"
+    "12700"
+)
+
 
 class TestImplicitEurPriceDetection:
     def test_european_price_without_currency_defaults_to_eur(self) -> None:
@@ -59,6 +66,25 @@ class TestImplicitEurPriceDetection:
 
         assert watch["brand"] == "Rolex"
         assert watch["reference"] == "126610LN"
+        assert watch["original_price"] == 12_700
+        assert watch["original_currency"] == "EUR"
+        assert watch["usd_price"] == 13_716
+        assert status == "success"
+
+    def test_multiline_plain_price_line_becomes_success(self) -> None:
+        parsed = parse_message(PLAIN_MULTILINE_MESSAGE)
+        summary = {
+            "watches_parsed": len(parsed["watches"]),
+            "duplicate_offers": 0,
+        }
+
+        watch = parsed["watches"][0]
+        status, _reason = _import_status(summary, "success", parsed["watches"])
+
+        assert watch["brand"] == "Rolex"
+        assert watch["reference"] == "126610LN"
+        assert watch["production_year"] == 2025
+        assert watch["full_set"] is True
         assert watch["original_price"] == 12_700
         assert watch["original_currency"] == "EUR"
         assert watch["usd_price"] == 13_716

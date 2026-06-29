@@ -15,6 +15,7 @@ from dealer_intelligence import (
     build_dealer_profile,
     compute_dealer_stats,
     flatten_offer_intelligence_row,
+    format_activity_timestamp,
 )
 
 
@@ -85,6 +86,9 @@ class TestDealerStats:
 
 class TestDealerRowBuilders:
     def test_build_dealer_list_row_formats_prices(self) -> None:
+        last_activity_utc = "2026-06-27T12:00:00+00:00"
+        last_activity_amsterdam = "2026-06-27 14:00"
+
         row = build_dealer_list_row(
             {"id": "dealer-1", "display_name": "HK Dealer"},
             {
@@ -93,7 +97,7 @@ class TestDealerRowBuilders:
                 "average_usd": 75500,
                 "lowest_usd": 70000,
                 "highest_usd": 82000,
-                "last_activity": "2026-06-27T12:00:00+00:00",
+                "last_activity": last_activity_utc,
                 "unique_watches": 2,
             },
         )
@@ -104,7 +108,8 @@ class TestDealerRowBuilders:
         assert row["average_asking_price"] == "$75,500"
         assert row["lowest_asking_price"] == "$70,000"
         assert row["highest_asking_price"] == "$82,000"
-        assert row["last_activity"] == "2026-06-27 12:00"
+        assert row["last_activity"] == format_activity_timestamp(last_activity_utc)
+        assert row["last_activity"] == last_activity_amsterdam
 
     def test_build_dealer_list_rows_sorts_by_last_activity(self) -> None:
         rows = build_dealer_list_rows(

@@ -6,6 +6,8 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+
+from timezone_utils import ensure_utc_datetime
 from typing import Any
 
 from whatsapp_collector import WhatsAppMessage, collect_message
@@ -343,7 +345,9 @@ def extract_received_at(data: dict[str, Any], payload: dict[str, Any]) -> dateti
     timestamp = data.get("messageTimestamp")
     if timestamp is not None:
         try:
-            return datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
+            return ensure_utc_datetime(
+                datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
+            )
         except (TypeError, ValueError, OSError):
             pass
 
@@ -351,7 +355,7 @@ def extract_received_at(data: dict[str, Any], payload: dict[str, Any]) -> dateti
     if isinstance(date_time, str) and date_time.strip():
         try:
             parsed = datetime.fromisoformat(date_time.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return ensure_utc_datetime(parsed)
         except ValueError:
             pass
 

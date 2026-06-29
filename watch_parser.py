@@ -861,6 +861,13 @@ def _select_offer_price(
         return (*offer_prices[-1], False)
 
     if not retail_prices:
+        unlabeled = _extract_unlabeled_prices(text)
+        if unlabeled:
+            amount, currency = unlabeled[-1]
+            if currency is None:
+                currency = _extract_currency(text)
+            return amount, currency, False
+
         amount, currency = _extract_price(text)
         if currency is None:
             currency = _extract_currency(text)
@@ -1212,37 +1219,45 @@ def _match_amount_suffix(match: re.Match[str]) -> str | None:
     return None
 
 
+def _price_from_pattern_match(
+    text: str,
+    match: re.Match[str],
+    default_currency: str | None,
+) -> tuple[int | None, str | None]:
+    price, currency_code = _parse_price_match(match, default_currency)
+    if price is None:
+        return None, None
+    groups = match.groups()
+    if (
+        groups
+        and groups[0]
+        and _is_currency_code(groups[0])
+        and _looks_like_year_amount(price, groups[2] if len(groups) > 2 else None)
+    ):
+        return None, None
+    if (
+        len(groups) >= 3
+        and groups[-1]
+        and _is_currency_code(groups[-1])
+        and not _amount_before_currency_needs_signal(groups[0], groups[1])
+    ):
+        return None, None
+    if _should_reject_price_candidate(
+        text,
+        price,
+        _match_amount_suffix(match),
+        match,
+    ):
+        return None, None
+    return price, _normalize_currency_code(currency_code)
+
+
 def _extract_price(text: str) -> tuple[int | None, str | None]:
     for pattern, default_currency in PRICE_WITH_CURRENCY_PATTERNS:
-        match = pattern.search(text)
-        if not match:
-            continue
-        price, currency_code = _parse_price_match(match, default_currency)
-        if price is None:
-            continue
-        groups = match.groups()
-        if (
-            groups
-            and groups[0]
-            and _is_currency_code(groups[0])
-            and _looks_like_year_amount(price, groups[2] if len(groups) > 2 else None)
-        ):
-            continue
-        if (
-            len(groups) >= 3
-            and groups[-1]
-            and _is_currency_code(groups[-1])
-            and not _amount_before_currency_needs_signal(groups[0], groups[1])
-        ):
-            continue
-        if _should_reject_price_candidate(
-            text,
-            price,
-            _match_amount_suffix(match),
-            match,
-        ):
-            continue
-        return price, _normalize_currency_code(currency_code)
+        for match in pattern.finditer(text):
+            price, currency_code = _price_from_pattern_match(text, match, default_currency)
+            if price is not None:
+                return price, currency_code
     return None, None
 
 
