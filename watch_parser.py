@@ -139,7 +139,7 @@ DIAL_PATTERN = re.compile(
     re.I,
 )
 
-CURRENCY_CODE_PATTERN = r"usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
+CURRENCY_CODE_PATTERN = r"usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
 DOTTED_WATCH_REFERENCE_PATTERN = re.compile(r"\b\d{3}\.\d{3}\b")
 
@@ -224,6 +224,8 @@ CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"€"), "EUR"),
     (re.compile(r"\beur\b", re.I), "EUR"),
     (re.compile(r"\beuro\b", re.I), "EUR"),
+    (re.compile(r"\busdt\b", re.I), "USD"),
+    (re.compile(r"\bustd\b", re.I), "USD"),
     (re.compile(r"\$"), "USD"),
     (re.compile(r"\busd\b", re.I), "USD"),
     (re.compile(r"£"), "GBP"),
@@ -1248,6 +1250,8 @@ def _normalize_currency_code(currency_code: str | None) -> str | None:
     normalized = currency_code.upper()
     if normalized == "EURO":
         return "EUR"
+    if normalized in {"USDT", "USTD"}:
+        return "USD"
     return normalized
 
 
