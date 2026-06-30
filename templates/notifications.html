@@ -10,7 +10,7 @@
                 <h1 class="h3 mb-1">Notifications</h1>
                 <p class="text-muted mb-0">Important matches, market moves, and imports that need attention.</p>
             </div>
-            {% if notifications %}
+            {% if has_any_notifications %}
             <div class="d-flex flex-wrap gap-2">
                 {% if unread_count %}
                 <form method="post" action="/notifications/read-all">
@@ -40,6 +40,21 @@
         </div>
     </div>
 </section>
+
+{% if has_any_notifications %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3">
+        <div class="d-flex flex-wrap gap-2 notification-filter-chips">
+            {% for option in filter_options %}
+            <a
+                href="{{ option.url }}"
+                class="btn btn-sm {% if option.active %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            >{{ option.label }} ({{ option.count }})</a>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endif %}
 
 {% if notifications %}
 <div class="list-group shadow-sm">
@@ -77,6 +92,7 @@
                     action="/notifications/{{ item.id }}/quick-fix"
                     class="notification-quick-fix-form border rounded p-3 bg-light"
                 >
+                    <input type="hidden" name="type" value="{{ active_filter }}">
                     <div class="row g-2">
                         <div class="col-md-4">
                             <label class="form-label small mb-1" for="quick-fix-brand-{{ item.id }}">Brand</label>
@@ -151,6 +167,8 @@
     </div>
     {% endfor %}
 </div>
+{% elif has_any_notifications %}
+<div class="alert alert-secondary" role="alert">No notifications for this filter.</div>
 {% else %}
 <div class="alert alert-secondary" role="alert">No notifications.</div>
 {% endif %}

@@ -170,7 +170,7 @@ class TestNotificationsPageQuickFix:
         )
 
         assert response.status_code == 303
-        assert response.headers["location"] == "/notifications?quick_fix_saved=n-review"
+        assert response.headers["location"] == "/notifications?quick_fix_saved=n-review&type=needs_review"
         mock_apply.assert_called_once_with(
             import_log_id="log-1",
             brand_name="Rolex",

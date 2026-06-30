@@ -34,6 +34,76 @@ NOTIFICATION_TYPE_CLASSES: dict[str, str] = {
 
 NOTIFICATION_MESSAGE_PREVIEW_MAX = 180
 
+NOTIFICATION_PAGE_FILTERS = frozenset(
+    {
+        "all",
+        "needs_review",
+        "excellent_buy",
+        "new_lowest_price",
+    }
+)
+
+NOTIFICATION_FILTER_LABELS: dict[str, str] = {
+    "all": "All",
+    "needs_review": "Needs Review",
+    "excellent_buy": "Excellent Buy",
+    "new_lowest_price": "New Lowest Price",
+}
+
+NOTIFICATION_FILTER_ORDER: tuple[str, ...] = (
+    "all",
+    "needs_review",
+    "excellent_buy",
+    "new_lowest_price",
+)
+
+
+def normalize_notification_filter(filter_key: str | None) -> str:
+    """Return a supported notification page filter key."""
+    normalized = (filter_key or "all").strip().lower()
+    if normalized not in NOTIFICATION_PAGE_FILTERS:
+        return "all"
+    return normalized
+
+
+def notification_filter_counts(notifications: list[Record]) -> dict[str, int]:
+    """Count notifications for each page filter chip."""
+    return {
+        "all": len(notifications),
+        "needs_review": sum(1 for notification in notifications if notification.get("type") == "needs_review"),
+        "excellent_buy": sum(1 for notification in notifications if notification.get("type") == "excellent_buy"),
+        "new_lowest_price": sum(
+            1 for notification in notifications if notification.get("type") == "new_lowest_price"
+        ),
+    }
+
+
+def filter_notifications_by_type(notifications: list[Record], filter_key: str) -> list[Record]:
+    """Return notifications matching the selected page filter."""
+    if filter_key == "all":
+        return list(notifications)
+    return [notification for notification in notifications if notification.get("type") == filter_key]
+
+
+def build_notification_filter_options(
+    counts: dict[str, int],
+    *,
+    active_filter: str,
+) -> list[Record]:
+    """Build filter chip metadata for the notifications page."""
+    options: list[Record] = []
+    for key in NOTIFICATION_FILTER_ORDER:
+        options.append(
+            {
+                "key": key,
+                "label": NOTIFICATION_FILTER_LABELS[key],
+                "count": counts.get(key, 0),
+                "url": "/notifications" if key == "all" else f"/notifications?type={key}",
+                "active": key == active_filter,
+            }
+        )
+    return options
+
 
 def _watch_label(row: Record) -> str:
     parts = [part for part in (row.get("brand"), row.get("reference") or row.get("model")) if part]

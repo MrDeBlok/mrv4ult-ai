@@ -163,8 +163,12 @@ from contact_classification import (
 from notification_quick_fix import apply_notification_quick_fix, build_quick_fix_prefills
 from notifications import (
     build_notification_display,
+    build_notification_filter_options,
+    filter_notifications_by_type,
     get_unread_notification_count,
     load_message_previews_by_import_log_id,
+    normalize_notification_filter,
+    notification_filter_counts,
 )
 from permissions import (
     USER_ROLE_ADMIN,
@@ -1736,10 +1740,23 @@ async def home(
 
 
 @app.get("/notifications", response_class=HTMLResponse, name="notifications_list")
-async def notifications_page(request: Request, quick_fix_saved: str = "") -> HTMLResponse:
-    notifications = build_notification_rows(list_notifications())
-    unread_count = sum(1 for item in notifications if not item["is_read"])
-    read_count = sum(1 for item in notifications if item["is_read"])
+async def notifications_page(
+    request: Request,
+    type: str = "all",
+    quick_fix_saved: str = "",
+) -> HTMLResponse:
+    raw_notifications = list_notifications()
+    active_filter = normalize_notification_filter(type)
+    filter_counts = notification_filter_counts(raw_notifications)
+    filtered_notifications = filter_notifications_by_type(raw_notifications, active_filter)
+    all_rows = build_notification_rows(raw_notifications)
+    notifications = (
+        all_rows
+        if active_filter == "all"
+        else [row for row in all_rows if row["type"] == active_filter]
+    )
+    unread_count = sum(1 for item in all_rows if not item["is_read"])
+    read_count = sum(1 for item in all_rows if item["is_read"])
     return templates.TemplateResponse(
         request,
         "notifications.html",
@@ -1747,6 +1764,13 @@ async def notifications_page(request: Request, quick_fix_saved: str = "") -> HTM
             "notifications": notifications,
             "unread_count": unread_count,
             "read_count": read_count,
+            "filter_counts": filter_counts,
+            "active_filter": active_filter,
+            "filter_options": build_notification_filter_options(
+                filter_counts,
+                active_filter=active_filter,
+            ),
+            "has_any_notifications": filter_counts["all"] > 0,
             "canonical_brands": list_canonical_brands(),
             "quick_fix_saved_id": quick_fix_saved.strip() or None,
         },
@@ -1760,6 +1784,7 @@ async def notifications_quick_fix(
     brand_name: str = Form(...),
     reference: str = Form(...),
     alias_text: str = Form(""),
+    type: str = Form("needs_review"),
 ) -> RedirectResponse:
     user = get_current_user(request)
     if not can_quick_fix_notifications(user):
@@ -1790,8 +1815,10 @@ async def notifications_quick_fix(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    active_filter = normalize_notification_filter(type)
+    filter_query = "" if active_filter == "all" else f"&type={active_filter}"
     return RedirectResponse(
-        url=f"/notifications?quick_fix_saved={notification_id}",
+        url=f"/notifications?quick_fix_saved={notification_id}{filter_query}",
         status_code=303,
     )
 

@@ -167,6 +167,10 @@ body {
     max-width: 42rem;
 }
 
+.notification-filter-chips .btn {
+    white-space: nowrap;
+}
+
 .watch-offer-card .watch-offer-fields dt {
     font-weight: 600;
     color: #495057;
