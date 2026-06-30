@@ -155,12 +155,12 @@ class TestMarketRequestRules:
         assert [row["id"] for row in filter_market_request_rows(rows, reference="15510")] == ["2"]
         assert [row["id"] for row in filter_market_request_rows(rows, group="EU")] == ["2"]
 
-    @patch("market_requests.get_message_by_id", return_value=None)
+    @patch("market_requests.get_messages_by_ids", return_value={})
     @patch("market_requests.list_import_logs")
     def test_market_request_visibility_is_user_scoped(
         self,
         mock_list_import_logs: MagicMock,
-        _mock_get_message: MagicMock,
+        _mock_get_messages: MagicMock,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(import_id="team", owner_user_id=TRADER_ONE["id"]),
@@ -214,12 +214,15 @@ class TestMarketRequestRoutes:
         assert response.status_code == 200
         assert "Market Requests" in response.text
 
-    @patch("market_requests.get_message_by_id", return_value={"raw_text": "WTB Rolex Daytona"})
+    @patch(
+        "market_requests.get_messages_by_ids",
+        return_value={"msg-1": {"raw_text": "WTB Rolex Daytona"}},
+    )
     @patch("market_requests.list_import_logs")
     def test_request_intent_imports_appear_on_page(
         self,
         mock_list_import_logs: MagicMock,
-        _mock_get_message: MagicMock,
+        _mock_get_messages: MagicMock,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(import_id="req-1"),
@@ -233,12 +236,12 @@ class TestMarketRequestRoutes:
         assert "126500LN" in response.text
         assert "offer-1" not in response.text
 
-    @patch("market_requests.get_message_by_id", return_value=None)
+    @patch("market_requests.get_messages_by_ids", return_value={})
     @patch("market_requests.list_import_logs")
     def test_market_request_filters_work_in_route(
         self,
         mock_list_import_logs: MagicMock,
-        _mock_get_message: MagicMock,
+        _mock_get_messages: MagicMock,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(import_id="req-1", brand="Rolex", group_name="HK Dealers"),
@@ -340,12 +343,12 @@ class TestMarketRequestSideEffects:
 
 
 class TestMarketRequest351Routes:
-    @patch("market_requests.get_message_by_id")
+    @patch("market_requests.get_messages_by_ids")
     @patch("market_requests.list_import_logs")
     def test_duplicate_requests_collapse_into_one_list_row(
         self,
         mock_list_import_logs: MagicMock,
-        mock_get_message: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
         shared_message = "WTB Rolex Daytona 126500LN budget 25k"
         mock_list_import_logs.return_value = [
@@ -362,10 +365,10 @@ class TestMarketRequest351Routes:
                 message_id="msg-2",
             ),
         ]
-        mock_get_message.side_effect = lambda message_id: {
+        mock_get_messages.return_value = {
             "msg-1": {"raw_text": shared_message},
             "msg-2": {"raw_text": shared_message},
-        }[message_id]
+        }
 
         client = TestClient(app)
         response = client.get("/market-requests")
@@ -375,16 +378,18 @@ class TestMarketRequest351Routes:
         assert "Seen in 2 groups" in response.text
         assert 'data-href="/market-requests/22222222-2222-4222-8222-222222222222"' in response.text
 
-    @patch("market_requests.get_message_by_id")
+    @patch(
+        "market_requests.get_messages_by_ids",
+        return_value={"msg-1": {"raw_text": "WTB Rolex Daytona 126500LN budget 25k"}},
+    )
     @patch("market_requests.list_import_logs")
     def test_list_row_links_to_detail_page(
         self,
         mock_list_import_logs: MagicMock,
-        mock_get_message: MagicMock,
+        _mock_get_messages: MagicMock,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         mock_list_import_logs.return_value = [_market_request_log(import_id=import_id)]
-        mock_get_message.return_value = {"raw_text": "WTB Rolex Daytona 126500LN budget 25k"}
 
         client = TestClient(app)
         response = client.get("/market-requests")
@@ -440,12 +445,12 @@ class TestMarketRequest351Routes:
 
         assert response.status_code == 404
 
-    @patch("market_requests.get_message_by_id")
+    @patch("market_requests.get_messages_by_ids")
     @patch("market_requests.list_import_logs")
     def test_filters_still_work_after_deduping(
         self,
         mock_list_import_logs: MagicMock,
-        mock_get_message: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(
@@ -469,10 +474,10 @@ class TestMarketRequest351Routes:
                 message_id="msg-ap",
             ),
         ]
-        mock_get_message.side_effect = lambda message_id: {
+        mock_get_messages.return_value = {
             "msg-rolex": {"raw_text": "WTB Rolex Daytona 126500LN"},
             "msg-ap": {"raw_text": "Looking for AP 15510"},
-        }[message_id]
+        }
 
         client = TestClient(app)
         response = client.get("/market-requests?brand=Rolex&group=EU")

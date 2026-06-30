@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Performance Profile · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Performance Profile</h1>
+        <p class="text-muted mb-2">Measure only — total response ≈ database + python + render. Sprint 43.1 compares import_logs query time against Sprint 43.0 baselines. Sprint 43.2 compares Parser Review SQL count (227 baseline) and page time (15.3s baseline).</p>
+        <div class="alert alert-warning py-2 mb-0">
+            For accurate results, pause WhatsApp ingest during profiling.
+        </div>
+    </div>
+    <a class="btn btn-outline-secondary" href="/dashboard">Back to Trading Desk</a>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Page</th>
+                <th>Path</th>
+                <th>Status</th>
+                <th class="text-end">Total response</th>
+                <th class="text-end">Database</th>
+                <th class="text-end">Python</th>
+                <th class="text-end">Render</th>
+                <th class="text-end">SQL queries</th>
+                <th class="text-end">import_logs ms</th>
+                <th class="text-end">Baseline ms</th>
+                <th class="text-end">Saved ms</th>
+                <th>Slowest query</th>
+                <th class="text-end">Slowest ms</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr{% if row.status != "ok" %} class="table-warning"{% endif %}>
+                <td>{{ row.page }}</td>
+                <td><code>{{ row.path }}</code></td>
+                <td>
+                    {% if row.status == "ok" %}
+                    <span class="badge text-bg-success">ok</span>
+                    {% elif row.status == "timeout" %}
+                    <span class="badge text-bg-danger">timeout</span>
+                    {% elif row.status == "skipped" %}
+                    <span class="badge text-bg-secondary">skipped</span>
+                    {% else %}
+                    <span class="badge text-bg-warning text-dark">{{ row.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="text-end">{{ "%.2f"|format(row.total_response_ms) }} ms
+                    {% if row.get('parser_review_baseline_ms') is not none and row.get('parser_review_saved_ms') is not none %}
+                    <small class="text-muted d-block">was {{ "%.0f"|format(row.parser_review_baseline_ms) }} (saved {{ "%.0f"|format(row.parser_review_saved_ms) }})</small>
+                    {% endif %}
+                </td>
+                <td class="text-end">{{ "%.2f"|format(row.database_ms) }} ms</td>
+                <td class="text-end">{{ "%.2f"|format(row.python_ms) }} ms</td>
+                <td class="text-end">{{ "%.2f"|format(row.render_ms) }} ms</td>
+                <td class="text-end">
+                    {{ row.query_count }}
+                    {% if row.get('query_count_baseline') is not none and row.get('query_count_delta') is not none %}
+                    <small class="text-muted d-block">was {{ row.query_count_baseline }} (Δ {{ row.query_count_delta }})</small>
+                    {% endif %}
+                </td>
+                <td class="text-end">
+                    {% if row.get('import_logs_query_ms') is not none %}
+                    {{ "%.2f"|format(row.import_logs_query_ms) }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td class="text-end">
+                    {% if row.get('import_logs_baseline_ms') is not none %}
+                    {{ "%.0f"|format(row.import_logs_baseline_ms) }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td class="text-end">
+                    {% if row.get('import_logs_delta_ms') is not none %}
+                    <span class="{% if row.import_logs_delta_ms > 0 %}text-success{% elif row.import_logs_delta_ms < 0 %}text-danger{% endif %}">
+                        {{ "%.0f"|format(row.import_logs_delta_ms) }}
+                    </span>
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td class="text-break"><small>{{ row.slowest_query }}</small></td>
+                <td class="text-end">
+                    {% if row.slowest_query_ms is not none %}
+                    {{ "%.2f"|format(row.slowest_query_ms) }} ms
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+                <td class="text-break"><small>{{ row.error_message }}</small></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

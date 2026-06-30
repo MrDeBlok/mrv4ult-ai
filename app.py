@@ -22,16 +22,13 @@ from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
 from activity_feed import (
     activity_feed_counts,
-    filter_active_activity_imports,
-    filter_all_activity_imports,
-    filter_ignored_activity_imports,
-    filter_reviewed_activity_imports,
+    activity_page_url,
+    load_activity_page,
+    parse_activity_page,
 )
 from parser_review import (
     PARSER_REVIEW_FILTERS,
-    build_parser_review_row,
-    filter_parser_review_by_issue,
-    parser_review_counts,
+    load_parser_review_page_data,
 )
 from import_status import (
     filter_discarded_import_logs,
@@ -55,6 +52,7 @@ from database import (
     get_import_log,
     get_import_logs_by_ids,
     get_message_by_id,
+    get_messages_by_ids,
     get_notification_by_id,
     get_watch_by_id,
     dealer_contact_type,
@@ -67,6 +65,7 @@ from database import (
     list_contacts_for_import_lookup,
     list_client_profiles_by_client_ids,
     list_dealers,
+    list_parser_review_import_log_candidates,
     list_import_logs,
     list_notifications,
     list_offer_intelligence_rows,
@@ -137,7 +136,8 @@ from dealer_intelligence import (
     flatten_offer_intelligence_rows,
     format_dealer_stats,
 )
-from dashboard import load_dashboard_cards
+from dashboard_data import load_trading_desk
+from performance_profiler import PROFILE_PAGES, build_performance_report
 from market_requests import load_market_request_detail, load_market_request_rows
 from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
 from contact_classification import (
@@ -416,15 +416,32 @@ async def settings_team_reset_password(user_id: str) -> RedirectResponse:
     )
 
 
+@app.get("/performance-profile", response_class=HTMLResponse, name="performance_profile")
+async def performance_profile_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    rows = build_performance_report(app, current_user=user)
+    return templates.TemplateResponse(
+        request,
+        "performance_profile.html",
+        {
+            "rows": rows,
+            "profile_pages": PROFILE_PAGES,
+        },
+    )
+
+
 @app.get("/dashboard", response_class=HTMLResponse, name="dashboard")
 async def dashboard_page(request: Request) -> HTMLResponse:
     user = get_current_user(request)
+    desk = load_trading_desk(user, format_timestamp=format_timestamp)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
             "dashboard_user": user,
-            "cards": load_dashboard_cards(user),
+            "desk": desk,
         },
     )
 
@@ -1435,14 +1452,12 @@ async def requests_close(request_id: str) -> RedirectResponse:
     return RedirectResponse(url="/requests", status_code=303)
 
 
-def _visible_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
-    logs = filter_imports_for_user(list_import_logs(), user)
-    return filter_discarded_import_logs(logs)
-
-
 def _parser_review_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    visible = filter_discarded_import_logs(
+        filter_imports_for_user(list_parser_review_import_log_candidates(), user)
+    )
     lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
-    return filter_business_import_logs(_visible_import_logs(user), lookup)
+    return filter_business_import_logs(visible, lookup)
 
 
 def _business_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1454,13 +1469,6 @@ def _can_access_import_log(user: dict[str, Any] | None, import_log: dict[str, An
     return can_view_import(user, import_log)
 
 
-ACTIVITY_TAB_FILTERS = {
-    "active": filter_active_activity_imports,
-    "reviewed": filter_reviewed_activity_imports,
-    "ignored": filter_ignored_activity_imports,
-    "all": filter_all_activity_imports,
-}
-
 ACTIVITY_TAB_DESCRIPTIONS = {
     "active": "Watch offers and items that still need attention.",
     "reviewed": "Imports marked as reviewed after parser review.",
@@ -1468,31 +1476,29 @@ ACTIVITY_TAB_DESCRIPTIONS = {
     "all": "Full import audit trail.",
 }
 
-ACTIVITY_EMPTY_MESSAGES = {
-    "active": "No active watch offers or review items.",
-    "reviewed": "No reviewed imports yet.",
-    "ignored": "No ignored messages logged yet.",
-    "all": "No imports logged yet.",
-}
-
 
 def _render_activity_page(request: Request, tab: str) -> HTMLResponse:
     user = get_current_user(request)
-    import_logs = _visible_import_logs(user)
-    stats = activity_feed_counts(import_logs)
-    imports = [
-        build_activity_row(import_log)
-        for import_log in ACTIVITY_TAB_FILTERS[tab](import_logs)
-    ]
+    page = parse_activity_page(request.query_params.get("page"))
+    activity_page = load_activity_page(user, tab, page=page)
+    imports = [build_activity_row(import_log) for import_log in activity_page.imports]
     return templates.TemplateResponse(
         request,
         "activity.html",
         {
             "imports": imports,
-            "stats": stats,
+            "stats": activity_page.stats,
             "active_tab": tab,
             "tab_description": ACTIVITY_TAB_DESCRIPTIONS[tab],
-            "empty_message": ACTIVITY_EMPTY_MESSAGES[tab],
+            "empty_message": activity_page.empty_message,
+            "page": activity_page.page,
+            "page_size": activity_page.page_size,
+            "has_previous": activity_page.has_previous,
+            "has_next": activity_page.has_next,
+            "previous_page_url": activity_page_url(tab, activity_page.page - 1),
+            "next_page_url": activity_page_url(tab, activity_page.page + 1),
+            "showing_from": activity_page.showing_from,
+            "showing_to": activity_page.showing_to,
         },
     )
 
@@ -1522,18 +1528,11 @@ async def parser_review_page(request: Request, filter: str = "all") -> HTMLRespo
     filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
     user = get_current_user(request)
     import_logs = _parser_review_import_logs(user)
-    counts = parser_review_counts(import_logs)
-    filtered_logs = filter_parser_review_by_issue(import_logs, filter_key)
-    rows: list[dict[str, Any]] = []
-    for import_log in filtered_logs:
-        message = get_message_by_id(import_log["message_id"])
-        rows.append(
-            build_parser_review_row(
-                import_log,
-                message,
-                format_timestamp=format_timestamp,
-            )
-        )
+    rows, counts = load_parser_review_page_data(
+        import_logs,
+        filter_key,
+        format_timestamp=format_timestamp,
+    )
 
     return templates.TemplateResponse(
         request,

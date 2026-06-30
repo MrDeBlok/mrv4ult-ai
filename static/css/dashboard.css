@@ -171,6 +171,28 @@ body {
     white-space: nowrap;
 }
 
+.trading-desk-header {
+    border-left: 4px solid #212529;
+}
+
+.trading-desk-kpi-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.trading-desk-kpi-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.08) !important;
+}
+
+.trading-desk-table th {
+    font-size: 0.8125rem;
+    white-space: nowrap;
+}
+
+.trading-desk-help-item {
+    background: #fffdf8;
+}
+
 .watch-offer-card .watch-offer-fields dt {
     font-weight: 600;
     color: #495057;

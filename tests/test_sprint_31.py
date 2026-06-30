@@ -265,17 +265,15 @@ class TestParserReviewDatabaseActions:
 
 
 class TestParserReviewPage:
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_parser_review_page_renders(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [_review_import()]
-        mock_get_message.return_value = {"raw_text": "Rolex Submariner offer"}
+        mock_import_logs.return_value = [_review_import()]
+        mock_get_messages.return_value = {"msg-1": {"raw_text": "Rolex Submariner offer"}}
 
         client = TestClient(app)
         response = client.get("/parser-review")
@@ -287,23 +285,21 @@ class TestParserReviewPage:
         assert "Rolex Submariner offer" in response.text
         assert "/activity/log-1" in response.text
 
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_parser_review_filters_work(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [
+        mock_import_logs.return_value = [
             _review_import(
                 import_id="missing-price",
                 watches=[{"brand": "Rolex", "reference": "126610LN", "condition": "New"}],
             ),
             _review_import(import_id="missing-reference"),
         ]
-        mock_get_message.return_value = {"raw_text": "Sample message"}
+        mock_get_messages.return_value = {"msg-1": {"raw_text": "Sample message"}}
 
         client = TestClient(app)
         response = client.get("/parser-review?filter=missing_price")
@@ -313,16 +309,14 @@ class TestParserReviewPage:
         assert "Missing price" in response.text
         assert "/parser-review/missing-reference/" not in response.text
 
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_parser_review_dashboard_counts_work(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [
+        mock_import_logs.return_value = [
             _review_import(
                 import_id="one",
                 watches=[
@@ -335,7 +329,7 @@ class TestParserReviewPage:
                 ],
             )
         ]
-        mock_get_message.return_value = {"raw_text": "Cubitus blue 40000"}
+        mock_get_messages.return_value = {"msg-1": {"raw_text": "Cubitus blue 40000"}}
 
         client = TestClient(app)
         response = client.get("/parser-review")
@@ -386,17 +380,15 @@ class TestParserReviewPage:
         assert is_parser_review_pending(logs[1]) is False
         assert [row["id"] for row in filter_parser_review_imports(logs)] == ["visible"]
 
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_import_detail_links_work(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [_review_import(import_id="detail-log")]
-        mock_get_message.return_value = {"raw_text": "Detail message"}
+        mock_import_logs.return_value = [_review_import(import_id="detail-log")]
+        mock_get_messages.return_value = {"msg-1": {"raw_text": "Detail message"}}
 
         client = TestClient(app)
         response = client.get("/parser-review")

@@ -76,12 +76,18 @@ def _single_missing_price_import(import_id: str = "log-single") -> dict:
 
 
 class TestBulkReviewRemoved:
-    @patch("app.get_message_by_id", return_value={"raw_text": "Rolex 126200"})
+    @patch(
+        "database.get_messages_by_ids",
+        return_value={
+            "msg-single": {"raw_text": "Rolex 126200"},
+            "msg-bulk": {"raw_text": "Rolex 126200"},
+        },
+    )
     @patch("app._parser_review_import_logs")
     def test_parser_review_page_has_no_bulk_section(
         self,
         mock_import_logs: MagicMock,
-        _mock_get_message: MagicMock,
+        _mock_get_messages: MagicMock,
     ) -> None:
         mock_import_logs.return_value = [_bulk_import_log(), _single_missing_price_import()]
 

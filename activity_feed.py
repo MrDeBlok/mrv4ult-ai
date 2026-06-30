@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from contact_classification import format_import_sender_label, should_redact_import_sender
 from dealer_intelligence import format_activity_timestamp
-from import_status import import_status_reason, is_discarded_no_watch_import, normalize_import_status
+from import_status import filter_discarded_import_logs, import_status_reason, is_discarded_no_watch_import, normalize_import_status
+from user_visibility import filter_imports_for_user
 
 ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
+ACTIVITY_PAGE_SIZE = 20
+ACTIVITY_OVERFETCH_MULTIPLIER = 3
+ACTIVITY_MAX_SCANNED_ROWS = 180
+ACTIVITY_STATS_SCAN_LIMIT = 150
 IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent", "insufficient_evidence"})
+
+Record = dict[str, Any]
+TabFilter = Callable[[list[Record]], list[Record]]
 
 
 def filter_discarded_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -119,6 +128,152 @@ def filter_activity_feed_imports(import_logs: list[dict[str, Any]]) -> list[dict
 def filter_ignored_import_logs(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return imports hidden from the default Activity page."""
     return filter_ignored_activity_imports(import_logs)
+
+
+ACTIVITY_TAB_FILTERS: dict[str, TabFilter] = {
+    "active": filter_active_activity_imports,
+    "reviewed": filter_reviewed_activity_imports,
+    "ignored": filter_ignored_activity_imports,
+    "all": filter_all_activity_imports,
+}
+
+ACTIVITY_TAB_PATHS = {
+    "active": "/activity",
+    "reviewed": "/activity/reviewed",
+    "ignored": "/activity/ignored",
+    "all": "/activity/all",
+}
+
+
+def parse_activity_page(page_value: str | None) -> int:
+    """Return a one-based page number from the query string."""
+    if not page_value:
+        return 1
+    try:
+        parsed = int(page_value)
+    except ValueError:
+        return 1
+    return max(parsed, 1)
+
+
+def activity_page_url(tab: str, page: int) -> str:
+    """Build an activity tab URL preserving pagination."""
+    base_path = ACTIVITY_TAB_PATHS.get(tab, ACTIVITY_TAB_PATHS["active"])
+    if page <= 1:
+        return base_path
+    return f"{base_path}?page={page}"
+
+
+def activity_scan_budget(
+    page: int,
+    *,
+    page_size: int = ACTIVITY_PAGE_SIZE,
+    max_scanned_rows: int = ACTIVITY_MAX_SCANNED_ROWS,
+) -> int:
+    """Return the maximum import rows to read from the database for one page."""
+    safe_page = max(page, 1)
+    needed_rows = safe_page * page_size
+    return min(max_scanned_rows, needed_rows * ACTIVITY_OVERFETCH_MULTIPLIER)
+
+
+def load_activity_stats_bounded(user: Record | None) -> dict[str, int]:
+    """Return activity header counts from a bounded recent import scan."""
+    from database import list_activity_import_logs
+
+    rows = list_activity_import_logs(
+        tab="all",
+        offset=0,
+        limit=ACTIVITY_STATS_SCAN_LIMIT,
+    )
+    visible = filter_discarded_import_logs(filter_imports_for_user(rows, user))
+    return activity_feed_counts(visible)
+
+
+def _paginate_visible_imports(
+    import_logs: list[Record],
+    *,
+    skip: int,
+    page_size: int,
+    scan_budget: int,
+    fetched_row_count: int,
+) -> tuple[list[Record], bool]:
+    """Slice visible imports for the requested page and compute has_next."""
+    page_imports = import_logs[skip : skip + page_size]
+    has_next = len(import_logs) > skip + len(page_imports)
+    if (
+        not has_next
+        and len(page_imports) == page_size
+        and fetched_row_count >= scan_budget
+    ):
+        has_next = True
+    return page_imports, has_next
+
+
+@dataclass(frozen=True)
+class ActivityPageResult:
+    imports: list[Record]
+    stats: dict[str, int]
+    page: int
+    page_size: int
+    has_previous: bool
+    has_next: bool
+    showing_from: int
+    showing_to: int
+    empty_message: str
+
+
+def load_activity_page(
+    user: Record | None,
+    tab: str,
+    *,
+    page: int,
+    page_size: int = ACTIVITY_PAGE_SIZE,
+    max_scanned_rows: int = ACTIVITY_MAX_SCANNED_ROWS,
+) -> ActivityPageResult:
+    """Load one activity tab page with database tab filters and bounded scanning."""
+    from database import list_activity_import_logs
+
+    tab_filter = ACTIVITY_TAB_FILTERS.get(tab, filter_active_activity_imports)
+    safe_page = max(page, 1)
+    skip = (safe_page - 1) * page_size
+    scan_budget = activity_scan_budget(
+        safe_page,
+        page_size=page_size,
+        max_scanned_rows=max_scanned_rows,
+    )
+
+    stats = load_activity_stats_bounded(user)
+    db_rows = list_activity_import_logs(tab=tab, offset=0, limit=scan_budget)
+    visible = filter_discarded_import_logs(filter_imports_for_user(db_rows, user))
+    tab_rows = tab_filter(visible)
+    page_imports, has_next = _paginate_visible_imports(
+        tab_rows,
+        skip=skip,
+        page_size=page_size,
+        scan_budget=scan_budget,
+        fetched_row_count=len(db_rows),
+    )
+
+    showing_from = skip + 1 if page_imports else 0
+    showing_to = skip + len(page_imports)
+    if safe_page == 1 and not page_imports:
+        empty_message = "No activity yet."
+    elif safe_page > 1 and not page_imports:
+        empty_message = "No more activity."
+    else:
+        empty_message = ""
+
+    return ActivityPageResult(
+        imports=page_imports,
+        stats=stats,
+        page=safe_page,
+        page_size=page_size,
+        has_previous=safe_page > 1,
+        has_next=has_next,
+        showing_from=showing_from,
+        showing_to=showing_to,
+        empty_message=empty_message,
+    )
 
 
 def build_ignored_activity_row(

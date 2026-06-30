@@ -136,14 +136,12 @@ class TestSprint325ActivityPages:
             _import_log(import_id="request", status="request_intent"),
         ]
 
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_active_page_shows_only_active_items(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
+        mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.return_value = self._sample_logs()
 
         client = TestClient(app)
         response = client.get("/activity")
@@ -158,14 +156,12 @@ class TestSprint325ActivityPages:
         assert "<strong>Needs review:</strong> 1" in response.text
         assert "<strong>Ignored:</strong> 3" in response.text
 
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_reviewed_tab_shows_reviewed_imports(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
+        mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.return_value = self._sample_logs()
 
         client = TestClient(app)
         response = client.get("/activity/reviewed")
@@ -174,14 +170,12 @@ class TestSprint325ActivityPages:
         assert 'data-href="/activity/reviewed"' in response.text
         assert 'data-href="/activity/offer"' not in response.text
 
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_ignored_tab_shows_noise_and_request_intent(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
+        mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.return_value = self._sample_logs()
 
         client = TestClient(app)
         response = client.get("/activity/ignored")
@@ -192,15 +186,13 @@ class TestSprint325ActivityPages:
         assert 'data-href="/activity/ignored-warning"' in response.text
         assert 'data-href="/activity/offer"' not in response.text
 
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_all_tab_shows_everything(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
+        mock_list_activity_import_logs: MagicMock,
     ) -> None:
         logs = self._sample_logs()
-        mock_list_import_logs.return_value = logs
+        mock_list_activity_import_logs.return_value = logs
 
         client = TestClient(app)
         response = client.get("/activity/all")

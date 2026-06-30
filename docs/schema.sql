@@ -243,6 +243,9 @@ CREATE INDEX idx_messages_received_at
 CREATE INDEX idx_import_logs_import_time
     ON import_logs (import_time DESC);
 
+CREATE INDEX idx_import_logs_status_import_time
+    ON import_logs (status, import_time DESC);
+
 CREATE INDEX idx_import_logs_message_id
     ON import_logs (message_id);
 

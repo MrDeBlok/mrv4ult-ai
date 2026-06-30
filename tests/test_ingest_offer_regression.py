@@ -218,9 +218,9 @@ class TestIngestOfferRegression:
 
         assert [row["id"] for row in filter_active_activity_imports([import_log])] == ["log-offer-1"]
 
-    @patch("app.list_import_logs")
-    def test_normal_offer_appears_on_activity_page(self, mock_list_import_logs: MagicMock) -> None:
-        mock_list_import_logs.return_value = [
+    @patch("database.list_activity_import_logs")
+    def test_normal_offer_appears_on_activity_page(self, mock_list_activity_import_logs: MagicMock) -> None:
+        mock_list_activity_import_logs.return_value = [
             {
                 "id": "log-offer-1",
                 "status": "success",

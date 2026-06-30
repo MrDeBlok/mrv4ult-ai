@@ -66,16 +66,14 @@ class TestParserReviewPriceFormatting:
 
 
 class TestParserReviewPageLoads:
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_parser_review_page_loads_with_string_price(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_parser_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [
+        mock_parser_import_logs.return_value = [
             {
                 "id": "log-price-string",
                 "status": "warning",
@@ -99,7 +97,7 @@ class TestParserReviewPageLoads:
                 },
             }
         ]
-        mock_get_message.return_value = {"raw_text": "10.600 Euro Rolex Explorer 124273"}
+        mock_get_messages.return_value = {"msg-1": {"raw_text": "10.600 Euro Rolex Explorer 124273"}}
 
         client = TestClient(app)
         response = client.get("/parser-review")
@@ -108,14 +106,12 @@ class TestParserReviewPageLoads:
         assert "Parser review" in response.text
         assert "Price:" in response.text
 
-    @patch("app.get_message_by_id")
-    @patch("app._business_import_logs", side_effect=lambda logs: logs)
-    @patch("app.list_import_logs")
+    @patch("database.get_messages_by_ids")
+    @patch("app._parser_review_import_logs")
     def test_build_parser_review_row_with_malformed_price(
         self,
-        mock_list_import_logs: MagicMock,
-        _mock_business: MagicMock,
-        mock_get_message: MagicMock,
+        mock_parser_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
     ) -> None:
         import_log = {
             "id": "log-poa",

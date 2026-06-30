@@ -234,40 +234,61 @@ class TestSprint33Routes:
         assert "Removed A" in response.text
         assert "Removed B" not in response.text
 
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_activity_hides_other_users_private_imports(
         self,
-        mock_list_import_logs: MagicMock,
+        mock_list_activity: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [
-            {
-                "id": "shared",
-                "status": "success",
-                "watches_parsed": 1,
-                "new_offers": 1,
-                "imported_by_user_id": TRADER_ONE["id"],
-                "import_time": "2026-06-27T12:00:00+00:00",
-                "group_name": "HK",
-                "dealer_alias": "Dealer",
-                "dealer_whatsapp": "+85291234567",
-                "duplicate_offers": 0,
-                "matched_requests": 0,
-                "processing_time": "10 ms",
-            },
-            {
-                "id": "noise",
-                "status": "noise",
-                "watches_parsed": 0,
-                "new_offers": 0,
-                "imported_by_user_id": TRADER_TWO["id"],
-                "import_time": "2026-06-27T12:00:00+00:00",
-                "group_name": "HK",
-                "dealer_alias": None,
-                "dealer_whatsapp": "",
-                "duplicate_offers": 0,
-                "matched_requests": 0,
-                "processing_time": "10 ms",
-            },
+        mock_list_activity.side_effect = [
+            [
+                {
+                    "id": "shared",
+                    "status": "success",
+                    "watches_parsed": 1,
+                    "new_offers": 1,
+                    "imported_by_user_id": TRADER_ONE["id"],
+                    "import_time": "2026-06-27T12:00:00+00:00",
+                    "group_name": "HK",
+                    "dealer_alias": "Dealer",
+                    "dealer_whatsapp": "+85291234567",
+                    "duplicate_offers": 0,
+                    "matched_requests": 0,
+                    "processing_time": "10 ms",
+                    "summary": {},
+                },
+                {
+                    "id": "noise",
+                    "status": "noise",
+                    "watches_parsed": 0,
+                    "new_offers": 0,
+                    "imported_by_user_id": TRADER_TWO["id"],
+                    "import_time": "2026-06-27T12:00:00+00:00",
+                    "group_name": "HK",
+                    "dealer_alias": None,
+                    "dealer_whatsapp": "",
+                    "duplicate_offers": 0,
+                    "matched_requests": 0,
+                    "processing_time": "10 ms",
+                    "summary": {},
+                },
+            ],
+            [
+                {
+                    "id": "noise",
+                    "status": "noise",
+                    "watches_parsed": 0,
+                    "new_offers": 0,
+                    "imported_by_user_id": TRADER_TWO["id"],
+                    "import_time": "2026-06-27T12:00:00+00:00",
+                    "group_name": "HK",
+                    "dealer_alias": None,
+                    "dealer_whatsapp": "",
+                    "duplicate_offers": 0,
+                    "matched_requests": 0,
+                    "processing_time": "10 ms",
+                    "summary": {},
+                },
+            ],
         ]
 
         with patch("app.get_current_user", return_value=TRADER_ONE):
@@ -277,26 +298,46 @@ class TestSprint33Routes:
         assert response.status_code == 200
         assert 'data-href="/activity/noise"' not in response.text
 
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_admin_can_see_all_private_imports(
         self,
-        mock_list_import_logs: MagicMock,
+        mock_list_activity: MagicMock,
     ) -> None:
-        mock_list_import_logs.return_value = [
-            {
-                "id": "noise",
-                "status": "noise",
-                "watches_parsed": 0,
-                "new_offers": 0,
-                "imported_by_user_id": TRADER_TWO["id"],
-                "import_time": "2026-06-27T12:00:00+00:00",
-                "group_name": "HK",
-                "dealer_alias": None,
-                "dealer_whatsapp": "",
-                "duplicate_offers": 0,
-                "matched_requests": 0,
-                "processing_time": "10 ms",
-            },
+        mock_list_activity.side_effect = [
+            [
+                {
+                    "id": "noise",
+                    "status": "noise",
+                    "watches_parsed": 0,
+                    "new_offers": 0,
+                    "imported_by_user_id": TRADER_TWO["id"],
+                    "import_time": "2026-06-27T12:00:00+00:00",
+                    "group_name": "HK",
+                    "dealer_alias": None,
+                    "dealer_whatsapp": "",
+                    "duplicate_offers": 0,
+                    "matched_requests": 0,
+                    "processing_time": "10 ms",
+                    "summary": {},
+                },
+            ],
+            [
+                {
+                    "id": "noise",
+                    "status": "noise",
+                    "watches_parsed": 0,
+                    "new_offers": 0,
+                    "imported_by_user_id": TRADER_TWO["id"],
+                    "import_time": "2026-06-27T12:00:00+00:00",
+                    "group_name": "HK",
+                    "dealer_alias": None,
+                    "dealer_whatsapp": "",
+                    "duplicate_offers": 0,
+                    "matched_requests": 0,
+                    "processing_time": "10 ms",
+                    "summary": {},
+                },
+            ],
         ]
 
         client = TestClient(app)

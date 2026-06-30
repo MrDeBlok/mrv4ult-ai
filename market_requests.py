@@ -6,7 +6,7 @@ from typing import Any
 
 from activity_feed import message_preview
 from contact_classification import format_import_sender_label, should_redact_import_sender
-from database import get_import_log, get_message_by_id, list_import_logs
+from database import get_import_log, get_message_by_id, get_messages_by_ids, list_market_request_import_logs
 from dealer_intelligence import format_activity_timestamp
 from import_status import filter_discarded_import_logs, normalize_import_status
 from search import _display_value, format_price, format_usd_price
@@ -37,6 +37,10 @@ def market_request_import_logs_for_user(user: Record | None) -> list[Record]:
     visible_logs = filter_discarded_import_logs(list_import_logs())
     visible_logs = filter_imports_for_user(visible_logs, user)
     return filter_market_request_imports(visible_logs)
+
+
+# Backward-compatible alias for tests and older patches.
+list_import_logs = list_market_request_import_logs
 
 
 def _primary_watch(import_log: Record) -> Record:
@@ -222,6 +226,18 @@ def _strip_internal_market_request_fields(row: Record) -> Record:
     return cleaned
 
 
+def _messages_by_id_for_import_logs(import_logs: list[Record]) -> dict[str, Record]:
+    """Batch-load message rows for market request import logs."""
+    message_ids = [
+        str(import_log["message_id"])
+        for import_log in import_logs
+        if import_log.get("message_id")
+    ]
+    if not message_ids:
+        return {}
+    return get_messages_by_ids(list(dict.fromkeys(message_ids)))
+
+
 def load_market_request_rows(
     user: Record | None,
     *,
@@ -236,12 +252,10 @@ def load_market_request_rows(
         reverse=True,
     )
 
+    messages_by_id = _messages_by_id_for_import_logs(import_logs)
     rows: list[Record] = []
     for import_log in import_logs:
-        message = None
-        message_id = import_log.get("message_id")
-        if message_id:
-            message = get_message_by_id(str(message_id))
+        message = messages_by_id.get(str(import_log.get("message_id") or ""))
         rows.append(build_market_request_row(import_log, message))
 
     rows = filter_market_request_rows(

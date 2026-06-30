@@ -145,6 +145,21 @@ def detect_import_issues(import_log: Record) -> tuple[set[str], list[str], str |
 def parser_review_counts(import_logs: list[Record]) -> dict[str, int]:
     """Count parser review imports and common issue buckets."""
     pending = filter_parser_review_imports(import_logs)
+    issue_index = _build_issue_index(pending)
+    return _parser_review_counts_from_index(pending, issue_index)
+
+
+def _build_issue_index(
+    pending: list[Record],
+) -> dict[str, tuple[set[str], list[str], str | None]]:
+    """Return issue metadata keyed by import log id."""
+    return {str(import_log["id"]): detect_import_issues(import_log) for import_log in pending}
+
+
+def _parser_review_counts_from_index(
+    pending: list[Record],
+    issue_index: dict[str, tuple[set[str], list[str], str | None]],
+) -> dict[str, int]:
     counts = {
         "total": len(pending),
         "missing_price": 0,
@@ -153,7 +168,7 @@ def parser_review_counts(import_logs: list[Record]) -> dict[str, int]:
         "unknown_brand": 0,
     }
     for import_log in pending:
-        issues, _, _ = detect_import_issues(import_log)
+        issues, _, _ = issue_index[str(import_log["id"])]
         if "missing_price" in issues:
             counts["missing_price"] += 1
         if "missing_brand" in issues:
@@ -260,10 +275,14 @@ def build_parser_review_row(
     message: Record | None,
     *,
     format_timestamp,
+    issue_data: tuple[set[str], list[str], str | None] | None = None,
 ) -> Record:
     """Format one import for the parser review page."""
     watches = _parsed_watches(import_log)
-    issues, missing_fields, unknown_brand_text = detect_import_issues(import_log)
+    if issue_data is None:
+        issues, missing_fields, unknown_brand_text = detect_import_issues(import_log)
+    else:
+        issues, missing_fields, unknown_brand_text = issue_data
     raw_message = (message or {}).get("raw_text") or ""
     issue_labels = [ISSUE_LABELS[key] for key in ISSUE_LABELS if key in issues]
 
@@ -287,3 +306,47 @@ def build_parser_review_row(
         "unknown_brand_text": unknown_brand_text,
         "has_unknown_brand": "unknown_brand" in issues,
     }
+
+
+def load_parser_review_page_data(
+    import_logs: list[Record],
+    filter_key: str,
+    *,
+    format_timestamp,
+) -> tuple[list[Record], dict[str, int]]:
+    """Build parser review rows with one batched messages query."""
+    from database import get_messages_by_ids
+
+    pending = filter_parser_review_imports(import_logs)
+    issue_index = _build_issue_index(pending)
+    counts = _parser_review_counts_from_index(pending, issue_index)
+
+    if filter_key == "all":
+        filtered_logs = pending
+    else:
+        filtered_logs = [
+            import_log
+            for import_log in pending
+            if filter_key in issue_index[str(import_log["id"])][0]
+        ]
+
+    message_ids = [
+        str(import_log["message_id"])
+        for import_log in filtered_logs
+        if import_log.get("message_id")
+    ]
+    messages_by_id = get_messages_by_ids(list(dict.fromkeys(message_ids)))
+
+    rows: list[Record] = []
+    for import_log in filtered_logs:
+        import_id = str(import_log["id"])
+        message = messages_by_id.get(str(import_log.get("message_id") or ""))
+        rows.append(
+            build_parser_review_row(
+                import_log,
+                message,
+                format_timestamp=format_timestamp,
+                issue_data=issue_index[import_id],
+            )
+        )
+    return rows, counts

@@ -37,6 +37,17 @@ except ImportError:  # pragma: no cover - test environments without postgrest
 
 Record = dict[str, Any]
 
+IMPORT_LOG_LIST_COLUMNS_BASE = (
+    "id,message_id,import_time,group_name,dealer_whatsapp,dealer_alias,"
+    "watches_parsed,new_offers,duplicate_offers,matched_requests,"
+    "processing_time,status,summary"
+)
+IMPORT_LOG_LIST_LIMIT_DEFAULT = 1500
+IMPORT_LOG_LIST_LIMIT_DASHBOARD = 400
+IMPORT_LOG_LIST_LIMIT_ACTIVITY = 1500
+IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS = 250
+IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW = 400
+
 REQUEST_STATUSES = frozenset({"open", "matched", "closed", "active"})
 OPEN_REQUEST_STATUSES = ("open", "active")
 
@@ -307,7 +318,7 @@ def find_import_log_by_message_id(message_id: str) -> Record | None:
     response = (
         get_client()
         .table("import_logs")
-        .select("*")
+        .select(import_log_list_columns())
         .eq("message_id", message_id)
         .order("import_time", desc=True)
         .limit(1)
@@ -841,6 +852,26 @@ def list_notifications() -> list[Record]:
     return response.data or []
 
 
+def list_recent_notifications(
+    *,
+    limit: int = 20,
+    notification_type: str | None = None,
+) -> list[Record]:
+    """Return a limited recent notification slice for dashboard-style views."""
+    query = (
+        get_client()
+        .table("notifications")
+        .select("*")
+        .order("is_read")
+        .order("created_at", desc=True)
+        .limit(limit)
+    )
+    if notification_type:
+        query = query.eq("type", notification_type)
+    response = query.execute()
+    return response.data or []
+
+
 def count_unread_notifications() -> int:
     """Return the number of unread notifications."""
     response = (
@@ -1017,16 +1048,100 @@ def insert_import_log(
     return _first_row(response.data, "import_logs")
 
 
-def list_import_logs() -> list[Record]:
-    """Return all import logs in reverse chronological order."""
-    response = (
+def import_log_list_columns() -> str:
+    """Return the column projection used for import log list queries."""
+    if user_ownership_columns_supported():
+        return f"{IMPORT_LOG_LIST_COLUMNS_BASE},imported_by_user_id"
+    return IMPORT_LOG_LIST_COLUMNS_BASE
+
+
+def _query_import_logs(
+    *,
+    limit: int | None,
+    status: str | None = None,
+) -> list[Record]:
+    """Run a bounded import_logs query ordered by indexed import_time."""
+    query = (
         get_client()
         .table("import_logs")
-        .select("*")
+        .select(import_log_list_columns())
         .order("import_time", desc=True)
-        .execute()
     )
+    if status is not None:
+        query = query.eq("status", status)
+    if limit is not None:
+        query = query.limit(limit)
+    response = query.execute()
     return response.data or []
+
+
+def list_import_logs(*, limit: int | None = IMPORT_LOG_LIST_LIMIT_DEFAULT) -> list[Record]:
+    """Return recent import logs for activity and dashboard list views."""
+    return _query_import_logs(limit=limit)
+
+
+def list_import_logs_page(*, offset: int, limit: int) -> list[Record]:
+    """Return one page of import logs ordered by import_time desc."""
+    return list_activity_import_logs(tab="all", offset=offset, limit=limit)
+
+
+def _apply_activity_tab_filters(query: Any, tab: str) -> Any:
+    """Apply coarse activity tab filters in Supabase before Python refinement."""
+    query = query.neq("status", "no_watch_detected")
+    if tab == "all":
+        return query
+    if tab == "ignored":
+        return query.or_(
+            "status.in.(noise,request_intent,insufficient_evidence),"
+            "summary->parser_review_ignored.eq.true"
+        )
+    if tab == "reviewed":
+        return query.eq("summary->parser_reviewed", "true")
+    if tab == "active":
+        return query.or_(
+            "and(status.eq.success,or(new_offers.gt.0,watches_parsed.gt.0)),"
+            "and(status.eq.warning,watches_parsed.gt.0)"
+        )
+    return query
+
+
+def list_activity_import_logs(
+    *,
+    tab: str,
+    offset: int = 0,
+    limit: int,
+) -> list[Record]:
+    """Return bounded activity import logs with tab-aware database filters."""
+    if offset < 0:
+        raise ValueError("offset must be zero or greater")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    query = (
+        get_client()
+        .table("import_logs")
+        .select(import_log_list_columns())
+        .order("import_time", desc=True)
+    )
+    query = _apply_activity_tab_filters(query, tab)
+    response = query.range(offset, offset + limit - 1).execute()
+    return response.data or []
+
+
+def list_market_request_import_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS,
+) -> list[Record]:
+    """Return recent buyer-request import logs only."""
+    return _query_import_logs(limit=limit, status="request_intent")
+
+
+def list_parser_review_import_log_candidates(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW,
+) -> list[Record]:
+    """Return recent needs-review import logs for parser review pages."""
+    return _query_import_logs(limit=limit, status="warning")
 
 
 def get_import_log(import_log_id: str) -> Record | None:
@@ -1034,7 +1149,7 @@ def get_import_log(import_log_id: str) -> Record | None:
     response = (
         get_client()
         .table("import_logs")
-        .select("*")
+        .select(import_log_list_columns())
         .eq("id", import_log_id)
         .limit(1)
         .execute()

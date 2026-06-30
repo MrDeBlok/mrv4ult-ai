@@ -138,14 +138,14 @@ class TestNoWatchImportDiscard:
         assert parsed["watches"][0].get("brand")
 
     @patch("app.get_import_log")
-    @patch("app.list_import_logs")
+    @patch("database.list_activity_import_logs")
     def test_no_watch_imports_do_not_appear_in_activity(
         self,
-        mock_list_import_logs: MagicMock,
+        mock_list_activity_import_logs: MagicMock,
         mock_get_import_log: MagicMock,
     ) -> None:
         legacy_import = _import_log(import_id="11111111-1111-4111-8111-111111111111")
-        mock_list_import_logs.return_value = [
+        mock_list_activity_import_logs.return_value = [
             legacy_import,
             {
                 "id": "22222222-2222-4222-8222-222222222222",
