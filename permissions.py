@@ -78,6 +78,10 @@ def can_manage_team(user: Record | None) -> bool:
     return is_admin(user)
 
 
+def can_quick_fix_notifications(user: Record | None) -> bool:
+    return is_admin(user) or is_trader(user)
+
+
 def can_write(user: Record | None, path: str, *, method: str = "POST") -> bool:
     if not is_active_user(user):
         return False

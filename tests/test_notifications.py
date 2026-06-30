@@ -17,6 +17,7 @@ from notifications import (
     notify_request_match,
     record_import_notifications,
 )
+from tests.notification_mocks import patch_notification_import_queries
 
 
 class TestNotificationCreation:
@@ -142,19 +143,20 @@ class TestNotificationDisplay:
         assert row["link_label"] == "View import"
 
     def test_build_notification_rows_formats_created_at(self) -> None:
-        rows = build_notification_rows(
-            [
-                {
-                    "id": "n-1",
-                    "type": "excellent_buy",
-                    "title": "Excellent Buy",
-                    "message": "Deal alert",
-                    "related_import_log_id": "log-1",
-                    "is_read": False,
-                    "created_at": "2026-06-27T12:00:00+00:00",
-                }
-            ]
-        )
+        with patch_notification_import_queries():
+            rows = build_notification_rows(
+                [
+                    {
+                        "id": "n-1",
+                        "type": "excellent_buy",
+                        "title": "Excellent Buy",
+                        "message": "Deal alert",
+                        "related_import_log_id": "log-1",
+                        "is_read": False,
+                        "created_at": "2026-06-27T12:00:00+00:00",
+                    }
+                ]
+            )
 
         assert rows[0]["title"] == "Excellent Buy"
         assert "2026" in rows[0]["created_at"]
@@ -175,8 +177,9 @@ class TestNotificationsPage:
             }
         ]
 
-        client = TestClient(app)
-        response = client.get("/notifications")
+        with patch_notification_import_queries():
+            client = TestClient(app)
+            response = client.get("/notifications")
 
         assert response.status_code == 200
         assert "Needs review" in response.text
@@ -292,8 +295,9 @@ class TestNotificationCleanup:
             }
         ]
 
-        client = TestClient(app)
-        response = client.get("/notifications")
+        with patch_notification_import_queries():
+            client = TestClient(app)
+            response = client.get("/notifications")
 
         assert response.status_code == 200
         assert "Still here" in response.text
@@ -324,8 +328,9 @@ class TestNotificationCleanup:
             },
         ]
 
-        client = TestClient(app)
-        response = client.get("/notifications")
+        with patch_notification_import_queries():
+            client = TestClient(app)
+            response = client.get("/notifications")
 
         assert response.status_code == 200
         assert "Clear read notifications" in response.text

@@ -54,6 +54,80 @@
         {% if item.message_preview %}
         <p class="mb-2 notification-message-preview text-muted small">{{ item.message_preview }}</p>
         {% endif %}
+        {% if quick_fix_saved_id == item.id %}
+        <div class="alert alert-success py-2 px-3 mb-2 small" role="alert">
+            Quick fix saved. Future imports will recognize this mapping.
+        </div>
+        {% endif %}
+        {% if item.show_quick_fix and can_quick_fix(current_user(request)) %}
+        <div class="notification-quick-fix mb-2">
+            <button
+                class="btn btn-sm btn-outline-warning"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#quick-fix-{{ item.id }}"
+                aria-expanded="false"
+                aria-controls="quick-fix-{{ item.id }}"
+            >
+                Quick fix
+            </button>
+            <div class="collapse mt-2" id="quick-fix-{{ item.id }}">
+                <form
+                    method="post"
+                    action="/notifications/{{ item.id }}/quick-fix"
+                    class="notification-quick-fix-form border rounded p-3 bg-light"
+                >
+                    <div class="row g-2">
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1" for="quick-fix-brand-{{ item.id }}">Brand</label>
+                            <select
+                                class="form-select form-select-sm"
+                                id="quick-fix-brand-{{ item.id }}"
+                                name="brand_name"
+                                required
+                            >
+                                <option value="">Select brand…</option>
+                                {% if item.quick_fix_prefill and item.quick_fix_prefill.brand %}
+                                <option value="{{ item.quick_fix_prefill.brand }}" selected>{{ item.quick_fix_prefill.brand }}</option>
+                                {% endif %}
+                                {% for brand in canonical_brands %}
+                                {% if not item.quick_fix_prefill or brand != item.quick_fix_prefill.brand %}
+                                <option value="{{ brand }}">{{ brand }}</option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1" for="quick-fix-reference-{{ item.id }}">Reference</label>
+                            <input
+                                class="form-control form-control-sm"
+                                id="quick-fix-reference-{{ item.id }}"
+                                type="text"
+                                name="reference"
+                                value="{{ item.quick_fix_prefill.reference if item.quick_fix_prefill else '' }}"
+                                placeholder="Reference"
+                                required
+                            >
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1" for="quick-fix-alias-{{ item.id }}">Note / alias (optional)</label>
+                            <input
+                                class="form-control form-control-sm"
+                                id="quick-fix-alias-{{ item.id }}"
+                                type="text"
+                                name="alias_text"
+                                value="{{ item.quick_fix_prefill.alias_text if item.quick_fix_prefill else '' }}"
+                                placeholder="Nickname or alias text"
+                            >
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <button type="submit" class="btn btn-sm btn-primary">Save mapping</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
         <div class="d-flex flex-wrap align-items-center gap-2">
             {% if item.link_url %}
             <a href="{{ item.link_url }}" class="btn btn-sm btn-outline-primary">{{ item.link_label }}</a>

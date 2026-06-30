@@ -163,6 +163,10 @@ body {
     padding-left: 0.75rem;
 }
 
+.notification-quick-fix-form {
+    max-width: 42rem;
+}
+
 .watch-offer-card .watch-offer-fields dt {
     font-weight: 600;
     color: #495057;

@@ -53,7 +53,9 @@ from database import (
     get_client_profile,
     get_dealer_by_id,
     get_import_log,
+    get_import_logs_by_ids,
     get_message_by_id,
+    get_notification_by_id,
     get_watch_by_id,
     dealer_contact_type,
     dealer_has_offers,
@@ -158,6 +160,7 @@ from contact_classification import (
     parse_contacts_filter,
     should_redact_import_sender,
 )
+from notification_quick_fix import apply_notification_quick_fix, build_quick_fix_prefills
 from notifications import (
     build_notification_display,
     get_unread_notification_count,
@@ -170,6 +173,7 @@ from permissions import (
     USER_STATUS_ACTIVE,
     USER_STATUS_DISABLED,
     can_manage_team,
+    can_quick_fix_notifications,
     can_view_page,
     can_write,
     is_admin,
@@ -241,7 +245,7 @@ templates.env.globals["is_admin"] = is_admin
 templates.env.globals["is_viewer"] = is_viewer
 templates.env.globals["can_manage_team"] = can_manage_team
 templates.env.globals["can_view_page"] = can_view_page
-templates.env.globals["can_write"] = can_write
+templates.env.globals["can_quick_fix"] = can_quick_fix_notifications
 
 
 def _forbidden_response(detail: str) -> JSONResponse:
@@ -464,6 +468,21 @@ async def market_request_detail_page(request: Request, import_id: str) -> HTMLRe
 
 def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[str, Any]]:
     previews = load_message_previews_by_import_log_id(notifications)
+    needs_review_import_ids = [
+        str(notification["related_import_log_id"])
+        for notification in notifications
+        if notification.get("type") == "needs_review" and notification.get("related_import_log_id")
+    ]
+    import_logs_by_id = (
+        get_import_logs_by_ids(list(dict.fromkeys(needs_review_import_ids)))
+        if needs_review_import_ids
+        else {}
+    )
+    quick_fix_prefills = build_quick_fix_prefills(
+        notifications,
+        import_logs_by_id=import_logs_by_id,
+        message_previews_by_import_log_id=previews,
+    )
     rows: list[dict[str, Any]] = []
     for notification in notifications:
         row = build_notification_display(notification)
@@ -473,6 +492,11 @@ def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[st
             preview = previews.get(str(import_log_id))
             if preview:
                 row["message_preview"] = preview
+        if notification.get("type") == "needs_review":
+            row["show_quick_fix"] = True
+            prefill = quick_fix_prefills.get(str(notification["id"]))
+            if prefill:
+                row["quick_fix_prefill"] = prefill
         rows.append(row)
     return rows
 
@@ -1712,7 +1736,7 @@ async def home(
 
 
 @app.get("/notifications", response_class=HTMLResponse, name="notifications_list")
-async def notifications_page(request: Request) -> HTMLResponse:
+async def notifications_page(request: Request, quick_fix_saved: str = "") -> HTMLResponse:
     notifications = build_notification_rows(list_notifications())
     unread_count = sum(1 for item in notifications if not item["is_read"])
     read_count = sum(1 for item in notifications if item["is_read"])
@@ -1723,7 +1747,52 @@ async def notifications_page(request: Request) -> HTMLResponse:
             "notifications": notifications,
             "unread_count": unread_count,
             "read_count": read_count,
+            "canonical_brands": list_canonical_brands(),
+            "quick_fix_saved_id": quick_fix_saved.strip() or None,
         },
+    )
+
+
+@app.post("/notifications/{notification_id}/quick-fix")
+async def notifications_quick_fix(
+    request: Request,
+    notification_id: str,
+    brand_name: str = Form(...),
+    reference: str = Form(...),
+    alias_text: str = Form(""),
+) -> RedirectResponse:
+    user = get_current_user(request)
+    if not can_quick_fix_notifications(user):
+        raise HTTPException(status_code=403, detail="Quick fix not allowed")
+
+    notification = get_notification_by_id(notification_id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if notification.get("type") != "needs_review":
+        raise HTTPException(status_code=400, detail="Quick fix is only available for Needs review notifications")
+
+    import_log_id = notification.get("related_import_log_id")
+    if not import_log_id:
+        raise HTTPException(status_code=400, detail="Notification is not linked to an import")
+
+    if not brand_name.strip():
+        raise HTTPException(status_code=400, detail="Brand is required")
+    if not reference.strip():
+        raise HTTPException(status_code=400, detail="Reference is required")
+
+    try:
+        apply_notification_quick_fix(
+            import_log_id=str(import_log_id),
+            brand_name=brand_name,
+            reference=reference,
+            alias_text=alias_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RedirectResponse(
+        url=f"/notifications?quick_fix_saved={notification_id}",
+        status_code=303,
     )
 
 

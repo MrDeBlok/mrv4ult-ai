@@ -631,11 +631,29 @@ def get_import_logs_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
     response = (
         get_client()
         .table("import_logs")
-        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp, message_id")
+        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp, message_id, summary")
         .in_("id", import_log_ids)
         .execute()
     )
     return {str(row["id"]): row for row in response.data or []}
+
+
+def get_notification_by_id(notification_id: str) -> Record | None:
+    """Return one notification row by id."""
+    cleaned_id = notification_id.strip()
+    if not cleaned_id:
+        return None
+    response = (
+        get_client()
+        .table("notifications")
+        .select("*")
+        .eq("id", cleaned_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
 
 
 def get_messages_by_ids(message_ids: list[str]) -> dict[str, Record]:

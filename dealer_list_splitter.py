@@ -89,12 +89,13 @@ def split_dealer_list_message(message: str) -> tuple[str | None, list[str]] | No
     if len(offer_lines) < 2:
         return None
 
-    brand: str | None = None
-    for cleaned in cleaned_lines:
-        if is_dealer_list_offer_line(cleaned):
-            break
-        header_brand = detect_brand_header_line(cleaned)
-        if header_brand:
-            brand = header_brand
+    brand_headers = [
+        header_brand
+        for cleaned in cleaned_lines
+        if (header_brand := detect_brand_header_line(cleaned))
+    ]
+    if len(brand_headers) != 1:
+        return None
 
+    brand: str | None = brand_headers[0]
     return brand, offer_lines
