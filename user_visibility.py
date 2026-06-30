@@ -16,7 +16,9 @@ from import_status import normalize_import_status
 
 Record = dict[str, Any]
 
-PRIVATE_IMPORT_STATUSES = frozenset({"noise", "request_intent", "no_watch_detected"})
+PRIVATE_IMPORT_STATUSES = frozenset(
+    {"noise", "request_intent", "no_watch_detected", "insufficient_evidence"}
+)
 
 
 def user_columns_supported() -> bool:

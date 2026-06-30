@@ -9,7 +9,7 @@ from dealer_intelligence import format_activity_timestamp
 from import_status import import_status_reason, is_discarded_no_watch_import, normalize_import_status
 
 ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
-IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent"})
+IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent", "insufficient_evidence"})
 
 
 def filter_discarded_activity_imports(import_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:

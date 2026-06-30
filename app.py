@@ -1032,6 +1032,11 @@ def _import_parsed_watches(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _deal_analysis_watch_sources(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Return one stored watch object per parsed import watch."""
+    if summary.get("status") == "insufficient_evidence":
+        return []
+    if summary.get("import_classification") == "insufficient_evidence":
+        return []
+
     parsed_watches = _import_parsed_watches(summary)
     if parsed_watches:
         return parsed_watches

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from watch_evidence import INSUFFICIENT_EVIDENCE_REASON
+
 
 def normalize_import_status(import_log: dict[str, Any]) -> str:
     """Map stored import status to the current status vocabulary."""
@@ -19,6 +21,7 @@ def format_import_status(status: str | None) -> str:
         "no_watch_detected": "No watch detected",
         "warning": "Needs review",
         "noise": "Ignored noise",
+        "insufficient_evidence": "Ignored",
         "request_intent": "Buyer request",
         "error": "Error",
     }
@@ -33,6 +36,7 @@ def import_status_class(status: str | None) -> str:
         "no_watch_detected": "info",
         "warning": "warning",
         "noise": "info",
+        "insufficient_evidence": "info",
         "request_intent": "info",
         "error": "danger",
     }.get(status or "", "secondary")
@@ -52,6 +56,8 @@ def import_status_reason(import_log: dict[str, Any]) -> str:
         return "Technical failure during import."
     if status == "noise":
         return "Chat noise detected. No watch offer was identified."
+    if status == "insufficient_evidence":
+        return INSUFFICIENT_EVIDENCE_REASON
     if status == "request_intent":
         return "Buyer request detected. Offer was not created."
     if status == "no_watch_detected":

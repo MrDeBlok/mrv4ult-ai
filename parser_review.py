@@ -7,7 +7,7 @@ from typing import Any
 from activity_feed import format_dealer_label, message_preview
 from import_classification import looks_like_parser_review_offer
 from import_status import import_status_reason, normalize_import_status
-from ingest import _watch_missing_fields
+from ingest import _watch_missing_fields, is_large_dealer_list_import_log
 from unknown_brand_intelligence import extract_unknown_brand_text
 
 Record = dict[str, Any]
@@ -56,6 +56,8 @@ PARSED_FIELD_SPECS: list[tuple[str, str]] = [
 
 def is_parser_review_pending(import_log: Record) -> bool:
     """Return True when an import still belongs on the parser review queue."""
+    if is_large_dealer_list_import_log(import_log):
+        return False
     if normalize_import_status(import_log) != "warning":
         return False
     summary = import_log.get("summary") or {}

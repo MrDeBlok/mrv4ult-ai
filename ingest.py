@@ -41,6 +41,11 @@ from ingest_lifecycle import (
     end_import_trace,
     start_import_trace,
 )
+from watch_evidence import (
+    INSUFFICIENT_EVIDENCE_REASON,
+    describe_evidence_gaps,
+    partition_watches_by_evidence,
+)
 from watch_parser import parse_message
 from unknown_brand_intelligence import record_unknown_brands_for_watches
 from unknown_nickname_intelligence import record_unknown_nicknames_for_watches
@@ -50,6 +55,7 @@ DEFAULT_GROUP_NAME = "Default Group"
 DEFAULT_DEALER_WHATSAPP_ID = "default-dealer"
 DEFAULT_DEALER_NAME = "Default Dealer"
 DEALER_LIST_BULK_THRESHOLD = 10
+BULK_IMPORT_THRESHOLD = DEALER_LIST_BULK_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +67,24 @@ def dealer_list_line_count(watches: list[dict[str, Any]]) -> int:
     return sum(1 for watch in watches if watch.get("dealer_list_line"))
 
 
+def is_large_dealer_list_import_log(import_log: dict[str, Any]) -> bool:
+    """Return True when an import used bulk ingest for a large dealer list."""
+    summary = import_log.get("summary") or {}
+    if summary.get("bulk_import"):
+        return True
+    if int(import_log.get("watches_parsed") or 0) >= BULK_IMPORT_THRESHOLD:
+        return True
+    watches = summary.get("parsed_watches") or summary.get("rows") or []
+    if len(watches) >= BULK_IMPORT_THRESHOLD:
+        return True
+    return dealer_list_line_count(watches) >= BULK_IMPORT_THRESHOLD
+
+
 def is_dealer_list_bulk_import(offer_watches: list[dict[str, Any]]) -> bool:
     """Use fast ingest when a message contains a large structured dealer list."""
-    return dealer_list_line_count(offer_watches) > DEALER_LIST_BULK_THRESHOLD
+    if len(offer_watches) >= BULK_IMPORT_THRESHOLD:
+        return True
+    return dealer_list_line_count(offer_watches) >= BULK_IMPORT_THRESHOLD
 
 
 def _bulk_deferred_price_intelligence(*, is_duplicate: bool) -> dict[str, str]:
@@ -477,6 +498,11 @@ def ingest_message(
         for watch in parsed["watches"]
     ]
     offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
+    insufficient_evidence_watches: list[dict[str, Any]] = []
+    if import_classification is None and offer_watches:
+        offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
+        if not offer_watches and insufficient_evidence_watches:
+            import_classification = "insufficient_evidence"
     bulk_mode = is_dealer_list_bulk_import(offer_watches)
     parse_elapsed_ms = int((time.perf_counter() - parse_started_at) * 1000)
     if bulk_mode:
@@ -492,6 +518,7 @@ def ingest_message(
         parse_status,
         offer_watches,
         classification=import_classification,
+        bulk_mode=bulk_mode,
     )
     if preliminary_status == "no_watch_detected" and import_classification is None:
         summary = _build_discarded_ingest_summary(
@@ -524,6 +551,12 @@ def ingest_message(
                 default_contact_type=CONTACT_TYPE_DEALER,
             )
         elif import_classification == "request_intent":
+            dealer_id, contact_type = find_or_create_dealer(
+                normalized_whatsapp,
+                display_name=normalized_alias,
+                default_contact_type=CONTACT_TYPE_DEALER,
+            )
+        elif import_classification == "insufficient_evidence":
             dealer_id, contact_type = find_or_create_dealer(
                 normalized_whatsapp,
                 display_name=normalized_alias,
@@ -700,6 +733,7 @@ def ingest_message(
         parse_status,
         offer_watches,
         classification=import_classification,
+        bulk_mode=bulk_mode,
     )
     summary["status_reason"] = status_reason
     summary["parsed_watches"] = list(parsed_watches)
@@ -708,8 +742,20 @@ def ingest_message(
         summary["message_type"] = "request"
     if import_classification:
         summary["import_classification"] = import_classification
+    if insufficient_evidence_watches:
+        summary["insufficient_evidence_watches"] = len(insufficient_evidence_watches)
+        summary["insufficient_evidence_details"] = [
+            {
+                "source_line": watch.get("source_line"),
+                "gaps": describe_evidence_gaps(watch),
+            }
+            for watch in insufficient_evidence_watches
+        ]
 
-    preserve_sender = has_valid_offers or import_classification == "request_intent"
+    preserve_sender = (
+        has_valid_offers
+        or import_classification in {"request_intent", "insufficient_evidence"}
+    )
     log_dealer_whatsapp = summary_whatsapp if preserve_sender else ""
     log_dealer_alias = summary_alias if preserve_sender else None
     if not preserve_sender:
@@ -772,12 +818,6 @@ def ingest_message(
         )
 
     if business_import and not bulk_mode:
-        record_import_notifications(
-            import_log_id=import_log["id"],
-            summary=summary,
-            import_status=import_status,
-        )
-    elif business_import and bulk_mode and import_status == "warning":
         record_import_notifications(
             import_log_id=import_log["id"],
             summary=summary,
@@ -1113,6 +1153,7 @@ def _import_status(
     watches: list[dict[str, Any]],
     *,
     classification: str | None = None,
+    bulk_mode: bool = False,
 ) -> tuple[str, str]:
     if parse_status == "failed":
         return "error", "Technical failure during parsing."
@@ -1122,6 +1163,9 @@ def _import_status(
 
     if classification == "noise":
         return "noise", "Chat noise detected. No watch offer was identified."
+
+    if classification == "insufficient_evidence":
+        return "insufficient_evidence", INSUFFICIENT_EVIDENCE_REASON
 
     if summary["watches_parsed"] == 0:
         return "no_watch_detected", "No watch offer was detected in this message."
@@ -1138,6 +1182,13 @@ def _import_status(
             )
 
     if watches_needing_review:
+        if bulk_mode:
+            watches_parsed = summary["watches_parsed"]
+            duplicate_count = summary["duplicate_offers"]
+            reason = f"Successfully parsed {watches_parsed} watch offer(s)."
+            if duplicate_count:
+                reason += f" {duplicate_count} duplicate offer(s) were skipped."
+            return "success", reason
         reason = "Important fields are missing — " + "; ".join(watches_needing_review)
         return "warning", reason
 
