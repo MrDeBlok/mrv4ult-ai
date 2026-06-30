@@ -9,11 +9,13 @@ import pytest
 from app import _parser_review_import_logs
 from activity_feed import load_activity_page
 from database import (
-    IMPORT_LOG_LIST_COLUMNS_BASE,
+    IMPORT_LOG_LIST_COLUMNS_LIGHT,
     IMPORT_LOG_LIST_LIMIT_DASHBOARD,
     IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS,
     IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW,
+    import_log_detail_columns_full,
     import_log_list_columns,
+    import_log_list_columns_light,
     list_import_logs,
     list_market_request_import_logs,
     list_parser_review_import_log_candidates,
@@ -29,20 +31,29 @@ from tests.conftest import ADMIN_USER
 
 
 class TestImportLogListColumns:
-    def test_list_columns_exclude_heavy_unused_fields(self) -> None:
-        columns = import_log_list_columns()
-        assert "created_at" not in columns
-        assert "processing_time_ms" not in columns
+    def test_list_columns_exclude_summary_json(self) -> None:
+        columns = import_log_list_columns_light()
+        assert "summary" not in columns
+        assert "watches_parsed" in columns
+        assert "status" in columns
+        assert columns.startswith(IMPORT_LOG_LIST_COLUMNS_LIGHT.split(",")[0])
+
+    def test_detail_columns_include_summary_json(self) -> None:
+        columns = import_log_detail_columns_full()
         assert "summary" in columns
-        assert columns.startswith(IMPORT_LOG_LIST_COLUMNS_BASE.split(",")[0])
+        assert "watches_parsed" in columns
+
+    def test_list_columns_alias_matches_light_projection(self) -> None:
+        assert import_log_list_columns() == import_log_list_columns_light()
 
     @patch("database.user_ownership_columns_supported", return_value=True)
     def test_list_columns_include_imported_by_user_id_when_supported(
         self,
         _mock_ownership: MagicMock,
     ) -> None:
-        columns = import_log_list_columns()
+        columns = import_log_list_columns_light()
         assert "imported_by_user_id" in columns
+        assert "summary" not in columns
 
 
 class TestImportLogQueryShape:
@@ -58,7 +69,7 @@ class TestImportLogQueryShape:
         return mock_table, mock_query
 
     @patch("database.get_client")
-    @patch("database.import_log_list_columns", return_value="id,status,summary")
+    @patch("database.import_log_list_columns_light", return_value="id,status")
     def test_list_import_logs_uses_column_projection_limit_and_order(
         self,
         _mock_columns: MagicMock,
@@ -70,14 +81,14 @@ class TestImportLogQueryShape:
         rows = list_import_logs(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD)
 
         mock_get_client.return_value.table.assert_called_with("import_logs")
-        mock_table.select.assert_called_once_with("id,status,summary")
+        mock_table.select.assert_called_once_with("id,status")
         mock_table.select.return_value.order.assert_called_once_with("import_time", desc=True)
         mock_query.limit.assert_called_once_with(IMPORT_LOG_LIST_LIMIT_DASHBOARD)
         mock_query.eq.assert_not_called()
         assert rows == [{"id": "log-1"}]
 
     @patch("database.get_client")
-    @patch("database.import_log_list_columns", return_value="id,status")
+    @patch("database.import_log_list_columns_light", return_value="id,status")
     def test_list_market_request_import_logs_filters_status(
         self,
         _mock_columns: MagicMock,
@@ -92,7 +103,7 @@ class TestImportLogQueryShape:
         mock_query.limit.assert_called_once_with(IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS)
 
     @patch("database.get_client")
-    @patch("database.import_log_list_columns", return_value="id,status")
+    @patch("database.import_log_list_columns_light", return_value="id,status")
     def test_list_parser_review_candidates_filters_warning_status(
         self,
         _mock_columns: MagicMock,

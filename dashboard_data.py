@@ -10,12 +10,21 @@ from typing import Any
 from activity_feed import message_preview
 from contact_classification import build_dealer_lookup_by_whatsapp, filter_business_import_logs, format_import_sender_label
 from database import (
-    IMPORT_LOG_LIST_LIMIT_ACTIVITY,
-    IMPORT_LOG_LIST_LIMIT_DASHBOARD,
+    IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE,
+    IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
+    attach_import_log_summaries,
+    DASHBOARD_MATCHED_REQUESTS_FETCH_LIMIT,
+    DASHBOARD_MATCHED_REQUESTS_LIMIT,
     get_messages_by_ids,
+    get_requests_by_ids,
     list_contacts_for_import_lookup,
-    list_import_logs,
+    list_dashboard_market_request_import_logs,
+    list_dashboard_parser_review_import_logs,
+    list_dashboard_recent_import_logs,
+    list_dashboard_today_import_logs,
     list_recent_notifications,
+    list_recent_request_matches,
+    load_enriched_request_match_batch,
 )
 from dealer_intelligence import dealer_display_name, format_activity_timestamp
 from import_status import filter_discarded_import_logs, format_import_status, import_status_class, normalize_import_status
@@ -40,10 +49,10 @@ from opportunity_intelligence import (
 )
 from parser_review import build_parser_review_row, filter_parser_review_imports, parser_review_counts
 from permissions import can_view_page, is_viewer
-from request_profit import offer_price_usd
+from request_profit import attach_profit_to_matches, offer_price_usd
 from search import _nested_record
-from timezone_utils import DISPLAY_TIMEZONE, parse_utc_timestamp
-from user_visibility import filter_imports_for_user
+from timezone_utils import DISPLAY_TIMEZONE, ensure_utc_datetime, parse_utc_timestamp
+from user_visibility import can_view_import, filter_imports_for_user
 
 Record = dict[str, Any]
 
@@ -54,7 +63,17 @@ TOP_OPPORTUNITIES_LIMIT = 5
 TOP_OPPORTUNITIES_SCAN_LIMIT = 5
 AI_NEEDS_HELP_LIMIT = 5
 LIVE_MARKET_LIMIT = 10
+MATCHED_REQUESTS_LIMIT = DASHBOARD_MATCHED_REQUESTS_LIMIT
 AI_NOTIFICATIONS_FETCH_LIMIT = 10
+
+MATCH_STRENGTH_LABELS = {
+    "strong": "Strong match",
+    "medium": "Good match",
+}
+MATCH_STRENGTH_BADGE_CLASSES = {
+    "strong": "success",
+    "medium": "primary",
+}
 
 LIGHTWEIGHT_BASE_SCORE = 25
 LIGHTWEIGHT_EXACT_BOOST = 35
@@ -89,27 +108,64 @@ def is_import_today(import_log: Record, *, now: datetime | None = None) -> bool:
     return timestamp.astimezone(DISPLAY_TIMEZONE).date() == current.astimezone(DISPLAY_TIMEZONE).date()
 
 
-def visible_business_import_logs(user: Record | None) -> list[Record]:
-    """Return user-visible business imports once for dashboard reuse."""
-    visible = filter_imports_for_user(
-        list_import_logs(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD),
-        user,
+def _dashboard_today_start_iso(now: datetime | None = None) -> str:
+    """Return the UTC ISO timestamp for the start of today in Amsterdam."""
+    current = now or datetime.now(DISPLAY_TIMEZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=DISPLAY_TIMEZONE)
+    start_local = current.astimezone(DISPLAY_TIMEZONE).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
     )
-    visible = filter_discarded_import_logs(visible)
-    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
-    return filter_business_import_logs(visible, lookup)
+    return ensure_utc_datetime(start_local).isoformat()
 
 
-def _derive_dashboard_import_subsets(
-    import_logs: list[Record],
+def _visible_dashboard_import_slices(
     user: Record | None,
     contact_lookup: dict[str, Record],
-) -> tuple[list[Record], list[Record]]:
-    """Derive business and market-request import subsets from one import log fetch."""
-    visible_imports = filter_discarded_import_logs(filter_imports_for_user(import_logs, user))
-    business_imports = filter_business_import_logs(visible_imports, contact_lookup)
-    market_request_logs = filter_market_request_imports(visible_imports)
-    return business_imports, market_request_logs
+    *,
+    now: datetime | None = None,
+) -> tuple[list[Record], list[Record], list[Record], list[Record]]:
+    """Fetch and filter bounded import slices for dashboard sections."""
+    today_start = _dashboard_today_start_iso(now)
+    recent_raw = list_dashboard_recent_import_logs(
+        since_iso=today_start,
+        limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE,
+    )
+    today_raw = list_dashboard_today_import_logs(since_iso=today_start)
+    market_raw = list_dashboard_market_request_import_logs()
+    parser_raw = list_dashboard_parser_review_import_logs()
+
+    business_recent = filter_business_import_logs(
+        filter_discarded_import_logs(filter_imports_for_user(recent_raw, user)),
+        contact_lookup,
+    )
+    business_today = filter_business_import_logs(
+        filter_discarded_import_logs(filter_imports_for_user(today_raw, user)),
+        contact_lookup,
+    )
+    market_request_logs = filter_market_request_imports(
+        filter_discarded_import_logs(filter_imports_for_user(market_raw, user))
+    )
+    parser_business = filter_business_import_logs(
+        filter_discarded_import_logs(filter_imports_for_user(parser_raw, user)),
+        contact_lookup,
+    )
+    return business_recent, business_today, market_request_logs, parser_business
+
+
+def visible_business_import_logs(user: Record | None) -> list[Record]:
+    """Return user-visible business imports for legacy dashboard callers."""
+    contact_lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+    _recent, business_today, _market, parser_business = _visible_dashboard_import_slices(
+        user,
+        contact_lookup,
+    )
+    combined = {str(row["id"]): row for row in [*business_today, *parser_business]}
+    return list(combined.values())
+
 
 
 def count_new_offers_today(import_logs: list[Record], *, now: datetime | None = None) -> int:
@@ -272,7 +328,9 @@ def load_top_opportunities(
     import_logs = filter_market_request_imports(
         filter_discarded_import_logs(
             filter_imports_for_user(
-                list_import_logs(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD),
+                list_dashboard_market_request_import_logs(
+                    limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
+                ),
                 user,
             )
         )
@@ -297,7 +355,9 @@ def count_high_opportunities(
         market_request_logs = filter_market_request_imports(
             filter_discarded_import_logs(
                 filter_imports_for_user(
-                    list_import_logs(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD),
+                    list_dashboard_market_request_import_logs(
+                        limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
+                    ),
                     user,
                 )
             )
@@ -321,6 +381,8 @@ def load_ai_needs_help_items(
     """Return latest parser review and needs-review notification items."""
     if business_imports is None:
         business_imports = visible_business_import_logs(user)
+    else:
+        business_imports = attach_import_log_summaries(business_imports)
 
     items: list[Record] = []
     parser_logs = filter_parser_review_imports(business_imports)
@@ -417,6 +479,99 @@ def load_live_market_rows(
             }
         )
     return rows
+
+
+def _request_watch_label(request: Record, watch: Record) -> str:
+    parts = [
+        str(request.get("brand") or watch.get("brand") or "").strip(),
+        str(
+            request.get("reference")
+            or watch.get("reference")
+            or request.get("model")
+            or watch.get("model")
+            or ""
+        ).strip(),
+    ]
+    label = " ".join(part for part in parts if part)
+    return label or "Request"
+
+
+def _dashboard_match_opportunity_score(match: Record, profit: Record) -> int:
+    strength = str(match.get("match_strength") or "")
+    score = 100 if strength == "strong" else 75 if strength == "medium" else 50
+    profit_usd = profit.get("potential_profit_usd")
+    if profit_usd is not None and profit_usd > 0:
+        score += min(int(profit_usd) // 1000, 25)
+    return score
+
+
+def _is_visible_dashboard_match(user: Record | None, match: Record) -> bool:
+    import_log = match.get("import_log") or {}
+    if import_log:
+        return can_view_import(user, import_log)
+    return False
+
+
+def load_dashboard_matched_requests(
+    user: Record | None,
+    *,
+    limit: int = MATCHED_REQUESTS_LIMIT,
+    fetch_limit: int = DASHBOARD_MATCHED_REQUESTS_FETCH_LIMIT,
+) -> list[Record]:
+    """Return recent client request matches for the dashboard."""
+    raw_matches = list_recent_request_matches(limit=fetch_limit)
+    if not raw_matches:
+        return []
+
+    enriched_matches = load_enriched_request_match_batch(raw_matches)
+    request_ids = sorted({str(match["request_id"]) for match in enriched_matches})
+    requests_by_id = get_requests_by_ids(request_ids)
+
+    rows: list[Record] = []
+    for match in enriched_matches:
+        if not _is_visible_dashboard_match(user, match):
+            continue
+        request = requests_by_id.get(str(match.get("request_id") or ""))
+        if not request:
+            continue
+
+        profit_match = attach_profit_to_matches(request, [match])[0]
+        profit = profit_match.get("profit") or {}
+        watch = match.get("watch") or {}
+        import_log = match.get("import_log") or {}
+        strength = str(match.get("match_strength") or "")
+        confidence_label = MATCH_STRENGTH_LABELS.get(strength, "Match")
+        request_url = "/requests" if can_view_page(user, "/requests") else None
+
+        rows.append(
+            {
+                "client_name": request.get("client_name") or "Client",
+                "watch_label": _request_watch_label(request, watch),
+                "dealer": format_import_sender_label(import_log),
+                "offer_price": profit.get("offer_price") or "—",
+                "potential_profit": profit.get("potential_profit") or "—",
+                "match_age": format_activity_timestamp(match.get("created_at")),
+                "status_label": profit.get("status_label") or "—",
+                "status_class": profit.get("status_class") or "secondary",
+                "confidence_label": confidence_label,
+                "confidence_class": MATCH_STRENGTH_BADGE_CLASSES.get(strength, "secondary"),
+                "request_url": request_url,
+                "_sort_time": match.get("created_at") or "",
+                "_sort_score": _dashboard_match_opportunity_score(match, profit),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (row.get("_sort_time") or "", row.get("_sort_score") or 0),
+        reverse=True,
+    )
+    cleaned: list[Record] = []
+    for row in rows[:limit]:
+        item = dict(row)
+        item.pop("_sort_time", None)
+        item.pop("_sort_score", None)
+        cleaned.append(item)
+    return cleaned
 
 
 def build_trading_desk_kpis(
@@ -523,20 +678,17 @@ def build_quick_actions(user: Record | None) -> list[Record]:
 def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | None = None) -> Record:
     """Load all trading desk sections for the dashboard page."""
     started = time.perf_counter()
-    import_logs = list_import_logs(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD)
-    _log_dashboard_section("list_import_logs", started)
-
-    started = time.perf_counter()
     contact_lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
-    _log_dashboard_section("contacts_lookup", started)
+    business_recent, business_today, market_request_logs, parser_business = (
+        _visible_dashboard_import_slices(user, contact_lookup, now=now)
+    )
+    _log_dashboard_section("fetch_dashboard_import_slices", started)
+
+    market_request_logs = attach_import_log_summaries(market_request_logs)
 
     started = time.perf_counter()
-    business_imports, market_request_logs = _derive_dashboard_import_subsets(
-        import_logs,
-        user,
-        contact_lookup,
-    )
-    _log_dashboard_section("derive_import_subsets", started)
+    matched_requests = load_dashboard_matched_requests(user)
+    _log_dashboard_section("matched_requests", started)
 
     started = time.perf_counter()
     top_opportunities, high_opportunity_count = load_dashboard_top_opportunities(
@@ -549,21 +701,21 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
     started = time.perf_counter()
     ai_items = load_ai_needs_help_items(
         user,
-        business_imports=business_imports,
+        business_imports=parser_business,
         format_timestamp=format_timestamp,
     )
     _log_dashboard_section("ai_needs_help", started)
 
     started = time.perf_counter()
-    live_market = load_live_market_rows(business_imports, now=now)
+    live_market = load_live_market_rows(business_recent, now=now)
     _log_dashboard_section("live_market", started)
 
     started = time.perf_counter()
-    parser_counts = parser_review_counts(business_imports)
+    parser_counts = parser_review_counts(parser_business)
     kpis = _visible_kpi_cards(
         user,
         build_trading_desk_kpis(
-            new_offers_today=count_new_offers_today(business_imports, now=now),
+            new_offers_today=count_new_offers_today(business_today, now=now),
             high_opportunities=high_opportunity_count,
             active_market_requests=len(market_request_logs),
             ai_needs_help=parser_counts["total"],
@@ -571,11 +723,12 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
         ),
     )
     quick_actions = build_quick_actions(user)
-    _log_dashboard_section("kpis_and_actions", started)
+    _log_dashboard_section("kpi_cards", started)
 
     return {
         "kpis": kpis,
         "quick_actions": quick_actions,
+        "matched_requests": matched_requests,
         "top_opportunities": top_opportunities,
         "ai_needs_help": ai_items,
         "live_market": live_market,

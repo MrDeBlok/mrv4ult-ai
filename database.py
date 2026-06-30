@@ -37,13 +37,22 @@ except ImportError:  # pragma: no cover - test environments without postgrest
 
 Record = dict[str, Any]
 
-IMPORT_LOG_LIST_COLUMNS_BASE = (
+IMPORT_LOG_LIST_COLUMNS_LIGHT = (
     "id,message_id,import_time,group_name,dealer_whatsapp,dealer_alias,"
     "watches_parsed,new_offers,duplicate_offers,matched_requests,"
-    "processing_time,status,summary"
+    "processing_time,status"
 )
+IMPORT_LOG_LIST_COLUMNS_FULL = f"{IMPORT_LOG_LIST_COLUMNS_LIGHT},summary"
+# Backward-compatible alias used by older tests and docs.
+IMPORT_LOG_LIST_COLUMNS_BASE = IMPORT_LOG_LIST_COLUMNS_FULL
 IMPORT_LOG_LIST_LIMIT_DEFAULT = 1500
 IMPORT_LOG_LIST_LIMIT_DASHBOARD = 400
+IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE = 20
+IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET = 25
+IMPORT_LOG_LIST_LIMIT_DASHBOARD_PARSER = 25
+IMPORT_LOG_LIST_LIMIT_DASHBOARD_TODAY = 50
+DASHBOARD_MATCHED_REQUESTS_FETCH_LIMIT = 15
+DASHBOARD_MATCHED_REQUESTS_LIMIT = 10
 IMPORT_LOG_LIST_LIMIT_ACTIVITY = 1500
 IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS = 250
 IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW = 400
@@ -318,7 +327,7 @@ def find_import_log_by_message_id(message_id: str) -> Record | None:
     response = (
         get_client()
         .table("import_logs")
-        .select(import_log_list_columns())
+        .select(import_log_list_columns_light())
         .eq("message_id", message_id)
         .order("import_time", desc=True)
         .limit(1)
@@ -604,6 +613,39 @@ def list_request_matches_by_request_ids(request_ids: list[str]) -> list[Record]:
     return response.data or []
 
 
+def list_recent_request_matches(
+    *,
+    limit: int = DASHBOARD_MATCHED_REQUESTS_FETCH_LIMIT,
+) -> list[Record]:
+    """Return the newest request_matches rows for dashboard views."""
+    response = (
+        get_client()
+        .table("request_matches")
+        .select(
+            "id, request_id, offer_id, import_log_id, match_strength, match_reason, created_at"
+        )
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return response.data or []
+
+
+def get_requests_by_ids(request_ids: list[str]) -> dict[str, Record]:
+    """Return client requests keyed by id."""
+    if not request_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("requests")
+        .select("*")
+        .in_("id", request_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or []}
+
+
 def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
     """Return offers keyed by id."""
     if not offer_ids:
@@ -719,6 +761,13 @@ def load_enriched_request_matches_by_request_ids(
     matches = list_request_matches_by_request_ids(request_ids)
     if not matches:
         return {}
+    return _group_enriched_request_matches(load_enriched_request_match_batch(matches))
+
+
+def load_enriched_request_match_batch(matches: list[Record]) -> list[Record]:
+    """Attach offer, watch, and import log data to request match rows."""
+    if not matches:
+        return []
 
     offer_ids = sorted({str(match["offer_id"]) for match in matches if match.get("offer_id")})
     import_log_ids = sorted(
@@ -732,15 +781,17 @@ def load_enriched_request_matches_by_request_ids(
     watches_by_id = get_watches_by_ids(watch_ids)
     import_logs_by_id = get_import_logs_by_ids(import_log_ids)
 
-    enriched = combine_request_match_records(
+    return combine_request_match_records(
         matches,
         offers_by_id=offers_by_id,
         watches_by_id=watches_by_id,
         import_logs_by_id=import_logs_by_id,
     )
 
+
+def _group_enriched_request_matches(matches: list[Record]) -> dict[str, list[Record]]:
     grouped: dict[str, list[Record]] = {}
-    for match in enriched:
+    for match in matches:
         request_id = str(match["request_id"])
         grouped.setdefault(request_id, []).append(match)
     return grouped
@@ -1048,11 +1099,66 @@ def insert_import_log(
     return _first_row(response.data, "import_logs")
 
 
-def import_log_list_columns() -> str:
-    """Return the column projection used for import log list queries."""
+def import_log_list_columns_light() -> str:
+    """Return the lightweight column projection for import log list queries."""
     if user_ownership_columns_supported():
-        return f"{IMPORT_LOG_LIST_COLUMNS_BASE},imported_by_user_id"
-    return IMPORT_LOG_LIST_COLUMNS_BASE
+        return f"{IMPORT_LOG_LIST_COLUMNS_LIGHT},imported_by_user_id"
+    return IMPORT_LOG_LIST_COLUMNS_LIGHT
+
+
+def import_log_detail_columns_full() -> str:
+    """Return the full column projection for import log detail views."""
+    if user_ownership_columns_supported():
+        return f"{IMPORT_LOG_LIST_COLUMNS_FULL},imported_by_user_id"
+    return IMPORT_LOG_LIST_COLUMNS_FULL
+
+
+def import_log_list_columns() -> str:
+    """Return list-query columns (lightweight; excludes summary JSON)."""
+    return import_log_list_columns_light()
+
+
+def get_import_log_summaries_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
+    """Return summary JSON keyed by import log id."""
+    if not import_log_ids:
+        return {}
+
+    unique_ids = list(dict.fromkeys(import_log_ids))
+    response = (
+        get_client()
+        .table("import_logs")
+        .select("id,summary")
+        .in_("id", unique_ids)
+        .execute()
+    )
+    summaries: dict[str, Record] = {}
+    for row in response.data or []:
+        summary = row.get("summary")
+        summaries[str(row["id"])] = summary if isinstance(summary, dict) else {}
+    return summaries
+
+
+def attach_import_log_summaries(import_logs: list[Record]) -> list[Record]:
+    """Merge full summary JSON onto lightweight import log rows."""
+    if not import_logs:
+        return import_logs
+
+    missing_ids = [
+        str(import_log["id"])
+        for import_log in import_logs
+        if import_log.get("summary") is None
+    ]
+    if not missing_ids:
+        return import_logs
+
+    summaries_by_id = get_import_log_summaries_by_ids(missing_ids)
+    merged: list[Record] = []
+    for import_log in import_logs:
+        row = dict(import_log)
+        if row.get("summary") is None:
+            row["summary"] = summaries_by_id.get(str(row["id"]), {})
+        merged.append(row)
+    return merged
 
 
 def _query_import_logs(
@@ -1064,7 +1170,7 @@ def _query_import_logs(
     query = (
         get_client()
         .table("import_logs")
-        .select(import_log_list_columns())
+        .select(import_log_list_columns_light())
         .order("import_time", desc=True)
     )
     if status is not None:
@@ -1099,8 +1205,11 @@ def _apply_activity_tab_filters(query: Any, tab: str) -> Any:
         return query.eq("summary->parser_reviewed", "true")
     if tab == "active":
         return query.or_(
-            "and(status.eq.success,or(new_offers.gt.0,watches_parsed.gt.0)),"
-            "and(status.eq.warning,watches_parsed.gt.0)"
+            "and(status.eq.success,or(new_offers.gt.0,watches_parsed.gt.0),"
+            "or(summary->parser_reviewed.is.null,summary->parser_reviewed.eq.false)),"
+            "and(status.eq.warning,watches_parsed.gt.0,"
+            "or(summary->parser_review_ignored.is.null,summary->parser_review_ignored.eq.false),"
+            "or(summary->parser_reviewed.is.null,summary->parser_reviewed.eq.false))"
         )
     return query
 
@@ -1120,7 +1229,7 @@ def list_activity_import_logs(
     query = (
         get_client()
         .table("import_logs")
-        .select(import_log_list_columns())
+        .select(import_log_list_columns_light())
         .order("import_time", desc=True)
     )
     query = _apply_activity_tab_filters(query, tab)
@@ -1144,12 +1253,69 @@ def list_parser_review_import_log_candidates(
     return _query_import_logs(limit=limit, status="warning")
 
 
+def _query_dashboard_import_logs(
+    *,
+    limit: int,
+    status: str | None = None,
+    since_iso: str | None = None,
+) -> list[Record]:
+    """Run a bounded dashboard import_logs query with optional status/day filters."""
+    query = (
+        get_client()
+        .table("import_logs")
+        .select(import_log_list_columns_light())
+        .neq("status", "no_watch_detected")
+        .order("import_time", desc=True)
+        .limit(limit)
+    )
+    if status is not None:
+        query = query.eq("status", status)
+    if since_iso is not None:
+        query = query.gte("import_time", since_iso)
+    response = query.execute()
+    return response.data or []
+
+
+def list_dashboard_recent_import_logs(
+    *,
+    since_iso: str,
+    limit: int = IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE,
+) -> list[Record]:
+    """Return today's recent imports for the dashboard live market section."""
+    return _query_dashboard_import_logs(since_iso=since_iso, limit=limit)
+
+
+def list_dashboard_today_import_logs(
+    *,
+    since_iso: str,
+    limit: int = IMPORT_LOG_LIST_LIMIT_DASHBOARD_TODAY,
+) -> list[Record]:
+    """Return today's imports for dashboard new-offers KPIs."""
+    return _query_dashboard_import_logs(since_iso=since_iso, limit=limit)
+
+
+def list_dashboard_market_request_import_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
+) -> list[Record]:
+    """Return recent buyer-request imports for dashboard opportunities/KPIs."""
+    return _query_dashboard_import_logs(limit=limit, status="request_intent")
+
+
+def list_dashboard_parser_review_import_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_DASHBOARD_PARSER,
+) -> list[Record]:
+    """Return recent warning imports for dashboard AI-needs-help sections."""
+    return _query_dashboard_import_logs(limit=limit, status="warning")
+
+
 def get_import_log(import_log_id: str) -> Record | None:
     """Return one import log by id."""
     response = (
         get_client()
         .table("import_logs")
-        .select(import_log_list_columns())
+        .select(import_log_detail_columns_full())
         .eq("id", import_log_id)
         .limit(1)
         .execute()

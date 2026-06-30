@@ -35,6 +35,11 @@ class TestSprint34DashboardRules:
         assert cards[3]["url"] == "/parser-review"
         assert cards[4]["url"] == "/notifications"
 
+    @patch("dashboard_data.get_messages_by_ids", return_value={})
+    @patch(
+        "dashboard_data.attach_import_log_summaries",
+        side_effect=lambda logs: [{**log, "summary": log.get("summary") or {}} for log in logs],
+    )
     @patch("dashboard_data.get_unread_notification_count", return_value=0)
     @patch("database.list_active_offers_for_market_matching", return_value=[])
     @patch("dashboard_data.list_recent_notifications", return_value=[])
@@ -42,10 +47,16 @@ class TestSprint34DashboardRules:
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
     @patch("dashboard_data.filter_imports_for_user")
-    @patch("dashboard_data.list_import_logs", return_value=[{"id": "shared"}, {"id": "admin-only"}])
+    @patch("dashboard_data.list_dashboard_parser_review_import_logs", return_value=[{"id": "shared"}, {"id": "admin-only"}])
+    @patch("dashboard_data.list_dashboard_market_request_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_today_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_recent_import_logs", return_value=[])
     def test_parser_review_count_uses_user_scoped_import_logs(
         self,
-        _mock_list_import_logs: MagicMock,
+        _mock_recent: MagicMock,
+        _mock_today: MagicMock,
+        _mock_market: MagicMock,
+        _mock_parser: MagicMock,
         mock_filter_imports: MagicMock,
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
@@ -53,6 +64,8 @@ class TestSprint34DashboardRules:
         _mock_notifications: MagicMock,
         _mock_offers: MagicMock,
         _mock_unread: MagicMock,
+        _mock_attach: MagicMock,
+        _mock_messages: MagicMock,
     ) -> None:
         mock_filter_imports.side_effect = lambda logs, user: (
             [{"id": "shared"}, {"id": "admin-only"}]

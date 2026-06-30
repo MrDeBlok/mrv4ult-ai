@@ -34,6 +34,7 @@ def _desk_payload(**overrides) -> dict:
             {"key": "search", "label": "Search", "url": "/", "style": "primary", "visible": True},
             {"key": "import", "label": "Import", "url": "/import", "style": "outline-dark", "visible": True},
         ],
+        "matched_requests": [],
         "top_opportunities": [],
         "ai_needs_help": [
             {
@@ -188,24 +189,33 @@ class TestTradingDeskPage:
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
     @patch("dashboard_data.list_recent_notifications", return_value=[])
     @patch("database.list_active_offers_for_market_matching", return_value=[])
-    @patch("dashboard_data.list_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_parser_review_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_market_request_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_today_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_recent_import_logs", return_value=[])
+    @patch("dashboard_data.load_dashboard_matched_requests", return_value=[])
     @patch("dashboard_data.get_unread_notification_count", return_value=0)
     @patch("dashboard_data.parser_review_import_logs_for_user", return_value=[])
     def test_existing_dashboard_route_still_works(
         self,
         _mock_parser_logs: MagicMock,
         _mock_unread: MagicMock,
-        _mock_import_logs: MagicMock,
+        _mock_recent: MagicMock,
+        _mock_today: MagicMock,
+        _mock_market: MagicMock,
+        _mock_parser: MagicMock,
         _mock_offers: MagicMock,
         _mock_notifications: MagicMock,
         _mock_business_filter: MagicMock,
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
+        _mock_matched: MagicMock,
     ) -> None:
         desk = load_trading_desk(TRADER_ONE, format_timestamp=lambda value: "2026-06-27")
 
         assert "kpis" in desk
         assert len(desk["kpis"]) == 5
+        assert desk["matched_requests"] == []
         assert desk["top_opportunities"] == []
         assert desk["live_market"] == []
 

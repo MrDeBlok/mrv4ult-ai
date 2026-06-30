@@ -18,7 +18,10 @@ from dashboard_data import (
     load_live_market_rows,
     load_trading_desk,
 )
-from database import IMPORT_LOG_LIST_LIMIT_DASHBOARD
+from database import (
+    IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE,
+    IMPORT_LOG_LIST_LIMIT_DASHBOARD_TODAY,
+)
 from tests.conftest import ADMIN_USER, TRADER_ONE
 
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
@@ -63,6 +66,7 @@ def _matching_offer(*, reference: str = "126610LN", price: int = 12000) -> dict:
 
 
 class TestDashboardSingleFetch:
+    @patch("dashboard_data.load_dashboard_matched_requests", return_value=[])
     @patch("dashboard_data.get_unread_notification_count", return_value=0)
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
@@ -71,10 +75,16 @@ class TestDashboardSingleFetch:
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
-    @patch("dashboard_data.list_import_logs", return_value=[])
-    def test_load_trading_desk_fetches_import_logs_once(
+    @patch("dashboard_data.list_dashboard_parser_review_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_market_request_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_today_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_recent_import_logs", return_value=[])
+    def test_load_trading_desk_uses_targeted_dashboard_queries(
         self,
-        mock_list_import_logs: MagicMock,
+        mock_recent: MagicMock,
+        mock_today: MagicMock,
+        mock_market: MagicMock,
+        mock_parser: MagicMock,
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
         _mock_parser_counts: MagicMock,
@@ -83,10 +93,16 @@ class TestDashboardSingleFetch:
         _mock_live_market: MagicMock,
         _mock_actions: MagicMock,
         _mock_unread: MagicMock,
+        _mock_matched: MagicMock,
     ) -> None:
         load_trading_desk(TRADER_ONE, format_timestamp=lambda value: value, now=TODAY_NOON)
 
-        mock_list_import_logs.assert_called_once_with(limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD)
+        mock_recent.assert_called_once()
+        assert mock_recent.call_args.kwargs["limit"] == IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE
+        mock_today.assert_called_once()
+        assert "since_iso" in mock_today.call_args.kwargs
+        mock_market.assert_called_once_with()
+        mock_parser.assert_called_once_with()
 
 
 class TestDashboardLightweightOpportunities:
@@ -213,6 +229,7 @@ class TestDashboardLimitedNotifications:
 
 class TestDashboardTimingLogs:
     @patch("dashboard_data.logger")
+    @patch("dashboard_data.load_dashboard_matched_requests", return_value=[])
     @patch("dashboard_data.get_unread_notification_count", return_value=0)
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
@@ -221,10 +238,16 @@ class TestDashboardTimingLogs:
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
-    @patch("dashboard_data.list_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_parser_review_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_market_request_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_today_import_logs", return_value=[])
+    @patch("dashboard_data.list_dashboard_recent_import_logs", return_value=[])
     def test_load_trading_desk_logs_section_timings(
         self,
-        _mock_list_import_logs: MagicMock,
+        _mock_recent: MagicMock,
+        _mock_today: MagicMock,
+        _mock_market: MagicMock,
+        _mock_parser: MagicMock,
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
         _mock_parser_counts: MagicMock,
@@ -233,11 +256,14 @@ class TestDashboardTimingLogs:
         _mock_live_market: MagicMock,
         _mock_actions: MagicMock,
         _mock_unread: MagicMock,
+        _mock_matched: MagicMock,
         mock_logger: MagicMock,
     ) -> None:
         load_trading_desk(TRADER_ONE, format_timestamp=lambda value: value, now=TODAY_NOON)
 
         logged_sections = [call.args[1] for call in mock_logger.info.call_args_list]
-        assert "list_import_logs" in logged_sections
+        assert "matched_requests" in logged_sections
+        assert "kpi_cards" in logged_sections
         assert "top_opportunities" in logged_sections
         assert "ai_needs_help" in logged_sections
+        assert "live_market" in logged_sections

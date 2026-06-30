@@ -111,7 +111,7 @@ class TestActivityDatabaseFilters:
         return mock_table, mock_query
 
     @patch("database.get_client")
-    @patch("database.import_log_list_columns", return_value="id,status,summary")
+    @patch("database.import_log_list_columns_light", return_value="id,status")
     def test_active_tab_applies_database_status_filter(
         self,
         _mock_columns: MagicMock,
@@ -129,7 +129,7 @@ class TestActivityDatabaseFilters:
         assert "status.eq.success" in mock_query.or_.call_args.args[0]
 
     @patch("database.get_client")
-    @patch("database.import_log_list_columns", return_value="id,status")
+    @patch("database.import_log_list_columns_light", return_value="id,status")
     def test_stats_scan_uses_all_tab_without_no_watch_status(
         self,
         _mock_columns: MagicMock,

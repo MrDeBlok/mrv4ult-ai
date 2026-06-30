@@ -6,7 +6,13 @@ from typing import Any
 
 from activity_feed import message_preview
 from contact_classification import format_import_sender_label, should_redact_import_sender
-from database import get_import_log, get_message_by_id, get_messages_by_ids, list_market_request_import_logs
+from database import (
+    attach_import_log_summaries,
+    get_import_log,
+    get_message_by_id,
+    get_messages_by_ids,
+    list_market_request_import_logs,
+)
 from dealer_intelligence import format_activity_timestamp
 from import_status import filter_discarded_import_logs, normalize_import_status
 from search import _display_value, format_price, format_usd_price
@@ -252,6 +258,7 @@ def load_market_request_rows(
         reverse=True,
     )
 
+    import_logs = attach_import_log_summaries(import_logs)
     messages_by_id = _messages_by_id_for_import_logs(import_logs)
     rows: list[Record] = []
     for import_log in import_logs:

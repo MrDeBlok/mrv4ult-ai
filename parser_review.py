@@ -315,8 +315,9 @@ def load_parser_review_page_data(
     format_timestamp,
 ) -> tuple[list[Record], dict[str, int]]:
     """Build parser review rows with one batched messages query."""
-    from database import get_messages_by_ids
+    from database import attach_import_log_summaries, get_messages_by_ids
 
+    import_logs = attach_import_log_summaries(import_logs)
     pending = filter_parser_review_imports(import_logs)
     issue_index = _build_issue_index(pending)
     counts = _parser_review_counts_from_index(pending, issue_index)

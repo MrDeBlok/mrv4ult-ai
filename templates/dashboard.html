@@ -55,6 +55,58 @@
     {% endfor %}
 </section>
 
+<section class="card shadow-sm mb-4">
+    <div class="card-header bg-white py-3">
+        <h2 class="h5 mb-0">Matched Requests</h2>
+    </div>
+    <div class="card-body p-0">
+        {% if desk.matched_requests %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 trading-desk-table">
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col">Client</th>
+                        <th scope="col">Watch</th>
+                        <th scope="col">Dealer</th>
+                        <th scope="col">Offer price</th>
+                        <th scope="col">Potential profit</th>
+                        <th scope="col">Match age</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Confidence</th>
+                        <th scope="col"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in desk.matched_requests %}
+                    <tr>
+                        <td>{{ row.client_name }}</td>
+                        <td>{{ row.watch_label }}</td>
+                        <td>{{ row.dealer }}</td>
+                        <td>{{ row.offer_price }}</td>
+                        <td>{{ row.potential_profit }}</td>
+                        <td class="text-nowrap">{{ row.match_age }}</td>
+                        <td>
+                            <span class="badge text-bg-{{ row.status_class }}">{{ row.status_label }}</span>
+                        </td>
+                        <td>
+                            <span class="badge text-bg-{{ row.confidence_class }}">{{ row.confidence_label }}</span>
+                        </td>
+                        <td class="text-end">
+                            {% if row.request_url %}
+                            <a href="{{ row.request_url }}" class="btn btn-sm btn-outline-primary">Open request</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0 p-3 p-md-4">No matched requests yet.</p>
+        {% endif %}
+    </div>
+</section>
+
 <div class="row g-4">
     <div class="col-12 col-xxl-7">
         <section class="card shadow-sm h-100">
