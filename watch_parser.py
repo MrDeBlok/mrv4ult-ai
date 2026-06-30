@@ -96,6 +96,7 @@ WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ACCESSORY_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\bbox\s+and\s+papers\b", re.I), "full set", "full_set"),
     (re.compile(r"\bfull\s+set\b", re.I), "full set", "full_set"),
+    (re.compile(r"\bfullset\b", re.I), "full set", "full_set"),
     (re.compile(r"\bwatch\s+only\b", re.I), "watch only", "watch_only"),
     (re.compile(r"\bbox\s+only\b", re.I), "box only", "box_only"),
     (re.compile(r"\bpapers?\s+only\b", re.I), "papers", "papers"),
@@ -109,7 +110,7 @@ NOTE_KEEP_PATTERN = re.compile(
 )
 
 ACCESSORY_LINE_PATTERN = re.compile(
-    r"\bfull\s+set\b|\bwatch\s+only\b|\bbox\s+only\b|\bpapers\b|\bbh\s+deal\b",
+    r"\bfull\s*set\b|\bfullset\b|\bwatch\s+only\b|\bbox\s+only\b|\bpapers\b|\bbh\s+deal\b",
     re.I,
 )
 
@@ -140,7 +141,10 @@ DIAL_PATTERN = re.compile(
 
 CURRENCY_CODE_PATTERN = r"usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
+DOTTED_WATCH_REFERENCE_PATTERN = re.compile(r"\b\d{3}\.\d{3}\b")
+
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
+    (re.compile(r"\b(\d{3}\.\d{3})\b"), "A. Lange & Söhne"),
     (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
     (re.compile(r"\b(\d{4}/[0-9A-Z]+)\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{4}[A-Za-z]-\d{3,})\b", re.I), "Patek Philippe"),
@@ -374,6 +378,24 @@ def parse_message(message: str) -> ParseResult:
         return {"message_type": "unknown", "watches": []}
 
     is_request = bool(REQUEST_PATTERN.search(text))
+
+    from dealer_list_splitter import split_dealer_list_message
+
+    dealer_list = split_dealer_list_message(text)
+    if dealer_list is not None and not (is_request and not OFFER_PATTERN.search(text)):
+        header_brand, offer_lines = dealer_list
+        watches: list[WatchDict] = []
+        for line in offer_lines:
+            if watch := parse_watch_line(line, current_brand=header_brand):
+                watch["source_line"] = line
+                watch["dealer_list_line"] = True
+                watches.append(watch)
+        if len(watches) >= 2:
+            message_type = classify_message(text, watches, is_request)
+            if message_type == "offer":
+                message_type = "offer_list"
+            return {"message_type": message_type, "watches": watches}
+
     current_brand: str | None = None
     watches: list[WatchDict] = []
 
@@ -504,13 +526,22 @@ def iter_content_lines(message: str) -> list[str]:
 
 def _is_brand_only_line(line: str) -> str | None:
     """Return brand name if the line contains only a brand header."""
-    brand = _extract_brand(line)
+    from dealer_list_splitter import clean_dealer_list_line
+
+    cleaned = clean_dealer_list_line(line)
+    brand = _extract_brand(cleaned) or _extract_brand(line)
     if brand is None:
         return None
-    remaining = get_brand_pattern().sub("", line).strip(" :.-")
+    if _extract_reference(cleaned)[0] or _extract_price(cleaned)[0] is not None:
+        return None
+    remaining = get_brand_pattern().sub("", cleaned).strip(" :.-")
+    remaining = DECORATION_ONLY_PATTERN.sub("", remaining).strip(" :.-")
     if remaining:
         return None
     return brand
+
+
+DECORATION_ONLY_PATTERN = re.compile(r"[^\w\s&]+")
 
 
 def _looks_like_watch_line(line: str) -> bool:
@@ -963,6 +994,8 @@ def _extract_als_brand(text: str) -> str | None:
 
 def _infer_brand_from_reference(reference: str) -> str | None:
     normalized = reference.upper().replace(" ", "")
+    if re.fullmatch(r"\d{3}\.\d{3}", reference):
+        return "A. Lange & Söhne"
     if normalized.startswith("RM"):
         return "Richard Mille"
     if "/" in normalized:
@@ -980,11 +1013,23 @@ def _infer_brand_from_reference(reference: str) -> str | None:
     return None
 
 
+def _is_dotted_watch_reference_token(token: str) -> bool:
+    """Return True for A. Lange-style references like 101.021."""
+    return bool(DOTTED_WATCH_REFERENCE_PATTERN.fullmatch(token.strip()))
+
+
 def _mask_price_spans(text: str) -> str:
     """Remove price segments so numeric references are not confused with prices."""
     masked = text
     for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS[:-1]:
-        masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
+        masked = pattern.sub(
+            lambda match, _pattern=pattern: (
+                match.group(0)
+                if _is_dotted_watch_reference_token(match.group(0))
+                else " " * len(match.group(0))
+            ),
+            masked,
+        )
     return masked
 
 
@@ -1158,6 +1203,8 @@ def _reference_token_has_currency_suffix(reference: str) -> bool:
 
 def _price_match_has_strong_signal(match: re.Match[str]) -> bool:
     matched_text = match.group(0)
+    if _is_dotted_watch_reference_token(matched_text):
+        return False
     if re.search(r"\d{1,3}(?:\.\d{3})+", matched_text):
         return True
     if re.search(r"\d{1,3}(?:,\d{3})+", matched_text):
@@ -1180,6 +1227,8 @@ def _should_reject_price_candidate(
     suffix: str | None,
     match: re.Match[str],
 ) -> bool:
+    if _is_dotted_watch_reference_token(match.group(0)):
+        return True
     if _looks_like_year_amount(price, suffix):
         return True
     if suffix is not None and _is_amount_suffix(suffix):

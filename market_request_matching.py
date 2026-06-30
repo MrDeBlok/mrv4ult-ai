@@ -132,6 +132,20 @@ def offer_matches_market_request(criteria: Record, offer: Record) -> bool:
     return _alias_matches_market_request(criteria, offer_watch)
 
 
+def classify_market_request_match(criteria: Record, offer: Record) -> str | None:
+    """Return match quality: exact_reference, alias, or None."""
+    if not offer_matches_market_request(criteria, offer):
+        return None
+
+    offer_watch = enrich_parsed_watch(_nested_record(offer.get("watches")))
+    if _has_meaningful_reference(criteria.get("reference")) and _reference_matches_market_request(
+        criteria,
+        offer_watch,
+    ):
+        return "exact_reference"
+    return "alias"
+
+
 def can_view_matching_offer(user: Record | None, offer: Record) -> bool:
     """Apply contact visibility rules to a candidate matching offer."""
     if user is None:

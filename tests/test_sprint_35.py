@@ -669,7 +669,7 @@ class TestMarketRequest352Matching:
         assert trader_matches[0]["dealer_id"] == "dealer-visible"
         assert len(admin_matches) == 2
 
-    @patch("market_request_matching.find_matching_offers_for_market_request")
+    @patch("market_requests.build_market_request_opportunity_bundle")
     @patch("market_requests.get_import_log")
     @patch("market_requests.get_message_by_id")
     @patch("market_requests.list_import_logs")
@@ -678,29 +678,41 @@ class TestMarketRequest352Matching:
         mock_list_import_logs: MagicMock,
         mock_get_message: MagicMock,
         mock_get_import_log: MagicMock,
-        mock_find_matches: MagicMock,
+        mock_opportunity_bundle: MagicMock,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         import_log = _market_request_log(import_id=import_id)
         mock_get_import_log.return_value = import_log
         mock_list_import_logs.return_value = [import_log]
         mock_get_message.return_value = {"raw_text": "WTB Rolex Daytona 126500LN"}
-        mock_find_matches.return_value = [
+        mock_opportunity_bundle.return_value = (
+            [
+                {
+                    "offer_id": "offer-1",
+                    "watch_id": "watch-1",
+                    "dealer_id": "dealer-1",
+                    "dealer_name": "HK Dealer",
+                    "asking_price": "$24,000",
+                    "net_price": "$24,000",
+                    "retail_price": "—",
+                    "condition": "New",
+                    "country": "Hong Kong",
+                    "import_date": "2026-06-27 12:00",
+                    "last_seen": "2026-06-27 12:00",
+                    "offer_url": "/watch/watch-1",
+                }
+            ],
             {
-                "offer_id": "offer-1",
-                "watch_id": "watch-1",
-                "dealer_id": "dealer-1",
-                "dealer_name": "HK Dealer",
-                "asking_price": "$24,000",
-                "net_price": "$24,000",
-                "retail_price": "—",
-                "condition": "New",
-                "country": "Hong Kong",
-                "import_date": "2026-06-27 12:00",
-                "last_seen": "2026-06-27 12:00",
-                "offer_url": "/watch/watch-1",
-            }
-        ]
+                "has_opportunities": True,
+                "empty_message": None,
+                "opportunity_score": 93,
+                "confidence_label": "Excellent",
+                "potential_spread": "$1,000",
+                "reasons": [],
+                "recommended_action": "Contact dealer immediately",
+                "best_match": None,
+            },
+        )
 
         client = TestClient(app)
         response = client.get(f"/market-requests/{import_id}")
@@ -710,7 +722,7 @@ class TestMarketRequest352Matching:
         assert "HK Dealer" in response.text
         assert 'href="/watch/watch-1"' in response.text
 
-    @patch("market_request_matching.find_matching_offers_for_market_request", return_value=[])
+    @patch("market_requests.build_market_request_opportunity_bundle")
     @patch("market_requests.get_import_log")
     @patch("market_requests.get_message_by_id")
     @patch("market_requests.list_import_logs")
@@ -719,13 +731,26 @@ class TestMarketRequest352Matching:
         mock_list_import_logs: MagicMock,
         mock_get_message: MagicMock,
         mock_get_import_log: MagicMock,
-        _mock_find_matches: MagicMock,
+        mock_opportunity_bundle: MagicMock,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         import_log = _market_request_log(import_id=import_id)
         mock_get_import_log.return_value = import_log
         mock_list_import_logs.return_value = [import_log]
         mock_get_message.return_value = {"raw_text": "WTB Rolex Daytona 126500LN"}
+        mock_opportunity_bundle.return_value = (
+            [],
+            {
+                "has_opportunities": False,
+                "empty_message": "No opportunity found yet.",
+                "opportunity_score": None,
+                "confidence_label": None,
+                "potential_spread": None,
+                "reasons": [],
+                "recommended_action": None,
+                "best_match": None,
+            },
+        )
 
         client = TestClient(app)
         response = client.get(f"/market-requests/{import_id}")

@@ -25,6 +25,7 @@ class WhatsAppMessage:
     message_text: str
     received_at: datetime
     dealer_alias: str | None = None
+    whatsapp_message_id: str | None = None
 
 
 def collect_message(message: WhatsAppMessage) -> IngestSummary:
@@ -49,7 +50,8 @@ def collect_message(message: WhatsAppMessage) -> IngestSummary:
         dealer_alias = None
 
     logger.info(
-        "[WhatsApp ingest] collect_message: group=%s dealer=%s alias=%s chars=%s",
+        "[WhatsApp ingest] collect_message: whatsapp_message_id=%s group=%s dealer=%s alias=%s chars=%s",
+        message.whatsapp_message_id or "N/A",
         group_name,
         dealer_whatsapp,
         dealer_alias or "N/A",
@@ -62,11 +64,16 @@ def collect_message(message: WhatsAppMessage) -> IngestSummary:
         dealer_whatsapp=dealer_whatsapp,
         dealer_alias=dealer_alias,
         received_at=received_at,
+        whatsapp_message_id=message.whatsapp_message_id,
+        source="whatsapp_webhook",
     )
     logger.info(
-        "[WhatsApp ingest] collect_message complete: status=%s import_log_id=%s",
+        "[WhatsApp ingest] collect_message complete: whatsapp_message_id=%s status=%s message_id=%s import_log_id=%s already_processed=%s",
+        message.whatsapp_message_id or "N/A",
         summary.get("status"),
+        summary.get("message_id"),
         summary.get("import_log_id"),
+        summary.get("already_processed", False),
     )
     return summary
 

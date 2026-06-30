@@ -54,6 +54,95 @@
 
 <section class="card shadow-sm mb-4">
     <div class="card-header bg-white py-3">
+        <h2 class="h5 mb-0">Opportunity Analysis</h2>
+    </div>
+    <div class="card-body">
+        {% set analysis = detail.opportunity_analysis %}
+        {% if analysis.has_opportunities %}
+        <div class="advisor-panel mb-4">
+            <h3 class="h6 text-uppercase text-muted mb-2">AI Trading Advisor</h3>
+            <p class="mb-0 advisor-summary">{{ analysis.ai_advisor_summary }}</p>
+        </div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-lg-7">
+                <div class="opportunity-score-card border rounded-3 p-4 h-100">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                        <div>
+                            <div class="text-muted small mb-1">Opportunity Score</div>
+                            <div class="display-4 fw-bold mb-1">{{ analysis.opportunity_score }}</div>
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <span class="badge rounded-pill text-bg-{{ analysis.confidence_badge_class or 'secondary' }}">{{ analysis.score_label or analysis.confidence_label }}</span>
+                                {% if analysis.urgency %}
+                                <span class="badge rounded-pill text-bg-{{ analysis.urgency_badge_class or 'primary' }} opportunity-urgency-badge">{{ analysis.urgency }}</span>
+                                {% endif %}
+                                <span class="badge rounded-pill text-bg-{{ analysis.health_badge_class or 'secondary' }}">{{ analysis.health }}</span>
+                            </div>
+                        </div>
+                        <div class="text-lg-end">
+                            <div class="text-muted small mb-1">{{ analysis.potential_profit_title or "Potential Profit" }}</div>
+                            {% if analysis.budget_known %}
+                            <div class="fs-3 fw-semibold text-success">{{ analysis.potential_profit_value or analysis.potential_profit }}</div>
+                            {% else %}
+                            <div class="fs-5 fw-semibold">{{ analysis.potential_profit_title or "Budget unknown" }}</div>
+                            <div class="text-muted small">{{ analysis.potential_profit_subtitle or "Unable to calculate profit" }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="text-muted small">Recommendation</span>
+                        <span class="badge rounded-pill text-bg-{{ analysis.recommendation_badge_class or 'secondary' }} px-3 py-2">{{ analysis.recommendation or analysis.recommended_action }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <div class="border rounded-3 p-4 h-100">
+                    <div class="mb-3">
+                        <div class="text-muted small">Confidence</div>
+                        <div class="fs-4 fw-semibold">{{ analysis.data_quality_confidence_pct }}%</div>
+                        <div class="text-muted small">Reason: {{ analysis.data_quality_confidence_reason }}</div>
+                    </div>
+                    <div>
+                        <div class="text-muted small mb-1">Best Match</div>
+                        {% if analysis.best_match %}
+                        <div class="fw-semibold">{{ analysis.best_match.dealer_name }}</div>
+                        {% if analysis.best_match.asking_price %}
+                        <div class="text-muted small">{{ analysis.best_match.asking_price }}</div>
+                        {% endif %}
+                        <div class="mt-2">
+                            <span class="text-muted small">Dealer Rating</span>
+                            <span class="badge rounded-pill text-bg-{{ analysis.best_match.dealer_rating_badge_class or 'secondary' }} ms-1">{{ analysis.best_match.dealer_rating }}</span>
+                        </div>
+                        {% if analysis.best_match.offer_url %}
+                        <div class="mt-2"><a href="{{ analysis.best_match.offer_url }}">View offer</a></div>
+                        {% endif %}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div>
+            <div class="text-muted small mb-2">Reasons</div>
+            <ul class="list-unstyled mb-0 opportunity-reasons">
+                {% for reason in analysis.positive_reasons %}
+                <li class="text-success">{{ reason }}</li>
+                {% endfor %}
+                {% for reason in analysis.warning_reasons %}
+                <li class="text-warning-emphasis">{{ reason }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% else %}
+        <p class="mb-0 fw-semibold">{{ analysis.empty_message }}</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card shadow-sm mb-4">
+    <div class="card-header bg-white py-3">
         <h2 class="h5 mb-0">Matching Offers</h2>
     </div>
     {% if detail.matching_offers %}
@@ -61,28 +150,44 @@
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
+                    <th scope="col">Score</th>
+                    <th scope="col">Health</th>
                     <th scope="col">Dealer</th>
-                    <th scope="col">Asking price</th>
-                    <th scope="col">Net</th>
-                    <th scope="col">Retail</th>
-                    <th scope="col">Condition</th>
-                    <th scope="col">Country</th>
-                    <th scope="col">Import date</th>
-                    <th scope="col">Last seen</th>
+                    <th scope="col">Dealer Rating</th>
+                    <th scope="col">Potential Profit</th>
+                    <th scope="col">Urgency</th>
+                    <th scope="col">Recommendation</th>
                     <th scope="col">Offer</th>
                 </tr>
             </thead>
             <tbody>
                 {% for offer in detail.matching_offers %}
                 <tr>
+                    <td class="fw-semibold">{{ offer.opportunity_score }}</td>
+                    <td>
+                        <span class="badge rounded-pill text-bg-{{ offer.health_badge_class or 'secondary' }}">{{ offer.health }}</span>
+                    </td>
                     <td>{{ offer.dealer_name }}</td>
-                    <td>{{ offer.asking_price }}</td>
-                    <td>{{ offer.net_price }}</td>
-                    <td>{{ offer.retail_price }}</td>
-                    <td>{{ offer.condition }}</td>
-                    <td>{{ offer.country }}</td>
-                    <td>{{ offer.import_date }}</td>
-                    <td>{{ offer.last_seen }}</td>
+                    <td>
+                        <span class="badge rounded-pill text-bg-{{ offer.dealer_rating_badge_class or 'secondary' }}">{{ offer.dealer_rating }}</span>
+                    </td>
+                    <td>
+                        {% if offer.budget_known %}
+                        {{ offer.potential_profit_value or offer.potential_profit or "—" }}
+                        {% else %}
+                        <span class="text-muted">Budget unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if offer.urgency %}
+                        <span class="badge rounded-pill text-bg-{{ offer.urgency_badge_class or 'primary' }}">{{ offer.urgency }}</span>
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge rounded-pill text-bg-{{ offer.recommendation_badge_class or 'secondary' }}">{{ offer.recommendation or offer.recommended_action }}</span>
+                    </td>
                     <td><a href="{{ offer.offer_url }}">View offer</a></td>
                 </tr>
                 {% endfor %}

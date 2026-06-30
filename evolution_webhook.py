@@ -17,6 +17,11 @@ from evolution_client import (
     fetch_group_info,
     get_default_instance_name,
 )
+from whatsapp_ingest_config import (
+    get_app_started_at,
+    is_whatsapp_webhook_ingest_enabled,
+    should_skip_backlog_message,
+)
 
 logger = logging.getLogger("mrv4ult.whatsapp.ingest")
 
@@ -42,10 +47,16 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     log_webhook_payload(payload)
     event = normalize_event_name(payload.get("event"))
     instance_name = str(payload.get("instance") or "")
+    data = payload.get("data")
+    preview_message_id = None
+    if isinstance(data, dict):
+        preview_message_id = extract_whatsapp_message_id(data)
     logger.info(
-        "[WhatsApp ingest] New webhook received: event=%s instance=%s",
+        "[WhatsApp ingest] New webhook received: event=%s instance=%s whatsapp_message_id=%s "
+        "(listener does not replay history; each POST is a separate ingest attempt)",
         event or "missing",
         instance_name or "unknown",
+        preview_message_id or "missing",
     )
 
     if event in {"groups.upsert", "groups.update", "group.update"}:
@@ -65,6 +76,13 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {"status": "ignored", "reason": f"unsupported event: {event or 'missing'}"}
 
+    if not is_whatsapp_webhook_ingest_enabled():
+        logger.info(
+            "[WhatsApp ingest] Message skipped: reason=webhook ingest disabled "
+            "(ENABLE_WHATSAPP_WEBHOOK_INGEST=false)"
+        )
+        return {"status": "ignored", "reason": "webhook ingest disabled"}
+
     data = unwrap_message_data(payload.get("data"))
     if not isinstance(data, dict):
         logger.info("[WhatsApp ingest] Message skipped: reason=missing message data")
@@ -79,18 +97,56 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         logger.info("[WhatsApp ingest] Message skipped: reason=no text content")
         return {"status": "ignored", "reason": "no text content"}
 
+    whatsapp_message_id = extract_whatsapp_message_id(data)
+    if whatsapp_message_id:
+        from database import find_message_by_whatsapp_id
+
+        if find_message_by_whatsapp_id(whatsapp_message_id):
+            logger.info(
+                "[WhatsApp ingest] Skipped already imported whatsapp_message_id=%s",
+                whatsapp_message_id,
+            )
+            return {
+                "status": "already_imported",
+                "already_processed": True,
+                "whatsapp_message_id": whatsapp_message_id,
+            }
+
+    received_at = extract_received_at(data, payload)
+    if should_skip_backlog_message(received_at):
+        started_at = get_app_started_at()
+        logger.info(
+            "Skipped backlog message: whatsapp_message_id=%s received_at=%s app_started_at=%s",
+            whatsapp_message_id or "missing",
+            received_at.isoformat(),
+            started_at.isoformat() if started_at else "unknown",
+        )
+        return {
+            "status": "skipped_backlog",
+            "reason": "backlog ingest disabled",
+            "whatsapp_message_id": whatsapp_message_id,
+            "received_at": received_at.isoformat(),
+        }
+
     key = data.get("key") or {}
     remote_jid = str(key.get("remoteJid") or "")
     logger.info(
-        "[WhatsApp ingest] New message detected: remote_jid=%s text_len=%s push_name=%s",
+        "[WhatsApp ingest] New message detected: whatsapp_message_id=%s remote_jid=%s text_len=%s push_name=%s",
+        whatsapp_message_id or "missing",
         remote_jid or "unknown",
         len(message_text),
         extract_dealer_alias(data) or "N/A",
     )
 
-    whatsapp_message = map_payload_to_whatsapp_message(payload, data, message_text)
+    whatsapp_message = map_payload_to_whatsapp_message(
+        payload,
+        data,
+        message_text,
+        whatsapp_message_id=whatsapp_message_id,
+    )
     logger.info(
-        "[WhatsApp ingest] Sending to ingest: group=%s dealer=%s alias=%s",
+        "[WhatsApp ingest] Sending to ingest: whatsapp_message_id=%s group=%s dealer=%s alias=%s",
+        whatsapp_message.whatsapp_message_id or "missing",
         whatsapp_message.group_name,
         whatsapp_message.dealer_whatsapp,
         whatsapp_message.dealer_alias or "N/A",
@@ -98,13 +154,16 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     summary = collect_message(whatsapp_message)
 
     logger.info(
-        "[WhatsApp ingest] Ingest result: status=%s watches_parsed=%s new_offers=%s "
-        "duplicate_offers=%s import_log_id=%s saved=%s",
+        "[WhatsApp ingest] Ingest result: whatsapp_message_id=%s status=%s message_id=%s watches_parsed=%s new_offers=%s "
+        "duplicate_offers=%s import_log_id=%s already_processed=%s saved=%s",
+        whatsapp_message.whatsapp_message_id or "missing",
         summary.get("status"),
+        summary.get("message_id"),
         summary.get("watches_parsed"),
         summary.get("new_offers"),
         summary.get("duplicate_offers"),
         summary.get("import_log_id"),
+        summary.get("already_processed", False),
         summary.get("saved", summary.get("import_log_id") is not None),
     )
 
@@ -117,8 +176,11 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {
-        "status": "imported",
+        "status": "imported" if summary.get("status") != "already_imported" else "already_imported",
         "ingest_status": summary.get("status"),
+        "whatsapp_message_id": whatsapp_message.whatsapp_message_id,
+        "message_id": summary.get("message_id"),
+        "already_processed": summary.get("already_processed", False),
         "group": summary.get("group"),
         "dealer_whatsapp": summary.get("dealer_whatsapp"),
         "watches_parsed": summary.get("watches_parsed"),
@@ -126,6 +188,15 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         "duplicate_offers": summary.get("duplicate_offers"),
         "import_log_id": summary.get("import_log_id"),
     }
+
+
+def extract_whatsapp_message_id(data: dict[str, Any]) -> str | None:
+    """Return Evolution/WhatsApp message id used for ingest deduplication."""
+    key = data.get("key") or {}
+    message_id = key.get("id")
+    if isinstance(message_id, str) and message_id.strip():
+        return message_id.strip()
+    return None
 
 
 def unwrap_message_data(data: Any) -> dict[str, Any] | None:
@@ -173,6 +244,8 @@ def map_payload_to_whatsapp_message(
     payload: dict[str, Any],
     data: dict[str, Any],
     message_text: str,
+    *,
+    whatsapp_message_id: str | None = None,
 ) -> WhatsAppMessage:
     key = data.get("key") or {}
     remote_jid = str(key.get("remoteJid") or "")
@@ -196,6 +269,7 @@ def map_payload_to_whatsapp_message(
             dealer_alias=dealer_alias,
             message_text=message_text,
             received_at=received_at,
+            whatsapp_message_id=whatsapp_message_id,
         )
         logger.info(
             "[Evolution webhook private] Private offer mapped: dealer=%s alias=%s",
@@ -225,6 +299,7 @@ def map_payload_to_whatsapp_message(
         dealer_alias=dealer_alias,
         message_text=message_text,
         received_at=received_at,
+        whatsapp_message_id=whatsapp_message_id,
     )
 
 

@@ -110,6 +110,7 @@ from evolution_client import (
 from evolution_webhook import WebhookProcessingError, handle_evolution_webhook
 from ingest import ingest_message
 from whatsapp_listener import start_whatsapp_listener, stop_whatsapp_listener
+from whatsapp_ingest_config import log_startup_ingest_config, mark_app_started
 from client_sourcing import (
     build_client_sourcing_dashboard,
     build_matching_offer_rows,
@@ -157,7 +158,11 @@ from contact_classification import (
     parse_contacts_filter,
     should_redact_import_sender,
 )
-from notifications import build_notification_display, get_unread_notification_count
+from notifications import (
+    build_notification_display,
+    get_unread_notification_count,
+    load_message_previews_by_import_log_id,
+)
 from permissions import (
     USER_ROLE_ADMIN,
     USER_ROLE_TRADER,
@@ -214,6 +219,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
+    mark_app_started()
+    log_startup_ingest_config()
     start_whatsapp_listener()
     yield
     stop_whatsapp_listener()
@@ -456,10 +463,16 @@ async def market_request_detail_page(request: Request, import_id: str) -> HTMLRe
 
 
 def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    previews = load_message_previews_by_import_log_id(notifications)
     rows: list[dict[str, Any]] = []
     for notification in notifications:
         row = build_notification_display(notification)
         row["created_at"] = format_timestamp(row.get("created_at"))
+        import_log_id = notification.get("related_import_log_id")
+        if import_log_id:
+            preview = previews.get(str(import_log_id))
+            if preview:
+                row["message_preview"] = preview
         rows.append(row)
     return rows
 
@@ -1613,6 +1626,7 @@ async def import_submit(
                 dealer_whatsapp=dealer_whatsapp_value,
                 dealer_alias=dealer_alias_value or None,
                 imported_by_user_id=current_user["id"] if current_user else None,
+                source="manual_form",
             )
         except Exception as exc:
             error = str(exc)

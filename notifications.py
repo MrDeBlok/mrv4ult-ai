@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from database import create_notification
@@ -30,6 +31,8 @@ NOTIFICATION_TYPE_CLASSES: dict[str, str] = {
     "excellent_buy": "success",
     "needs_review": "warning",
 }
+
+NOTIFICATION_MESSAGE_PREVIEW_MAX = 180
 
 
 def _watch_label(row: Record) -> str:
@@ -154,6 +157,63 @@ def record_import_notifications(
             )
 
     return created
+
+
+def format_message_preview(
+    raw_text: str | None,
+    *,
+    max_length: int = NOTIFICATION_MESSAGE_PREVIEW_MAX,
+) -> str | None:
+    """Normalize and truncate linked message text for notification previews."""
+    if raw_text is None:
+        return None
+    normalized = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return None
+    if len(normalized) <= max_length:
+        return normalized
+    suffix = "…"
+    truncated = normalized[: max_length - len(suffix)].rstrip()
+    if not truncated:
+        return normalized[: max_length - len(suffix)] + suffix
+    return f"{truncated}{suffix}"
+
+
+def load_message_previews_by_import_log_id(notifications: list[Record]) -> dict[str, str]:
+    """Load WhatsApp message previews for notifications linked to import logs."""
+    from database import get_import_logs_by_ids, get_messages_by_ids
+
+    import_log_ids = [
+        str(notification["related_import_log_id"])
+        for notification in notifications
+        if notification.get("related_import_log_id")
+    ]
+    if not import_log_ids:
+        return {}
+
+    import_logs = get_import_logs_by_ids(list(dict.fromkeys(import_log_ids)))
+    message_ids = [
+        str(import_log["message_id"])
+        for import_log in import_logs.values()
+        if import_log.get("message_id")
+    ]
+    if not message_ids:
+        return {}
+
+    messages = get_messages_by_ids(list(dict.fromkeys(message_ids)))
+    previews: dict[str, str] = {}
+    for import_log_id, import_log in import_logs.items():
+        message_id = import_log.get("message_id")
+        if not message_id:
+            continue
+        message = messages.get(str(message_id))
+        if not message:
+            continue
+        preview = format_message_preview(message.get("raw_text"))
+        if preview:
+            previews[import_log_id] = preview
+    return previews
 
 
 def build_notification_display(notification: Record) -> Record:

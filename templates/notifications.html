@@ -51,6 +51,9 @@
         </div>
         <h2 class="h6 mb-1">{{ item.title }}</h2>
         <p class="mb-2 text-muted">{{ item.message }}</p>
+        {% if item.message_preview %}
+        <p class="mb-2 notification-message-preview text-muted small">{{ item.message_preview }}</p>
+        {% endif %}
         <div class="d-flex flex-wrap align-items-center gap-2">
             {% if item.link_url %}
             <a href="{{ item.link_url }}" class="btn btn-sm btn-outline-primary">{{ item.link_label }}</a>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import Any
@@ -9,6 +10,10 @@ from typing import Any
 from watch_identifier import identify_text, normalize_identifier_key
 
 Record = dict[str, Any]
+
+logger = logging.getLogger(__name__)
+
+MAX_UNKNOWN_NICKNAME_SIGHTINGS_PER_IMPORT = 5
 
 UNKNOWN_NICKNAME_STOP_WORDS = frozenset(
     word.lower()
@@ -53,8 +58,30 @@ def watch_has_nickname_signal(watch: Record) -> bool:
     )
 
 
+def is_structured_dealer_list_offer(watch: Record) -> bool:
+    """Return True for inventory rows parsed from a dealer list split."""
+    if watch.get("dealer_list_line"):
+        return True
+    if not watch.get("brand") or not watch.get("reference"):
+        return False
+    return bool(
+        watch.get("original_price")
+        or watch.get("price")
+        or watch.get("usd_price")
+        or watch.get("production_year")
+        or watch.get("condition")
+    )
+
+
+def should_learn_unknown_nickname(watch: Record) -> bool:
+    """Structured dealer inventory rows should not pollute nickname learning."""
+    return not is_structured_dealer_list_offer(watch)
+
+
 def extract_unknown_nickname_text(watch: Record) -> str | None:
     """Extract likely unknown nickname text when identification failed."""
+    if is_structured_dealer_list_offer(watch):
+        return None
     if identify_text(
         " ".join(
             str(part)
@@ -113,7 +140,10 @@ def record_unknown_nicknames_for_watches(
 
     recorded: list[Record] = []
     seen: set[str] = set()
+    capped = False
     for watch in watches:
+        if not should_learn_unknown_nickname(watch):
+            continue
         if not watch_has_nickname_signal(watch):
             continue
         detected_text = extract_unknown_nickname_text(watch)
@@ -122,6 +152,14 @@ def record_unknown_nicknames_for_watches(
         normalized = normalize_identifier_key(detected_text)
         if normalized in seen:
             continue
+        if len(recorded) >= MAX_UNKNOWN_NICKNAME_SIGHTINGS_PER_IMPORT:
+            if not capped:
+                logger.warning(
+                    "Capped unknown nickname learning at %s sightings for one import",
+                    MAX_UNKNOWN_NICKNAME_SIGHTINGS_PER_IMPORT,
+                )
+                capped = True
+            break
         seen.add(normalized)
         row = record_unknown_nickname_sighting(
             detected_text=detected_text,

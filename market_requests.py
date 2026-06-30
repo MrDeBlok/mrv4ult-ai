@@ -276,6 +276,7 @@ def build_market_request_detail(
     *,
     related_sources: list[Record],
     matching_offers: list[Record] | None = None,
+    opportunity_analysis: Record | None = None,
 ) -> Record:
     """Format one market request for the detail page."""
     row = build_market_request_row(import_log, message)
@@ -304,6 +305,36 @@ def build_market_request_detail(
         ),
         "related_sources": related_sources,
         "matching_offers": matching_offers or [],
+        "opportunity_analysis": opportunity_analysis
+        or {
+            "has_opportunities": False,
+            "empty_message": "No opportunity found yet.",
+            "ai_advisor_summary": "No matching offers yet. Keep monitoring market requests for fresh stock.",
+            "opportunity_score": None,
+            "score_label": None,
+            "confidence_label": None,
+            "confidence_badge_class": "secondary",
+            "health": None,
+            "health_badge_class": "secondary",
+            "data_quality_confidence_pct": None,
+            "data_quality_confidence_reason": None,
+            "urgency": None,
+            "urgency_badge_class": "secondary",
+            "potential_spread": None,
+            "potential_profit": None,
+            "potential_profit_title": None,
+            "potential_profit_value": None,
+            "potential_profit_subtitle": None,
+            "budget_known": False,
+            "positive_reasons": [],
+            "warning_reasons": [],
+            "reasons": [],
+            "recommended_action": None,
+            "recommendation": None,
+            "recommendation_badge_class": "secondary",
+            "score_card": None,
+            "best_match": None,
+        },
     }
 
 
@@ -336,12 +367,17 @@ def load_market_request_detail(
         key=lambda source: source.get("import_time") or "",
         reverse=True,
     )
-    from market_request_matching import find_matching_offers_for_market_request
-
-    matching_offers = find_matching_offers_for_market_request(user, import_log)
+    matching_offers, opportunity_analysis = build_market_request_opportunity_bundle(
+        user,
+        import_log,
+    )
     return build_market_request_detail(
         import_log,
         message,
         related_sources=related_sources,
         matching_offers=matching_offers,
+        opportunity_analysis=opportunity_analysis,
     )
+
+
+from opportunity_engine import build_market_request_opportunity_bundle

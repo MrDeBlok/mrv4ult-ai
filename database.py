@@ -283,6 +283,41 @@ def insert_message(
     return _first_row(response.data, "messages")
 
 
+def find_message_by_whatsapp_id(whatsapp_message_id: str) -> Record | None:
+    """Return the most recent stored message for an external WhatsApp message id."""
+    cleaned = whatsapp_message_id.strip()
+    if not cleaned:
+        return None
+    response = (
+        get_client()
+        .table("messages")
+        .select("*")
+        .eq("whatsapp_message_id", cleaned)
+        .order("received_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def find_import_log_by_message_id(message_id: str) -> Record | None:
+    """Return the latest import log linked to a stored message."""
+    response = (
+        get_client()
+        .table("import_logs")
+        .select("*")
+        .eq("message_id", message_id)
+        .order("import_time", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
 def find_or_create_watch(
     brand: str | None = None,
     reference: str | None = None,
@@ -596,8 +631,23 @@ def get_import_logs_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
     response = (
         get_client()
         .table("import_logs")
-        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp")
+        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp, message_id")
         .in_("id", import_log_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or []}
+
+
+def get_messages_by_ids(message_ids: list[str]) -> dict[str, Record]:
+    """Return messages keyed by id."""
+    if not message_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("messages")
+        .select("id, raw_text")
+        .in_("id", message_ids)
         .execute()
     )
     return {str(row["id"]): row for row in response.data or []}
@@ -1033,24 +1083,26 @@ def insert_offer(
     is_duplicate: bool = False,
     duplicate_of_id: str | None = None,
     status: str = "active",
+    skip_duplicate_check: bool = False,
 ) -> tuple[Record, bool]:
     """Insert an offer unless an identical active offer already exists."""
     normalized_currency = _storage_value(original_currency)
     normalized_condition = _storage_value(normalize_condition_value(condition))
     normalized_card_date = _storage_value(card_date)
 
-    existing = find_duplicate_offer(
-        watch_id,
-        dealer_id,
-        original_price=original_price,
-        original_currency=normalized_currency,
-        condition=normalized_condition,
-        card_date=normalized_card_date,
-        production_year=production_year,
-    )
-    if existing:
-        print("Duplicate offer found")
-        return existing, False
+    if not skip_duplicate_check:
+        existing = find_duplicate_offer(
+            watch_id,
+            dealer_id,
+            original_price=original_price,
+            original_currency=normalized_currency,
+            condition=normalized_condition,
+            card_date=normalized_card_date,
+            production_year=production_year,
+        )
+        if existing:
+            print("Duplicate offer found")
+            return existing, False
 
     payload: Record = {
         "message_id": message_id,
