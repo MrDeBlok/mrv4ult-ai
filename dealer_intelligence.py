@@ -3,18 +3,40 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from condition_normalizer import display_condition
 from contact_classification import normalize_search_phone, normalize_whatsapp_id
+from import_status import is_discarded_no_watch_import
 from search import _display_value, _nested_record, _sort_key_usd_price, format_price, format_usd_price
 from timezone_utils import DISPLAY_TIMEZONE, format_display_timestamp, parse_utc_timestamp
+from user_visibility import can_view_import
 
 Record = dict[str, Any]
 
 TRUSTED_DEALER_MIN_ACTIVE_OFFERS = 10
 ESTABLISHED_DEALER_MIN_ACTIVE_OFFERS = 3
+
+COUNTRY_FLAG_BY_NAME = {
+    "china": "🇨🇳",
+    "france": "🇫🇷",
+    "germany": "🇩🇪",
+    "hong kong": "🇭🇰",
+    "italy": "🇮🇹",
+    "japan": "🇯🇵",
+    "netherlands": "🇳🇱",
+    "singapore": "🇸🇬",
+    "switzerland": "🇨🇭",
+    "uae": "🇦🇪",
+    "united arab emirates": "🇦🇪",
+    "united kingdom": "🇬🇧",
+    "uk": "🇬🇧",
+    "usa": "🇺🇸",
+    "united states": "🇺🇸",
+}
 
 
 def clean_whatsapp_number_for_link(value: str | None) -> str:
@@ -202,6 +224,72 @@ def format_dealer_groups(group_names: list[str]) -> str:
     return ", ".join(cleaned[:3])
 
 
+def format_dealer_last_group(group_names: list[str]) -> str:
+    cleaned = [name.strip() for name in group_names if str(name).strip()]
+    return cleaned[0] if cleaned else "—"
+
+
+def format_dealer_country_display(country: str | None) -> str:
+    name = str(country or "").strip()
+    if not name:
+        return "—"
+    flag = COUNTRY_FLAG_BY_NAME.get(name.lower(), "🌍")
+    return f"{flag} {name}"
+
+
+def format_relative_time_dutch(
+    value: str | datetime | None,
+    *,
+    now: datetime | None = None,
+    missing: str = "—",
+) -> str:
+    """Format a timestamp as Dutch relative time for trader dealer cards."""
+    timestamp = parse_utc_timestamp(value)
+    if timestamp is None:
+        return missing
+
+    reference = now or datetime.now(DISPLAY_TIMEZONE)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=DISPLAY_TIMEZONE)
+    else:
+        reference = reference.astimezone(DISPLAY_TIMEZONE)
+
+    local = timestamp.astimezone(DISPLAY_TIMEZONE)
+    delta = reference - local
+    if delta.total_seconds() <= 0:
+        return "zojuist"
+
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "zojuist"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        if minutes == 1:
+            return "1 minuut geleden"
+        return f"{minutes} minuten geleden"
+
+    hours = minutes // 60
+    if hours < 24:
+        if hours == 1:
+            return "1 uur geleden"
+        return f"{hours} uur geleden"
+
+    days = hours // 24
+    if days < 7:
+        if days == 1:
+            return "1 dag geleden"
+        return f"{days} dagen geleden"
+
+    weeks = days // 7
+    if weeks < 5:
+        if weeks == 1:
+            return "1 week geleden"
+        return f"{weeks} weken geleden"
+
+    return local.strftime("%Y-%m-%d %H:%M")
+
+
 def resolve_dealer_contact_number(
     dealer: Record,
     activity: Record | None = None,
@@ -244,33 +332,38 @@ def classify_dealer_activity_label(
     return "Inactive", "secondary"
 
 
-def dealer_quality_badge(dealer_id: str, offer_counts: dict[str, Record]) -> tuple[str, str]:
+def dealer_quality_badge(dealer_id: str, offer_counts: dict[str, Record]) -> tuple[str, str, bool]:
     active_offers = int(offer_counts.get(str(dealer_id), {}).get("active_offers") or 0)
     if active_offers >= TRUSTED_DEALER_MIN_ACTIVE_OFFERS:
-        return "Trusted", "success"
+        return "Trusted dealer", "success", True
     if active_offers >= ESTABLISHED_DEALER_MIN_ACTIVE_OFFERS:
-        return "Established", "primary"
+        return "Established dealer", "primary", False
     if active_offers >= 1:
-        return "New", "warning"
-    return "Unknown", "secondary"
+        return "New dealer", "warning", False
+    return "Unknown dealer", "secondary", False
 
 
 def build_trader_dealer_list_row(
     dealer: Record,
     activity: Record | None,
     offer_counts: dict[str, Record],
+    *,
+    now: datetime | None = None,
 ) -> Record:
     contact_number = resolve_dealer_contact_number(dealer, activity)
     digits = clean_whatsapp_number_for_link(contact_number)
     last_message_at = (activity or {}).get("last_message_at")
-    activity_label, activity_class = classify_dealer_activity_label(last_message_at)
-    quality_label, quality_class = dealer_quality_badge(str(dealer.get("id")), offer_counts)
-    groups = format_dealer_groups(list((activity or {}).get("groups") or []))
-    last_message = (
-        format_activity_timestamp(last_message_at, missing="—")
-        if last_message_at
-        else "—"
+    activity_label, activity_class = classify_dealer_activity_label(last_message_at, now=now)
+    quality_label, quality_class, quality_show_check = dealer_quality_badge(
+        str(dealer.get("id")),
+        offer_counts,
     )
+    group_names = list((activity or {}).get("groups") or [])
+    groups = format_dealer_groups(group_names)
+    last_group = format_dealer_last_group(group_names)
+    country_display = format_dealer_country_display(dealer.get("country"))
+    last_message_relative = format_relative_time_dutch(last_message_at, now=now)
+    whatsapp_display = contact_number if contact_number != "No number" else "—"
 
     return {
         "id": dealer.get("id"),
@@ -278,13 +371,21 @@ def build_trader_dealer_list_row(
         "display_name": dealer.get("display_name"),
         "phone_number": dealer.get("phone_number"),
         "whatsapp_id": dealer.get("whatsapp_id"),
+        "country": dealer.get("country"),
+        "country_display": country_display,
         "contact_number": contact_number,
+        "whatsapp_display": whatsapp_display,
         "groups": groups,
-        "last_message": last_message,
+        "last_group": last_group,
+        "last_message": format_activity_timestamp(last_message_at, missing="—")
+        if last_message_at
+        else "—",
+        "last_message_relative": last_message_relative,
         "activity_label": activity_label,
         "activity_class": activity_class,
         "quality_label": quality_label,
         "quality_class": quality_class,
+        "quality_show_check": quality_show_check,
         "message_url": f"https://wa.me/{digits}" if digits else None,
         "_last_message_raw": last_message_at,
     }
@@ -320,6 +421,58 @@ def build_trader_dealer_list_rows(
     return rows
 
 
+DEALERS_PAGE_SIZE = 20
+
+
+@dataclass(frozen=True)
+class DealersPageResult:
+    dealers: list[Record]
+    page: int
+    page_size: int
+    has_previous: bool
+    has_next: bool
+    showing_from: int | None
+    showing_to: int | None
+
+
+def dealers_page_url(page: int, search_query: str = "") -> str:
+    """Build a dealers list URL preserving search and pagination."""
+    params: list[tuple[str, str]] = []
+    normalized_query = (search_query or "").strip()
+    if normalized_query:
+        params.append(("q", normalized_query))
+    if page > 1:
+        params.append(("page", str(page)))
+    if not params:
+        return "/dealers"
+    return f"/dealers?{urlencode(params)}"
+
+
+def paginate_dealer_list_rows(
+    rows: list[Record],
+    page: int,
+    *,
+    page_size: int = DEALERS_PAGE_SIZE,
+) -> DealersPageResult:
+    """Slice dealer list rows after visibility filtering and search."""
+    safe_page = max(page, 1)
+    start = (safe_page - 1) * page_size
+    end = start + page_size
+    page_rows = rows[start:end]
+    total = len(rows)
+    showing_from = start + 1 if page_rows else None
+    showing_to = start + len(page_rows) if page_rows else None
+    return DealersPageResult(
+        dealers=page_rows,
+        page=safe_page,
+        page_size=page_size,
+        has_previous=safe_page > 1,
+        has_next=total > end,
+        showing_from=showing_from,
+        showing_to=showing_to,
+    )
+
+
 def build_dealer_profile(dealer: Record) -> Record:
     contact = dealer.get("phone_number") or dealer.get("whatsapp_id") or "N/A"
     return {
@@ -336,6 +489,38 @@ def build_dealer_profile(dealer: Record) -> Record:
     }
 
 
+def activity_detail_url_for_import_log(
+    import_log: Record | None,
+    *,
+    user: Record | None,
+) -> str | None:
+    """Return the activity detail URL when the user may view the source import."""
+    if not import_log or not import_log.get("id"):
+        return None
+    if is_discarded_no_watch_import(import_log):
+        return None
+    if not can_view_import(user, import_log):
+        return None
+    return f"/activity/{import_log['id']}"
+
+
+def attach_dealer_offer_source_urls(
+    offers: list[Record],
+    import_logs_by_message_id: dict[str, Record],
+    *,
+    user: Record | None,
+) -> list[Record]:
+    """Attach activity detail URLs to dealer offers from batched import log lookups."""
+    enriched: list[Record] = []
+    for offer in offers:
+        row = dict(offer)
+        message_id = str(row.get("message_id") or "")
+        import_log = import_logs_by_message_id.get(message_id)
+        row["source_url"] = activity_detail_url_for_import_log(import_log, user=user)
+        enriched.append(row)
+    return enriched
+
+
 def build_dealer_offer_rows(offers: list[Record]) -> list[Record]:
     """Format active dealer offers for the detail page table."""
     rows: list[Record] = []
@@ -343,6 +528,7 @@ def build_dealer_offer_rows(offers: list[Record]) -> list[Record]:
         watch = offer.get("watch") or _nested_record(offer.get("watches"))
         rows.append(
             {
+                "offer_id": offer.get("id"),
                 "watch_id": offer.get("watch_id"),
                 "brand": _display_value(watch.get("brand")),
                 "reference": _display_value(watch.get("reference")),
@@ -356,6 +542,7 @@ def build_dealer_offer_rows(offers: list[Record]) -> list[Record]:
                 "card_date": offer.get("card_date") or "N/A",
                 "condition": display_condition(offer.get("condition")),
                 "received_at": format_activity_timestamp(offer.get("received_at")),
+                "source_url": offer.get("source_url"),
             }
         )
     return rows

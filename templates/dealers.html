@@ -26,55 +26,79 @@
 </section>
 
 {% if dealers %}
-<section class="card shadow-sm">
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th scope="col">Dealer</th>
-                    <th scope="col">WhatsApp / Phone</th>
-                    <th scope="col">Groups</th>
-                    <th scope="col">Last message</th>
-                    <th scope="col">Activity</th>
-                    <th scope="col">Contact</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for dealer in dealers %}
-                <tr
-                    class="activity-row"
-                    tabindex="0"
-                    role="link"
-                    data-href="/dealers/{{ dealer.id }}"
-                >
-                    <td>
-                        <div class="fw-semibold">{{ dealer.name }}</div>
-                        <span class="badge text-bg-{{ dealer.quality_class }}">{{ dealer.quality_label }}</span>
-                    </td>
-                    <td>{{ dealer.contact_number }}</td>
-                    <td>{{ dealer.groups }}</td>
-                    <td>{{ dealer.last_message }}</td>
-                    <td>
-                        <span class="badge text-bg-{{ dealer.activity_class }}">{{ dealer.activity_label }}</span>
-                    </td>
-                    <td>
-                        {% if dealer.message_url %}
-                        <a
-                            href="{{ dealer.message_url }}"
-                            class="btn btn-sm btn-success"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onclick="event.stopPropagation();"
-                        >Message</a>
-                        {% else %}
-                        <span class="text-muted">—</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<section class="card shadow-sm mb-3">
+    <div class="card-body py-2 px-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="text-muted small">
+            {% if showing_from and showing_to %}
+            Showing {{ showing_from }}-{{ showing_to }}
+            {% endif %}
+            · Page {{ page }}
+        </div>
+        <div class="d-flex gap-2">
+            {% if has_previous %}
+            <a href="{{ previous_page_url }}" class="btn btn-sm btn-outline-secondary">Previous</a>
+            {% else %}
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
+            {% endif %}
+            {% if has_next %}
+            <a href="{{ next_page_url }}" class="btn btn-sm btn-outline-secondary">Next</a>
+            {% else %}
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Next</button>
+            {% endif %}
+        </div>
     </div>
+</section>
+<section class="dealer-card-list">
+    {% for dealer in dealers %}
+    <article
+        class="card shadow-sm dealer-card activity-row"
+        tabindex="0"
+        role="link"
+        data-href="/dealers/{{ dealer.id }}"
+    >
+        <div class="card-body p-3 p-md-4">
+            <h2 class="h5 mb-2 dealer-card-title">{{ dealer.name }}</h2>
+            <hr class="dealer-card-divider my-3">
+
+            <div class="dealer-card-meta">
+                <div class="mb-2">
+                    <span class="badge text-bg-{{ dealer.quality_class }} dealer-quality-badge">
+                        {% if dealer.quality_show_check %}✓ {% endif %}{{ dealer.quality_label }}
+                    </span>
+                </div>
+
+                {% if dealer.country_display != "—" %}
+                <div class="dealer-card-line mb-2">{{ dealer.country_display }}</div>
+                {% endif %}
+
+                <div class="dealer-card-line mb-2">
+                    <span class="text-muted">WhatsApp:</span>
+                    {{ dealer.whatsapp_display }}
+                </div>
+
+                <div class="dealer-card-line mb-2">
+                    <span class="text-muted">Laatste bericht:</span>
+                    {{ dealer.last_message_relative }}
+                </div>
+
+                <div class="dealer-card-line mb-3">
+                    <span class="text-muted">Laatste groep:</span>
+                    {{ dealer.last_group }}
+                </div>
+            </div>
+
+            {% if dealer.message_url %}
+            <a
+                href="{{ dealer.message_url }}"
+                class="btn btn-sm btn-success"
+                target="_blank"
+                rel="noopener noreferrer"
+                onclick="event.stopPropagation();"
+            >Message dealer</a>
+            {% endif %}
+        </div>
+    </article>
+    {% endfor %}
 </section>
 {% else %}
 <div class="alert alert-secondary" role="alert">
@@ -88,7 +112,10 @@
 
 <script>
     document.querySelectorAll(".activity-row").forEach(function (row) {
-        row.addEventListener("click", function () {
+        row.addEventListener("click", function (event) {
+            if (event.target.closest("a")) {
+                return;
+            }
             window.location.href = row.dataset.href;
         });
         row.addEventListener("keydown", function (event) {

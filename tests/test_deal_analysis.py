@@ -7,32 +7,48 @@ from app import (
     _resolve_deal_recommendation,
     build_deal_analysis_cards,
 )
+from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION
 
 
 class TestDealRecommendation:
     def test_maps_existing_price_labels(self) -> None:
-        assert _resolve_deal_recommendation("New lowest price", 95000, 100000) == (
-            "Excellent Buy",
-            "excellent",
-        )
-        assert _resolve_deal_recommendation("Good price", 101000, 100000) == (
-            "Good Buy",
-            "good",
-        )
-        assert _resolve_deal_recommendation("Normal price", 108000, 100000) == (
-            "Market Price",
-            "market",
-        )
-        assert _resolve_deal_recommendation("Expensive", 120000, 100000) == (
+        assert _resolve_deal_recommendation(
+            "New lowest price",
+            95000,
+            100000,
+            comparison_safe=True,
+            confidence=90,
+        ) == ("Excellent Buy", "excellent")
+        assert _resolve_deal_recommendation(
+            "Good price",
+            101000,
+            100000,
+            comparison_safe=True,
+            confidence=90,
+        ) == ("Good Buy", "good")
+        assert _resolve_deal_recommendation(
+            "Normal price",
+            108000,
+            100000,
+            comparison_safe=True,
+            confidence=90,
+        ) == ("Fair Price", "market")
+        assert _resolve_deal_recommendation(
             "Expensive",
-            "expensive",
-        )
+            120000,
+            100000,
+            comparison_safe=True,
+            confidence=90,
+        ) == ("Expensive", "expensive")
 
-    def test_uses_insufficient_market_data_without_comparables(self) -> None:
-        assert _resolve_deal_recommendation("New lowest price", 95000, None) == (
-            "Insufficient market data",
-            "insufficient",
-        )
+    def test_uses_needs_review_without_comparables(self) -> None:
+        assert _resolve_deal_recommendation(
+            "New lowest price",
+            95000,
+            None,
+            comparison_safe=False,
+            confidence=90,
+        ) == ("Needs Review", "insufficient")
 
 
 class TestDealAnalysisCard:
@@ -41,11 +57,13 @@ class TestDealAnalysisCard:
             {
                 "brand": "Rolex",
                 "reference": "126500LN",
+                "condition": NEW_CONDITION,
                 "usd_price": 95000,
                 "previous_lowest_usd": "$100,000",
                 "price_difference": "-$5,000",
                 "rank": "1",
-                "price_label": "No comparables",
+                "price_label": "New lowest price",
+                "market_condition": NEW_CONDITION,
             },
             {"confidence": 90},
             0,
@@ -64,17 +82,20 @@ class TestDealAnalysisCard:
         assert analysis["market_position_amount"] == "-$5,000"
         assert analysis["potential_profit"] == "$5,000"
         assert analysis["potential_profit_positive"] is True
+        assert analysis["condition_label"] == "New"
 
     def test_caps_potential_profit_when_offer_is_above_market(self) -> None:
         analysis = _build_deal_analysis(
             {
                 "brand": "Rolex",
                 "reference": "126500LN",
+                "condition": PRE_OWNED_CONDITION,
                 "usd_price": 22000,
                 "previous_lowest_usd": "$20,000",
                 "price_difference": "+$2,000",
                 "rank": "3",
                 "price_label": "Expensive",
+                "market_condition": PRE_OWNED_CONDITION,
             },
             {},
             0,
@@ -91,9 +112,11 @@ class TestDealAnalysisCard:
             {
                 "brand": "Rolex",
                 "reference": "126713GRNR",
+                "condition": NEW_CONDITION,
                 "usd_price": 19500,
                 "previous_lowest_usd": "N/A",
                 "price_label": "No comparables",
+                "market_condition": None,
             },
             {"confidence": 85},
             0,
@@ -104,8 +127,9 @@ class TestDealAnalysisCard:
         assert analysis["difference_pct"] is None
         assert analysis["market_rank_display"] is None
         assert analysis["potential_profit"] is None
-        assert analysis["recommendation"] == "Insufficient market data"
+        assert analysis["recommendation"] == "Needs Review"
         assert analysis["recommendation_class"] == "insufficient"
+        assert analysis["market_price"] == "Unknown"
 
 
 class TestDealAnalysisSources:
@@ -115,6 +139,7 @@ class TestDealAnalysisSources:
                 {
                     "brand": "Rolex",
                     "reference": "126713GRNR",
+                    "condition": NEW_CONDITION,
                     "confidence": 90,
                 }
             ],
@@ -122,9 +147,11 @@ class TestDealAnalysisSources:
                 {
                     "brand": "Rolex",
                     "reference": "126713GRNR",
+                    "condition": NEW_CONDITION,
                     "usd_price": 19500,
                     "previous_lowest_usd": "N/A",
                     "price_label": "No comparables",
+                    "market_condition": None,
                 }
             ],
         }
@@ -138,9 +165,11 @@ class TestDealAnalysisSources:
                 {
                     "brand": "Rolex",
                     "reference": "126713GRNR",
+                    "condition": NEW_CONDITION,
                     "usd_price": 19500,
                     "previous_lowest_usd": "N/A",
                     "price_label": "No comparables",
+                    "market_condition": None,
                 }
             ]
         }

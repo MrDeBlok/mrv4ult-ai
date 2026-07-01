@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from database import create_notification
+from condition_normalizer import import_row_has_safe_price_comparison
 
 Record = dict[str, Any]
 
@@ -210,7 +211,7 @@ def record_import_notifications(
             continue
 
         label = row.get("price_label")
-        if label == "New lowest price":
+        if label == "New lowest price" and import_row_has_safe_price_comparison(row):
             created.append(
                 notify_new_lowest_price(
                     import_log_id=import_log_id,

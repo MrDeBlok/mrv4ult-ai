@@ -126,3 +126,39 @@ def offer_condition_display(stored_condition: str | None) -> tuple[str, str | No
     """Return normalized condition label and optional raw condition text."""
     normalized, raw_condition = normalize_wear_condition(stored_condition)
     return (normalized or "N/A", raw_condition)
+
+
+def normalized_wear_condition_for_comparison(value: str | None) -> str | None:
+    """Return a canonical wear condition suitable for market comparison."""
+    normalized, _ = normalize_wear_condition(value)
+    if normalized in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return normalized
+    return None
+
+
+def deal_condition_label(value: str | None) -> str:
+    """Return New, Pre-Owned, or Unknown for deal analysis display."""
+    normalized = normalized_wear_condition_for_comparison(value)
+    if normalized == NEW_CONDITION:
+        return NEW_CONDITION
+    if normalized == PRE_OWNED_CONDITION:
+        return PRE_OWNED_CONDITION
+    return "Unknown"
+
+
+def import_row_has_safe_price_comparison(row: Record) -> bool:
+    """Return whether import price intelligence used a same-condition market."""
+    offer_condition = normalized_wear_condition_for_comparison(row.get("condition"))
+    market_condition = row.get("market_condition")
+    if offer_condition is None:
+        return False
+    if market_condition not in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return False
+    if offer_condition != market_condition:
+        return False
+    if row.get("price_label") == "No comparables":
+        return False
+    previous_lowest = row.get("previous_lowest_usd")
+    if previous_lowest in {None, "", "N/A"}:
+        return False
+    return True

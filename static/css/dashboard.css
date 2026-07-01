@@ -88,6 +88,50 @@ body {
     cursor: pointer;
 }
 
+.dealer-card-list {
+    display: grid;
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .dealer-card-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 1200px) {
+    .dealer-card-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+.dealer-card {
+    transition: box-shadow 0.15s ease-in-out, transform 0.15s ease-in-out;
+}
+
+.dealer-card:hover,
+.dealer-card:focus {
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.08);
+    outline: none;
+}
+
+.dealer-card-title {
+    font-weight: 600;
+}
+
+.dealer-card-divider {
+    border-top: 1px solid #dee2e6;
+    opacity: 1;
+}
+
+.dealer-card-line {
+    font-size: 0.95rem;
+}
+
+.dealer-quality-badge {
+    font-weight: 500;
+}
+
 .activity-feed-stats {
     display: flex;
     flex-wrap: wrap;
@@ -281,7 +325,47 @@ body {
 .deal-analysis-title {
     font-size: 1.1rem;
     font-weight: 700;
-    margin: 0.35rem 0 1rem;
+    margin: 0.35rem 0 0.75rem;
+}
+
+.deal-analysis-condition {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.65rem;
+    margin-bottom: 0.85rem;
+}
+
+.deal-condition-label {
+    color: #6c757d;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.deal-condition-value {
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.deal-analysis-alert {
+    border-radius: 0.5rem;
+    font-size: 0.88rem;
+    margin-bottom: 0.95rem;
+    padding: 0.65rem 0.85rem;
+}
+
+.deal-analysis-alert-warning {
+    background: #fff3cd;
+    border: 1px solid #ffecb5;
+    color: #664d03;
+}
+
+.deal-analysis-alert-info {
+    background: #e7f1ff;
+    border: 1px solid #cfe2ff;
+    color: #084298;
 }
 
 .deal-analysis-metrics {

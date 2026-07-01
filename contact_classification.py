@@ -281,7 +281,10 @@ def matches_dealer_list_row_search(row: Record, query: str) -> bool:
     if not normalized_query:
         return True
     groups = str(row.get("groups") or "")
-    return normalized_query in groups.lower()
+    if normalized_query in groups.lower():
+        return True
+    last_group = str(row.get("last_group") or "")
+    return normalized_query in last_group.lower()
 
 
 def filter_dealer_list_rows_by_search(rows: list[Record], query: str) -> list[Record]:

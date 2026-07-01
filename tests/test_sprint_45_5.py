@@ -15,6 +15,8 @@ from dealer_intelligence import (
     build_trader_dealer_list_rows,
     classify_dealer_activity_label,
     clean_whatsapp_number_for_link,
+    format_dealer_country_display,
+    format_relative_time_dutch,
     resolve_dealer_contact_number,
 )
 
@@ -25,6 +27,7 @@ def _dealer() -> dict:
         "display_name": "HK Dealer",
         "phone_number": "+852 9123-4567",
         "whatsapp_id": "85291234567",
+        "country": "Hong Kong",
     }
 
 
@@ -53,6 +56,15 @@ class TestTraderDealerListRow:
         assert row["message_url"] == "https://wa.me/85291234567"
         assert row["contact_number"] == "+85291234567"
 
+    def test_trusted_dealer_shows_checkmark_label(self) -> None:
+        row = build_trader_dealer_list_row(
+            _dealer(),
+            None,
+            {"dealer-1": {"active_offers": 12}},
+        )
+        assert row["quality_label"] == "Trusted dealer"
+        assert row["quality_show_check"] is True
+
     def test_clean_whatsapp_number_for_link(self) -> None:
         assert clean_whatsapp_number_for_link("+852 9123-4567") == "85291234567"
 
@@ -69,6 +81,17 @@ class TestTraderDealerListRow:
         label, badge = classify_dealer_activity_label(None)
         assert label == "No activity"
         assert badge == "secondary"
+
+    def test_country_display_includes_flag(self) -> None:
+        assert format_dealer_country_display("Italy") == "🇮🇹 Italy"
+        assert format_dealer_country_display("") == "—"
+
+    def test_relative_time_dutch_hours(self) -> None:
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=ZoneInfo("Europe/Amsterdam"))
+        assert (
+            format_relative_time_dutch("2026-06-27T10:00:00+00:00", now=now)
+            == "2 uur geleden"
+        )
 
     def test_build_trader_dealer_list_rows_includes_groups(self) -> None:
         rows = build_trader_dealer_list_rows(
@@ -89,7 +112,9 @@ class TestTraderDealerListRow:
         )
 
         assert rows[0]["groups"] == "HK Dealers, Asia Watches"
-        assert rows[0]["quality_label"] == "Established"
+        assert rows[0]["last_group"] == "HK Dealers"
+        assert rows[0]["quality_label"] == "Established dealer"
+        assert rows[0]["country_display"] == "🇭🇰 Hong Kong"
 
 
 class TestDealersPageTraderLayout:
@@ -99,7 +124,7 @@ class TestDealersPageTraderLayout:
     @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
     @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers")
-    def test_dealers_page_shows_new_columns(
+    def test_dealers_page_shows_card_layout(
         self,
         mock_list_dealers: MagicMock,
         _mock_business_logs: MagicMock,
@@ -114,14 +139,13 @@ class TestDealersPageTraderLayout:
         response = client.get("/dealers")
 
         assert response.status_code == 200
-        assert "WhatsApp / Phone" in response.text
-        assert "Last message" in response.text
-        assert "Activity" in response.text
-        assert "Contact" in response.text
+        assert "dealer-card" in response.text
+        assert "Laatste bericht:" in response.text
+        assert "Laatste groep:" in response.text
+        assert "WhatsApp:" in response.text
+        assert "Message dealer" in response.text
         assert "Total offers" not in response.text
         assert "Average asking price" not in response.text
-        assert "Lowest asking price" not in response.text
-        assert "Highest asking price" not in response.text
 
     @patch("app.filter_dealer_list_rows_by_search", side_effect=lambda rows, _q: rows)
     @patch("app.list_dealer_offer_counts", return_value={"dealer-1": {"active_offers": 1}})
@@ -154,8 +178,8 @@ class TestDealersPageTraderLayout:
         assert response.status_code == 200
         assert "9123" in response.text
         assert 'href="https://wa.me/85291234567"' in response.text
-        assert "Message" in response.text
-        assert "Active today" in response.text or "Active this week" in response.text
+        assert "Message dealer" in response.text
+        assert "Laatste bericht:" in response.text
 
     @patch("app.list_dealer_offer_counts", return_value={})
     @patch("app.list_dealer_import_activity_logs")

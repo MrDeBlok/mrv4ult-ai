@@ -100,6 +100,7 @@ def test_build_watch_row_stores_raw_condition_in_summary() -> None:
             "price_difference": "N/A",
             "label": "No comparables",
             "label_class": "secondary",
+            "market_condition": NEW_CONDITION,
         },
     )
 

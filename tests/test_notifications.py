@@ -111,6 +111,9 @@ class TestRecordImportNotifications:
                         "offer_id": "offer-1",
                         "brand": "Rolex",
                         "reference": "126200",
+                        "condition": "New",
+                        "market_condition": "New",
+                        "previous_lowest_usd": "$74,000",
                         "price_label": "New lowest price",
                         "results": ["Existing watch", "New offer"],
                     }

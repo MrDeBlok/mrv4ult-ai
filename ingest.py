@@ -32,9 +32,13 @@ from contact_classification import (
     has_valid_parsed_offers,
     should_process_business_import,
 )
-from notifications import notify_request_match, record_import_notifications
+from condition_normalizer import (
+    NEW_CONDITION,
+    PRE_OWNED_CONDITION,
+    normalize_condition_value,
+    normalize_watch_condition,
+)
 from watch_knowledge import enrich_parsed_watch
-from condition_normalizer import normalize_condition_value, normalize_watch_condition
 from import_classification import is_buyer_request_message, split_offer_watches
 from ingest_lifecycle import (
     bind_import_log_id,
@@ -47,6 +51,7 @@ from watch_evidence import (
     partition_watches_by_evidence,
 )
 from watch_parser import parse_message
+from notifications import notify_request_match, record_import_notifications
 from unknown_brand_intelligence import record_unknown_brands_for_watches
 from unknown_nickname_intelligence import record_unknown_nicknames_for_watches
 
@@ -96,6 +101,7 @@ def _bulk_deferred_price_intelligence(*, is_duplicate: bool) -> dict[str, str]:
         "price_difference": "N/A",
         "label": label,
         "label_class": _price_label_class(label),
+        "market_condition": None,
     }
 
 
@@ -704,14 +710,16 @@ def ingest_message(
         if bulk_mode:
             price_intelligence = _bulk_deferred_price_intelligence(is_duplicate=not offer_created)
         else:
-            comparable_usd_prices = _comparable_usd_prices(
+            comparable_usd_prices, market_condition = _comparable_usd_prices(
                 active_offers,
                 exclude_offer_ids={offer_row["id"]},
+                offer_condition=watch.get("condition"),
             )
             price_intelligence = _build_price_intelligence(
                 watch.get("usd_price"),
                 comparable_usd_prices,
                 is_duplicate=not offer_created,
+                market_condition=market_condition,
             )
 
         summary["rows"].append(
@@ -860,8 +868,8 @@ def _normalize_whatsapp_number(value: str) -> str:
     return value.strip()
 
 
-def _get_active_offers(watch_id: str) -> list[tuple[str, int]]:
-    """Return active business-dealer offer ids and USD prices for a watch."""
+def _get_active_offers(watch_id: str) -> list[tuple[str, int, str | None]]:
+    """Return active business-dealer offer ids, USD prices, and conditions."""
     dealer_fields = (
         "dealers(contact_type)"
         if contact_type_column_supported()
@@ -870,33 +878,42 @@ def _get_active_offers(watch_id: str) -> list[tuple[str, int]]:
     response = (
         get_client()
         .table("offers")
-        .select(f"id, usd_price, {dealer_fields}")
+        .select(f"id, usd_price, condition, {dealer_fields}")
         .eq("watch_id", watch_id)
         .eq("status", "active")
         .execute()
     )
-    offers: list[tuple[str, int]] = []
+    offers: list[tuple[str, int, str | None]] = []
     for row in response.data or []:
         if not is_business_dealer_relation(row.get("dealers")):
             continue
         offer_id = row.get("id")
         usd_price = row.get("usd_price")
         if offer_id and usd_price is not None:
-            offers.append((str(offer_id), int(usd_price)))
+            offers.append((str(offer_id), int(usd_price), row.get("condition")))
     return offers
 
 
 def _comparable_usd_prices(
-    active_offers: list[tuple[str, int]],
+    active_offers: list[tuple[str, int, str | None]],
     *,
     exclude_offer_ids: set[str],
-) -> list[int]:
-    """Return market comparables excluding the current imported offer."""
-    return [
-        usd_price
-        for offer_id, usd_price in active_offers
-        if offer_id not in exclude_offer_ids
-    ]
+    offer_condition: str | None,
+) -> tuple[list[int], str | None]:
+    """Return same-condition market comparables excluding the current offer."""
+    normalized_offer = normalize_condition_value(offer_condition)
+    if normalized_offer not in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return [], None
+
+    comparables: list[int] = []
+    for offer_id, usd_price, condition in active_offers:
+        if offer_id in exclude_offer_ids:
+            continue
+        normalized_market = normalize_condition_value(condition)
+        if normalized_market != normalized_offer:
+            continue
+        comparables.append(usd_price)
+    return comparables, normalized_offer
 
 
 def _build_price_intelligence(
@@ -904,8 +921,9 @@ def _build_price_intelligence(
     comparable_usd_prices: list[int],
     *,
     is_duplicate: bool,
-) -> dict[str, str]:
-    """Compare an imported offer against other active offers for the same watch."""
+    market_condition: str | None = None,
+) -> dict[str, str | None]:
+    """Compare an imported offer against same-condition active offers."""
     if is_duplicate:
         label = "Duplicate offer"
     elif not comparable_usd_prices:
@@ -921,6 +939,7 @@ def _build_price_intelligence(
         "price_difference": _format_price_difference(usd_price, previous_lowest),
         "label": label,
         "label_class": _price_label_class(label),
+        "market_condition": market_condition,
     }
 
 
@@ -1068,6 +1087,7 @@ def _build_watch_row(
         "price_difference": price_intelligence["price_difference"],
         "price_label": price_intelligence["label"],
         "price_label_class": price_intelligence["label_class"],
+        "market_condition": price_intelligence.get("market_condition"),
         "offer_id": offer_id,
         "request_matches": request_matches,
     }

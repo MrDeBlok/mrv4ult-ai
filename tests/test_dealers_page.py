@@ -206,7 +206,8 @@ class TestDealersPage:
         assert response.status_code == 200
         assert "Dealers" in response.text
         assert "HK Dealer" in response.text
-        assert "WhatsApp / Phone" in response.text
+        assert "dealer-card" in response.text
+        assert "Laatste bericht:" in response.text
         assert 'data-href="/dealers/dealer-1"' in response.text
         mock_list_dealers.assert_called_once()
 
@@ -232,16 +233,18 @@ class TestDealersPage:
 
 class TestDealerDetailPage:
     @patch("app.build_dealer_offer_rows")
-    @patch("app.get_active_offers_for_dealer", return_value=[])
     @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.get_import_logs_by_message_ids", return_value={})
+    @patch("app.get_active_offers_for_dealer", return_value=[])
     @patch("app.dealer_has_offers", return_value=True)
     @patch("app.get_dealer_by_id")
-    def test_dealer_detail_page_renders_profile_and_stats(
+    def test_dealer_detail_page_renders_profile_and_offers(
         self,
         mock_get_dealer: MagicMock,
         mock_has_offers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_get_active_offers: MagicMock,
+        _mock_get_active_offers: MagicMock,
+        _mock_get_import_logs: MagicMock,
+        _mock_list_offers: MagicMock,
         mock_build_offer_rows: MagicMock,
     ) -> None:
         mock_get_dealer.return_value = {
@@ -277,9 +280,17 @@ class TestDealerDetailPage:
         assert response.status_code == 200
         assert "HK Dealer" in response.text
         assert "Elite Watches" in response.text
+        assert "WhatsApp ID" in response.text
         assert "Active offers" in response.text
         assert "126200" in response.text
-        assert "/watch/watch-1" in response.text
+        assert 'href="/watch/watch-1"' in response.text
+        assert "Statistics" not in response.text
+        assert "Total offers" not in response.text
+        assert "Average asking price" not in response.text
+        assert "Lowest asking price" not in response.text
+        assert "Highest asking price" not in response.text
+        assert "Unique watches" not in response.text
+        assert "Last activity" not in response.text
 
     @patch("app.get_dealer_by_id", return_value=None)
     def test_dealer_detail_page_returns_404_for_missing_dealer(

@@ -84,10 +84,12 @@ class TestMultiCurrencyDealAnalysis:
             "parsed_watches": [watch],
             "rows": [
                 {
+                    "condition": watch.get("condition"),
                     "usd_price": watch["usd_price"],
                     "previous_lowest_usd": "$28,000",
                     "price_label": "Good price",
                     "rank": "2",
+                    "market_condition": watch.get("condition"),
                 }
             ],
         }
@@ -115,7 +117,7 @@ class TestMultiCurrencyDealAnalysis:
         analysis = build_deal_analysis_cards(summary)[0]
 
         assert analysis["offer_price"] == "$25,000"
-        assert analysis["market_price"] == "No comparables"
+        assert analysis["market_price"] == "Unknown"
 
 
 class TestMultiCurrencyIngestIntegration:

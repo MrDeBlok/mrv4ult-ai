@@ -353,6 +353,35 @@ def find_import_log_by_message_id(message_id: str) -> Record | None:
     return response.data[0]
 
 
+def get_import_logs_by_message_ids(message_ids: list[str]) -> dict[str, Record]:
+    """Return the latest import log per message id keyed by message id."""
+    if not message_ids:
+        return {}
+
+    unique_ids = list(dict.fromkeys(str(message_id) for message_id in message_ids if message_id))
+    if not unique_ids:
+        return {}
+
+    columns = "id, message_id, watches_parsed, status"
+    if user_ownership_columns_supported():
+        columns += ", imported_by_user_id"
+
+    response = (
+        get_client()
+        .table("import_logs")
+        .select(columns)
+        .in_("message_id", unique_ids)
+        .order("import_time", desc=True)
+        .execute()
+    )
+    by_message_id: dict[str, Record] = {}
+    for row in response.data or []:
+        message_id = str(row.get("message_id") or "")
+        if message_id and message_id not in by_message_id:
+            by_message_id[message_id] = row
+    return by_message_id
+
+
 def find_or_create_watch(
     brand: str | None = None,
     reference: str | None = None,
@@ -1814,7 +1843,7 @@ def get_active_offers_for_dealer(dealer_id: str) -> list[Record]:
         .select(
             "id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
             "watches(brand, reference, model, dial, bracelet), "
-            "messages(received_at, group_id, groups(name)), "
+            "messages(id, received_at, group_id, groups(name)), "
             f"{dealer_fields}"
         )
         .eq("dealer_id", dealer_id)

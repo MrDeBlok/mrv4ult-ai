@@ -17,7 +17,13 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from timezone_utils import format_display_timestamp
-from condition_normalizer import display_condition
+from condition_normalizer import (
+    NEW_CONDITION,
+    PRE_OWNED_CONDITION,
+    deal_condition_label,
+    display_condition,
+    normalized_wear_condition_for_comparison,
+)
 from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
 from activity_feed import (
@@ -51,6 +57,7 @@ from database import (
     get_dealer_by_id,
     get_import_log,
     get_import_logs_by_ids,
+    get_import_logs_by_message_ids,
     get_message_by_id,
     get_messages_by_ids,
     get_notification_by_id,
@@ -130,13 +137,16 @@ from client_intelligence import (
     format_activity_timestamp,
 )
 from dealer_intelligence import (
+    attach_dealer_offer_source_urls,
     build_dealer_offer_rows,
     build_dealer_profile,
     build_trader_dealer_list_rows,
     compute_dealer_stats,
     dealer_display_name,
+    dealers_page_url,
     flatten_offer_intelligence_rows,
     format_dealer_stats,
+    paginate_dealer_list_rows,
 )
 from dashboard_data import load_trading_desk
 from performance_profiler import PROFILE_PAGES, build_performance_report
@@ -653,6 +663,7 @@ def normalize_offer(offer: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(offer)
     normalized["dealer"] = _nested_record(normalized.pop("dealers", None))
     message = _nested_record(normalized.pop("messages", None))
+    normalized["message_id"] = message.get("id")
     normalized["received_at"] = message.get("received_at")
     normalized["group_id"] = message.get("group_id")
     group = _nested_record(message.get("groups"))
@@ -1055,9 +1066,17 @@ def build_watch_offer_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
 DEAL_RECOMMENDATIONS: dict[str, tuple[str, str]] = {
     "New lowest price": ("Excellent Buy", "excellent"),
     "Good price": ("Good Buy", "good"),
-    "Normal price": ("Market Price", "market"),
+    "Normal price": ("Fair Price", "market"),
     "Expensive": ("Expensive", "expensive"),
-    "Duplicate offer": ("Market Price", "market"),
+    "Duplicate offer": ("Fair Price", "market"),
+}
+
+DEAL_EXCELLENT_CONFIDENCE_THRESHOLD = 75
+
+DEAL_CONDITION_ICONS: dict[str, str] = {
+    NEW_CONDITION: "🟢",
+    PRE_OWNED_CONDITION: "🟡",
+    "Unknown": "⚪",
 }
 
 
@@ -1116,9 +1135,9 @@ def _recommendation_from_prices(offer_usd: int, market_usd: int) -> tuple[str, s
             return "Excellent Buy", "excellent"
         return "Good Buy", "good"
     if offer_usd <= market_usd * 1.03:
-        return "Good Buy", "good"
+        return "Fair Price", "market"
     if offer_usd <= market_usd * 1.10:
-        return "Market Price", "market"
+        return "Fair Price", "market"
     return "Expensive", "expensive"
 
 
@@ -1126,15 +1145,24 @@ def _resolve_deal_recommendation(
     price_label: str | None,
     offer_usd: int | None,
     market_usd: int | None,
+    *,
+    comparison_safe: bool,
+    confidence: int,
 ) -> tuple[str, str]:
-    if market_usd is None:
-        return "Insufficient market data", "insufficient"
+    if not comparison_safe or market_usd is None:
+        return "Needs Review", "insufficient"
 
+    recommendation: tuple[str, str] | None = None
     if price_label and price_label in DEAL_RECOMMENDATIONS:
-        return DEAL_RECOMMENDATIONS[price_label]
-    if offer_usd is not None:
-        return _recommendation_from_prices(offer_usd, market_usd)
-    return "Insufficient market data", "insufficient"
+        recommendation = DEAL_RECOMMENDATIONS[price_label]
+    elif offer_usd is not None:
+        recommendation = _recommendation_from_prices(offer_usd, market_usd)
+
+    if recommendation is None:
+        return "Needs Review", "insufficient"
+
+    label, recommendation_class = recommendation
+    return label, recommendation_class
 
 
 def _deal_recommendation_confidence(
@@ -1177,12 +1205,57 @@ def _deal_analysis_title(row: dict[str, Any], watch: dict[str, Any], index: int)
     return " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
 
 
+def _deal_offer_condition(row: dict[str, Any], watch: dict[str, Any]) -> str | None:
+    for source in (row.get("condition"), watch.get("condition")):
+        normalized = normalized_wear_condition_for_comparison(source)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _deal_condition_display(row: dict[str, Any], watch: dict[str, Any]) -> dict[str, Any]:
+    for source in (row.get("condition"), watch.get("condition")):
+        label = deal_condition_label(source)
+        if label != "Unknown":
+            return {
+                "label": label,
+                "icon": DEAL_CONDITION_ICONS[label],
+                "is_known": True,
+            }
+    return {
+        "label": "Unknown",
+        "icon": DEAL_CONDITION_ICONS["Unknown"],
+        "is_known": False,
+    }
+
+
+def _deal_comparison_is_safe(row: dict[str, Any], watch: dict[str, Any]) -> bool:
+    offer_condition = _deal_offer_condition(row, watch)
+    if offer_condition is None:
+        return False
+    market_condition = row.get("market_condition")
+    if market_condition not in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return False
+    if offer_condition != market_condition:
+        return False
+    if row.get("price_label") == "No comparables":
+        return False
+    if not _has_display_value(row.get("previous_lowest_usd")):
+        return False
+    if _parse_usd_amount(row.get("previous_lowest_usd")) is None:
+        return False
+    return True
+
+
 def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int) -> dict[str, Any]:
     offer_usd = row.get("usd_price")
     if offer_usd is None:
         offer_usd = watch.get("usd_price")
 
-    market_usd = _parse_usd_amount(row.get("previous_lowest_usd"))
+    condition = _deal_condition_display(row, watch)
+    comparison_safe = _deal_comparison_is_safe(row, watch)
+    stored_market_usd = _parse_usd_amount(row.get("previous_lowest_usd"))
+    market_usd = stored_market_usd if comparison_safe else None
     price_label = row.get("price_label")
     has_market = market_usd is not None
 
@@ -1205,16 +1278,44 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
         else:
             potential_profit = 0
 
+    confidence = _deal_recommendation_confidence(
+        watch,
+        row,
+        offer_usd=offer_usd,
+        market_usd=market_usd,
+        price_label=price_label,
+    )
     recommendation, recommendation_class = _resolve_deal_recommendation(
         price_label,
         offer_usd,
         market_usd,
+        comparison_safe=comparison_safe,
+        confidence=confidence,
     )
+    parser_confidence = watch.get("confidence")
+    if recommendation == "Excellent Buy" and (
+        not isinstance(parser_confidence, int)
+        or parser_confidence < DEAL_EXCELLENT_CONFIDENCE_THRESHOLD
+    ):
+        recommendation, recommendation_class = "Good Buy", "good"
+
+    show_condition_warning = not condition["is_known"]
+    show_no_matching_market = condition["is_known"] and not comparison_safe
+
+    if has_market:
+        market_price_display = format_usd_price(market_usd)
+    else:
+        market_price_display = "Unknown"
 
     return {
         "title": _deal_analysis_title(row, watch, index),
+        "condition_label": condition["label"],
+        "condition_icon": condition["icon"],
+        "condition_is_known": condition["is_known"],
+        "show_condition_warning": show_condition_warning,
+        "show_no_matching_market": show_no_matching_market,
         "offer_price": format_usd_price(offer_usd) if offer_usd is not None else "N/A",
-        "market_price": format_usd_price(market_usd) if has_market else "No comparables",
+        "market_price": market_price_display,
         "show_market_metrics": has_market,
         "difference": _format_signed_usd(difference_usd) if has_market else None,
         "difference_pct": difference_pct,
@@ -1888,6 +1989,7 @@ async def notifications_clear_all(confirm: str = Form(...)) -> RedirectResponse:
 @app.get("/dealers", response_class=HTMLResponse, name="dealers_list")
 async def dealers_list(request: Request, q: str = "") -> HTMLResponse:
     search_query = q.strip()
+    page = parse_activity_page(request.query_params.get("page"))
     user = get_current_user(request)
     dealers = list_dealers()
     import_logs = _business_import_logs(
@@ -1901,12 +2003,21 @@ async def dealers_list(request: Request, q: str = "") -> HTMLResponse:
         ),
         search_query,
     )
+    dealers_page = paginate_dealer_list_rows(dealer_rows, page)
     return templates.TemplateResponse(
         request,
         "dealers.html",
         {
-            "dealers": dealer_rows,
+            "dealers": dealers_page.dealers,
             "search_query": search_query,
+            "page": dealers_page.page,
+            "page_size": dealers_page.page_size,
+            "has_previous": dealers_page.has_previous,
+            "has_next": dealers_page.has_next,
+            "previous_page_url": dealers_page_url(dealers_page.page - 1, search_query),
+            "next_page_url": dealers_page_url(dealers_page.page + 1, search_query),
+            "showing_from": dealers_page.showing_from,
+            "showing_to": dealers_page.showing_to,
         },
     )
 
@@ -1927,9 +2038,16 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
     offer_rows = flatten_offer_intelligence_rows(
         list_offer_intelligence_rows(dealer_id=dealer_id)
     )
+    user = get_current_user(request)
     active_offers = [
         normalize_dealer_offer(offer) for offer in get_active_offers_for_dealer(dealer_id)
     ]
+    message_ids = [str(offer["message_id"]) for offer in active_offers if offer.get("message_id")]
+    active_offers = attach_dealer_offer_source_urls(
+        active_offers,
+        get_import_logs_by_message_ids(message_ids),
+        user=user,
+    )
 
     return templates.TemplateResponse(
         request,
