@@ -266,7 +266,7 @@ class TestMarketRequestRoutes:
 
         assert response.status_code == 200
         assert 'href="/market-requests"' in response.text
-        assert ">Market Requests<" in response.text
+        assert "Market Requests" in response.text
 
 
 class TestMarketRequestSideEffects:

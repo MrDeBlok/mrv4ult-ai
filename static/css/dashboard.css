@@ -24,6 +24,40 @@ body {
     letter-spacing: 0.04em;
 }
 
+.main-nav-groups .nav-link.dropdown-toggle.active {
+    color: #fff;
+}
+
+.main-nav-groups .dropdown-menu {
+    min-width: 12rem;
+}
+
+.main-nav-groups .dropdown-item.active,
+.main-nav-groups .dropdown-item:active {
+    background-color: rgba(13, 110, 253, 0.35);
+}
+
+.main-nav-groups .dropdown-item .notification-nav-badge {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+    font-size: 0.65rem;
+}
+
+@media (max-width: 991.98px) {
+    .main-nav-groups .dropdown-menu {
+        border: 0;
+        margin-left: 0.75rem;
+        padding-top: 0;
+        padding-bottom: 0.5rem;
+    }
+
+    .main-nav-groups .nav-link.dropdown-toggle::after {
+        float: right;
+        margin-top: 0.55rem;
+    }
+}
+
 .table th {
     white-space: nowrap;
 }

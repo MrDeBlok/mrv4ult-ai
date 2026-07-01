@@ -183,6 +183,7 @@ from permissions import (
     is_admin,
     is_viewer,
 )
+from navigation import nav_current_path, nav_group_active, nav_item_active, visible_nav_groups
 from team_management import (
     build_team_user_rows,
     validate_new_user,
@@ -250,6 +251,10 @@ templates.env.globals["is_viewer"] = is_viewer
 templates.env.globals["can_manage_team"] = can_manage_team
 templates.env.globals["can_view_page"] = can_view_page
 templates.env.globals["can_quick_fix"] = can_quick_fix_notifications
+templates.env.globals["visible_nav_groups"] = visible_nav_groups
+templates.env.globals["nav_current_path"] = nav_current_path
+templates.env.globals["nav_group_active"] = nav_group_active
+templates.env.globals["nav_item_active"] = nav_item_active
 
 
 def _forbidden_response(detail: str) -> JSONResponse:

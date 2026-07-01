@@ -283,6 +283,17 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{4,7})\b"), None),
 ]
 
+EXPLICIT_CURRENCY_PRICE_PATTERNS = PRICE_WITH_CURRENCY_PATTERNS[:12]
+
+CURRENCY_BEFORE_AMOUNT_PATTERN = re.compile(
+    rf"\b({CURRENCY_CODE_PATTERN})\s*([\d.,]+)\s*(k|K|m|M)?\b",
+    re.I,
+)
+AMOUNT_BEFORE_CURRENCY_PATTERN = re.compile(
+    rf"\b([\d.,]+)\s*(k|K|m|M)?\s*({CURRENCY_CODE_PATTERN})\b",
+    re.I,
+)
+
 RETAIL_PRICE_LABEL_PATTERN = re.compile(
     r"\b(?:retail(?:\s+price)?|msrp|list(?:\s+price)?|rrp)\b",
     re.I,
@@ -876,6 +887,14 @@ def _extract_unlabeled_prices(
     for segment in _price_segments(text):
         if _segment_has_price_label(segment):
             continue
+        segment_prices: list[tuple[int, str | None]] = []
+        for amount, currency in _extract_explicit_prices_from_segment(segment):
+            if amount in excluded:
+                continue
+            segment_prices.append((amount, currency))
+        if segment_prices:
+            candidates.extend(segment_prices)
+            continue
         amount, currency = _extract_price(segment)
         if amount is None or amount in excluded:
             continue
@@ -883,6 +902,130 @@ def _extract_unlabeled_prices(
             currency = _extract_currency(segment)
         candidates.append((amount, currency))
     return candidates
+
+
+def _amount_has_leading_currency(segment: str, amount_start: int) -> bool:
+    prefix = segment[:amount_start]
+    return bool(re.search(rf"\b({CURRENCY_CODE_PATTERN})\s*$", prefix, re.I))
+
+
+def _is_prefixed_dollar_match(segment: str, match: re.Match[str]) -> bool:
+    start = match.start()
+    if start >= 2 and segment[start - 2 : start + 1].upper() == "HK$":
+        return True
+    if start >= 1 and segment[start - 1 : start + 1].upper() == "S$":
+        return True
+    return False
+
+
+def _offer_price_to_usd(amount: int, currency: str) -> int | None:
+    rate = EXCHANGE_RATES_TO_USD.get(currency)
+    if rate is None:
+        return None
+    return int(round(amount * rate))
+
+
+def _append_explicit_price(
+    prices: list[tuple[int, str]],
+    seen: set[tuple[int, str]],
+    amount: int | None,
+    currency: str | None,
+) -> None:
+    if amount is None:
+        return
+    currency_code = _normalize_currency_code(currency)
+    if currency_code is None or currency_code not in SUPPORTED_CURRENCIES:
+        return
+    key = (amount, currency_code)
+    if key in seen:
+        return
+    seen.add(key)
+    prices.append(key)
+
+
+def _extract_explicit_prices_from_segment(segment: str) -> list[tuple[int, str]]:
+    """Extract explicit currency prices from one offer segment."""
+    prices: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    for pattern, default_currency in EXPLICIT_CURRENCY_PRICE_PATTERNS[:9]:
+        for match in pattern.finditer(segment):
+            if default_currency == "USD" and _is_prefixed_dollar_match(segment, match):
+                continue
+            amount, currency = _price_from_pattern_match(segment, match, default_currency)
+            _append_explicit_price(prices, seen, amount, currency or default_currency)
+
+    for match in CURRENCY_BEFORE_AMOUNT_PATTERN.finditer(segment):
+        amount = _normalize_amount(match.group(2), match.group(3))
+        _append_explicit_price(prices, seen, amount, match.group(1))
+
+    for match in AMOUNT_BEFORE_CURRENCY_PATTERN.finditer(segment):
+        if _amount_has_leading_currency(segment, match.start(1)):
+            continue
+        suffix = match.group(2)
+        if not _amount_before_currency_needs_signal(match.group(1), suffix):
+            continue
+        amount = _normalize_amount(match.group(1), suffix)
+        if _looks_like_year_amount(amount, suffix):
+            continue
+        _append_explicit_price(prices, seen, amount, match.group(3))
+
+    return prices
+
+
+def _extract_all_explicit_currency_prices(text: str) -> list[tuple[int, str]]:
+    """Return every explicit currency price mention from an offer block."""
+    prices: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    for segment in _price_segments(text):
+        for amount, currency in _extract_explicit_prices_from_segment(segment):
+            key = (amount, currency)
+            if key in seen:
+                continue
+            seen.add(key)
+            prices.append(key)
+    return prices
+
+
+def _are_alternative_offer_prices(prices: list[tuple[int, str]]) -> bool:
+    """Return True when multiple currencies describe the same offer price."""
+    currencies = {currency for _, currency in prices}
+    if len(prices) < 2 or len(currencies) < 2:
+        return False
+
+    usd_values = [
+        converted
+        for amount, currency in prices
+        if (converted := _offer_price_to_usd(amount, currency)) is not None
+    ]
+    if len(usd_values) < 2:
+        return True
+
+    low = min(usd_values)
+    high = max(usd_values)
+    if high == 0:
+        return False
+    return (high - low) / high <= 0.05
+
+
+def _select_alternative_offer_price(
+    prices: list[tuple[int, str]],
+) -> tuple[int, str]:
+    """Pick the primary offer price from equivalent multi-currency quotes."""
+    for amount, currency in prices:
+        if currency == "USD":
+            return amount, currency
+    for amount, currency in prices:
+        if currency in EXCHANGE_RATES_TO_USD:
+            return amount, currency
+    return prices[-1]
+
+
+def _select_primary_explicit_price(
+    prices: list[tuple[int, str]],
+) -> tuple[int, str]:
+    """Pick the strongest explicit price when duplicates share a currency."""
+    return max(prices, key=lambda item: item[0])
 
 
 def _select_offer_price(
@@ -894,11 +1037,25 @@ def _select_offer_price(
         return (*offer_prices[-1], False)
 
     if not retail_prices:
+        alternative_prices = _extract_all_explicit_currency_prices(text)
+        if _are_alternative_offer_prices(alternative_prices):
+            amount, currency = _select_alternative_offer_price(alternative_prices)
+            return amount, currency, False
+        if alternative_prices:
+            amount, currency = _select_primary_explicit_price(alternative_prices)
+            return amount, currency, False
+
         unlabeled = _extract_unlabeled_prices(text)
         if unlabeled:
-            amount, currency = unlabeled[-1]
-            if currency is None:
-                currency = _extract_currency(text)
+            coded = [(value, code) for value, code in unlabeled if code is not None]
+            if _are_alternative_offer_prices(coded):
+                amount, currency = _select_alternative_offer_price(coded)
+            elif coded:
+                amount, currency = _select_primary_explicit_price(coded)
+            else:
+                amount, currency = unlabeled[-1]
+                if currency is None:
+                    currency = _extract_currency(text)
             return amount, currency, False
 
         amount, currency = _extract_price(text)
@@ -909,7 +1066,11 @@ def _select_offer_price(
     retail_amounts = {amount for amount, _ in retail_prices}
     unlabeled = _extract_unlabeled_prices(text, exclude_amounts=retail_amounts)
     if unlabeled:
-        amount, currency = min(unlabeled, key=lambda item: item[0])
+        coded = [(value, code) for value, code in unlabeled if code is not None]
+        if _are_alternative_offer_prices(coded):
+            amount, currency = _select_alternative_offer_price(coded)
+        else:
+            amount, currency = min(unlabeled, key=lambda item: item[0])
         return amount, currency, False
 
     return None, None, True

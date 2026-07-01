@@ -436,12 +436,13 @@ class TestProfilerDatabaseInstrumentation:
             "show_write_actions": True,
         }
 
-    def _fake_postgrest_response(self, _req: object) -> SimpleNamespace:
+    def _fake_postgrest_response(self, request: object) -> SimpleNamespace:
         time.sleep(0.005)
         return SimpleNamespace(
             is_success=True,
             status_code=200,
             content=b'{"data":[]}',
+            request=SimpleNamespace(headers=getattr(request, "headers", {})),
         )
 
     def _simulate_postgrest_execute(self, *, table: str) -> None:
@@ -468,19 +469,24 @@ class TestProfilerDatabaseInstrumentation:
 
         reset_profiler_hooks()
         install_profiler_hooks()
+        original_send = profiler_module._original_send_with_retry
         profiler_module._original_send_with_retry = self._fake_postgrest_response
-        mock_load_desk.side_effect = lambda _user, **kwargs: (
-            self._simulate_postgrest_execute(table="import_logs"),
-            self._desk_payload(),
-        )[1]
+        try:
+            mock_load_desk.side_effect = lambda _user, **kwargs: (
+                self._simulate_postgrest_execute(table="import_logs"),
+                self._desk_payload(),
+            )[1]
 
-        client = TestClient(app)
-        result = profile_page(
-            client,
-            page="Dashboard",
-            path="/dashboard",
-            page_timeout_s=5.0,
-        )
+            client = TestClient(app)
+            result = profile_page(
+                client,
+                page="Dashboard",
+                path="/dashboard",
+                page_timeout_s=5.0,
+            )
+        finally:
+            profiler_module._original_send_with_retry = original_send
+            reset_profiler_hooks()
 
         assert result.status == PROFILE_STATUS_OK
         assert result.query_count >= 1
@@ -506,46 +512,50 @@ class TestProfilerDatabaseInstrumentation:
 
         reset_profiler_hooks()
         install_profiler_hooks()
+        original_send = profiler_module._original_send_with_retry
         profiler_module._original_send_with_retry = self._fake_postgrest_response
+        try:
+            review_log = {
+                "id": "log-1",
+                "status": "warning",
+                "message_id": "msg-1",
+                "group_name": "HK",
+                "dealer_alias": "Dealer",
+                "dealer_whatsapp": "+1",
+                "import_time": "2026-06-27T12:00:00+00:00",
+                "summary": {
+                    "parsed_watches": [
+                        {
+                            "brand": "Rolex",
+                            "reference": None,
+                            "condition": "New",
+                            "original_price": 10000,
+                        }
+                    ]
+                },
+            }
 
-        review_log = {
-            "id": "log-1",
-            "status": "warning",
-            "message_id": "msg-1",
-            "group_name": "HK",
-            "dealer_alias": "Dealer",
-            "dealer_whatsapp": "+1",
-            "import_time": "2026-06-27T12:00:00+00:00",
-            "summary": {
-                "parsed_watches": [
-                    {
-                        "brand": "Rolex",
-                        "reference": None,
-                        "condition": "New",
-                        "original_price": 10000,
-                    }
-                ]
-            },
-        }
+            def parser_review_side_effect(_user: dict) -> list[dict]:
+                self._simulate_postgrest_execute(table="import_logs")
+                return [review_log]
 
-        def parser_review_side_effect(_user: dict) -> list[dict]:
-            self._simulate_postgrest_execute(table="import_logs")
-            return [review_log]
+            def messages_side_effect(_ids: list[str]) -> dict[str, dict]:
+                self._simulate_postgrest_execute(table="messages")
+                return {"msg-1": {"raw_text": "Rolex offer"}}
 
-        def messages_side_effect(_ids: list[str]) -> dict[str, dict]:
-            self._simulate_postgrest_execute(table="messages")
-            return {"msg-1": {"raw_text": "Rolex offer"}}
+            mock_parser_logs.side_effect = parser_review_side_effect
+            mock_get_messages.side_effect = messages_side_effect
 
-        mock_parser_logs.side_effect = parser_review_side_effect
-        mock_get_messages.side_effect = messages_side_effect
-
-        client = TestClient(app)
-        result = profile_page(
-            client,
-            page="Parser Review",
-            path="/parser-review",
-            page_timeout_s=5.0,
-        )
+            client = TestClient(app)
+            result = profile_page(
+                client,
+                page="Parser Review",
+                path="/parser-review",
+                page_timeout_s=5.0,
+            )
+        finally:
+            profiler_module._original_send_with_retry = original_send
+            reset_profiler_hooks()
 
         assert result.status == PROFILE_STATUS_OK
         assert result.query_count >= 2
