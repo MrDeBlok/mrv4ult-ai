@@ -545,6 +545,8 @@ def load_dashboard_matched_requests(
 
         rows.append(
             {
+                "match_id": str(match.get("id") or ""),
+                "match_url": f"/matches/{match['id']}",
                 "client_name": request.get("client_name") or "Client",
                 "watch_label": _request_watch_label(request, watch),
                 "dealer": format_import_sender_label(import_log),

@@ -19,6 +19,7 @@ VIEWER_ALLOWED_GET_EXACT = frozenset({"/", "/dashboard"})
 VIEWER_ALLOWED_GET_PREFIXES = (
     "/activity",
     "/market-requests",
+    "/matches",
     "/watch/",
 )
 VIEWER_FORBIDDEN_GET_PREFIXES = (

@@ -631,6 +631,26 @@ def list_recent_request_matches(
     return response.data or []
 
 
+def get_request_match(match_id: str) -> Record | None:
+    """Return one request_matches row by id."""
+    cleaned_id = match_id.strip()
+    if not cleaned_id:
+        return None
+    response = (
+        get_client()
+        .table("request_matches")
+        .select(
+            "id, request_id, offer_id, import_log_id, match_strength, match_reason, created_at"
+        )
+        .eq("id", cleaned_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
 def get_requests_by_ids(request_ids: list[str]) -> dict[str, Record]:
     """Return client requests keyed by id."""
     if not request_ids:
@@ -654,7 +674,7 @@ def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
     response = (
         get_client()
         .table("offers")
-        .select("id, watch_id, original_price, original_currency, usd_price, condition, card_date")
+        .select("id, watch_id, original_price, original_currency, usd_price, condition, card_date, production_year")
         .in_("id", offer_ids)
         .execute()
     )

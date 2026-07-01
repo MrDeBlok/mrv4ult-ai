@@ -299,6 +299,8 @@ class TestDashboardMatchedRequests:
                     "status_class": "success",
                     "confidence_label": "Strong match",
                     "confidence_class": "success",
+                    "match_id": "match-1",
+                    "match_url": "/matches/match-1",
                     "request_url": "/requests",
                 }
             ],
@@ -317,8 +319,8 @@ class TestDashboardMatchedRequests:
         assert "Rolex 116508" in response.text
         assert "HK Dealer" in response.text
         assert "$45,000" in response.text
-        assert 'href="/requests"' in response.text
-        assert "Open request" in response.text
+        assert 'href="/matches/match-1"' in response.text
+        assert "View match" in response.text
 
     @patch("dashboard_data.can_view_page", return_value=True)
     @patch("dashboard_data.can_view_import", return_value=True)

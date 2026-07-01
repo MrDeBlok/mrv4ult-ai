@@ -139,6 +139,7 @@ from dealer_intelligence import (
 from dashboard_data import load_trading_desk
 from performance_profiler import PROFILE_PAGES, build_performance_report
 from market_requests import load_market_request_detail, load_market_request_rows
+from match_detail import load_match_detail
 from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
 from contact_classification import (
     CONTACT_TYPES,
@@ -488,6 +489,19 @@ async def market_request_detail_page(request: Request, import_id: str) -> HTMLRe
     return templates.TemplateResponse(
         request,
         "market_request_detail.html",
+        {"detail": detail},
+    )
+
+
+@app.get("/matches/{match_id}", response_class=HTMLResponse, name="match_detail")
+async def match_detail_page(request: Request, match_id: str) -> HTMLResponse:
+    user = get_current_user(request)
+    detail = load_match_detail(user, match_id, format_timestamp=format_timestamp)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return templates.TemplateResponse(
+        request,
+        "match_detail.html",
         {"detail": detail},
     )
 

@@ -92,8 +92,8 @@
                             <span class="badge text-bg-{{ row.confidence_class }}">{{ row.confidence_label }}</span>
                         </td>
                         <td class="text-end">
-                            {% if row.request_url %}
-                            <a href="{{ row.request_url }}" class="btn btn-sm btn-outline-primary">Open request</a>
+                            {% if row.match_url %}
+                            <a href="{{ row.match_url }}" class="btn btn-sm btn-outline-primary">View match</a>
                             {% endif %}
                         </td>
                     </tr>
