@@ -34,7 +34,7 @@ def aggregate_offers_by_dealer(offers: list[Record]) -> dict[str, list[Record]]:
         dealer_id = offer.get("dealer_id")
         if not dealer_id:
             continue
-        grouped.setdefault(dealer_id, []).append(offer)
+        grouped.setdefault(str(dealer_id), []).append(offer)
     return grouped
 
 
@@ -106,7 +106,10 @@ def build_dealer_list_rows(dealers: list[Record], offers: list[Record]) -> list[
     flattened = flatten_offer_intelligence_rows(offers)
     grouped = aggregate_offers_by_dealer(flattened)
     rows = [
-        build_dealer_list_row(dealer, compute_dealer_stats(grouped.get(dealer["id"], [])))
+        build_dealer_list_row(
+            dealer,
+            compute_dealer_stats(grouped.get(str(dealer["id"]), [])),
+        )
         for dealer in dealers
         if dealer.get("id")
     ]

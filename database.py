@@ -234,18 +234,21 @@ def _legacy_contact_type(dealer: Record) -> str:
     return CONTACT_TYPE_DEALER
 
 
-def dealer_contact_type(dealer: Record | None) -> str:
+def dealer_contact_type(dealer: Record | None, *, has_offers: bool = False) -> str:
     """Return the effective normalized contact type for one dealer row."""
     if not dealer:
         return CONTACT_TYPE_REMOVED
     if contact_type_column_supported():
-        return normalize_contact_type(str(dealer.get("contact_type") or ""))
-    return normalize_contact_type(_legacy_contact_type(dealer))
+        return normalize_contact_type(
+            str(dealer.get("contact_type") or ""),
+            has_offers=has_offers,
+        )
+    return normalize_contact_type(_legacy_contact_type(dealer), has_offers=has_offers)
 
 
-def dealer_is_business_visible(dealer: Record | None) -> bool:
+def dealer_is_business_visible(dealer: Record | None, *, has_offers: bool = False) -> bool:
     """Return True when a dealer may appear in business-facing views."""
-    return is_business_contact(dealer_contact_type(dealer))
+    return is_business_contact(dealer_contact_type(dealer, has_offers=has_offers))
 
 
 def is_business_dealer_relation(dealer_data: Any) -> bool:
@@ -261,8 +264,20 @@ def _nested_dealer_record(dealer: Any) -> Record:
     return {}
 
 
-def _offer_from_business_dealer(offer: Record) -> bool:
-    return dealer_is_business_visible(_nested_dealer_record(offer.get("dealers")))
+def _offer_from_business_dealer(
+    offer: Record,
+    *,
+    visible_dealer_ids: set[str] | None = None,
+) -> bool:
+    nested = _nested_dealer_record(offer.get("dealers"))
+    if nested:
+        return dealer_is_business_visible(nested)
+    dealer_id = str(offer.get("dealer_id") or "")
+    if not dealer_id:
+        return False
+    if visible_dealer_ids is not None:
+        return dealer_id in visible_dealer_ids
+    return dealer_id in _business_visible_dealer_ids()
 
 
 def insert_message(
@@ -1449,16 +1464,22 @@ def insert_offer(
 
 
 def list_dealers() -> list[Record]:
-    """Return business dealer contacts with at least one offer."""
-    dealer_ids = _dealer_ids_with_offers()
-    query = get_client().table("dealers").select("*").order("display_name")
-    if contact_type_column_supported():
-        query = query.eq("contact_type", "dealer")
-    response = query.execute()
+    """Return business dealer contacts ordered by display name."""
+    dealer_ids_with_offers = _dealer_ids_with_offers()
+    response = (
+        get_client()
+        .table("dealers")
+        .select("*")
+        .order("display_name")
+        .execute()
+    )
     return [
         dealer
         for dealer in response.data or []
-        if str(dealer.get("id")) in dealer_ids and dealer_is_business_visible(dealer)
+        if dealer_is_business_visible(
+            dealer,
+            has_offers=str(dealer.get("id")) in dealer_ids_with_offers,
+        )
     ]
 
 
@@ -1481,6 +1502,21 @@ def _dealer_ids_with_offers() -> set[str]:
         str(row["dealer_id"])
         for row in response.data or []
         if row.get("dealer_id")
+    }
+
+
+def _business_visible_dealer_ids() -> set[str]:
+    """Return dealer ids that may appear in business-facing dealer views."""
+    dealer_ids_with_offers = _dealer_ids_with_offers()
+    response = get_client().table("dealers").select("id, contact_type, whatsapp_id").execute()
+    return {
+        str(dealer.get("id"))
+        for dealer in response.data or []
+        if dealer.get("id")
+        and dealer_is_business_visible(
+            dealer,
+            has_offers=str(dealer.get("id")) in dealer_ids_with_offers,
+        )
     }
 
 
@@ -1711,23 +1747,22 @@ def get_dealer_by_contact_number(number: str) -> Record | None:
 
 def list_offer_intelligence_rows(*, dealer_id: str | None = None) -> list[Record]:
     """Return offer rows used for dealer intelligence aggregation."""
-    dealer_fields = (
-        "dealers(contact_type)"
-        if contact_type_column_supported()
-        else "dealers(whatsapp_id)"
-    )
+    visible_dealer_ids = _business_visible_dealer_ids()
     query = (
         get_client()
         .table("offers")
-        .select(f"dealer_id, watch_id, status, usd_price, messages(received_at), {dealer_fields}")
+        .select("dealer_id, watch_id, status, usd_price, messages(received_at)")
     )
     if dealer_id:
+        normalized_dealer_id = str(dealer_id)
+        if normalized_dealer_id not in visible_dealer_ids:
+            return []
         query = query.eq("dealer_id", dealer_id)
     response = query.execute()
     return [
         offer
         for offer in response.data or []
-        if _offer_from_business_dealer(offer)
+        if str(offer.get("dealer_id") or "") in visible_dealer_ids
     ]
 
 

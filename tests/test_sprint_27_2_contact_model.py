@@ -442,10 +442,8 @@ class TestRemovedContactBusinessExclusion:
             {"id": "client-1", "display_name": "Client", "contact_type": CONTACT_TYPE_CLIENT},
             {"id": "removed-1", "display_name": "Removed", "contact_type": CONTACT_TYPE_REMOVED},
         ]
-        dealers_query = MagicMock()
-        dealers_query.eq.return_value.execute.return_value = dealers_execute
         dealers_table = MagicMock()
-        dealers_table.select.return_value.order.return_value = dealers_query
+        dealers_table.select.return_value.order.return_value.execute.return_value = dealers_execute
 
         def table(name: str) -> MagicMock:
             if name == "offers":

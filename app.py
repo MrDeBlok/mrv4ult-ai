@@ -1902,7 +1902,10 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
     dealer = get_dealer_by_id(dealer_id)
     if (
         dealer is None
-        or not dealer_is_business_visible(dealer)
+        or not dealer_is_business_visible(
+            dealer,
+            has_offers=dealer_has_offers(dealer_id),
+        )
         or not dealer_has_offers(dealer_id)
     ):
         raise HTTPException(status_code=404, detail="Dealer not found")
