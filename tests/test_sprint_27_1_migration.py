@@ -114,14 +114,18 @@ class TestContactTypeCompatibility:
         assert dealers[0]["id"] == "dealer-1"
         dealers_table.select.return_value.eq.assert_not_called()
 
-    @patch("app.build_dealer_list_rows", return_value=[])
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers", return_value=[])
     def test_dealers_page_loads_when_contact_type_column_missing(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
     ) -> None:
         client = TestClient(app)
         response = client.get("/dealers")

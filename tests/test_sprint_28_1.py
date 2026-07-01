@@ -193,14 +193,18 @@ class TestClientsAndDealersSearch:
         assert phone_response.status_code == 200
         assert mock_build_rows.call_args_list[1].args[0][0]["display_name"] == "Other Client"
 
-    @patch("app.build_dealer_list_rows")
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers")
     def test_dealers_search_by_name_and_phone(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
     ) -> None:
         mock_list_dealers.return_value = [
             {
@@ -218,18 +222,17 @@ class TestClientsAndDealersSearch:
                 "contact_type": CONTACT_TYPE_DEALER,
             },
         ]
-        mock_build_rows.side_effect = lambda dealers, offers: [
-            {"id": dealer["id"], "name": dealer["display_name"]} for dealer in dealers
-        ]
 
         client = TestClient(app)
         name_response = client.get("/dealers?q=HK")
         phone_response = client.get("/dealers?q=6591234567")
 
         assert name_response.status_code == 200
-        assert mock_build_rows.call_args_list[0].args[0][0]["display_name"] == "HK Dealer"
+        assert "HK Dealer" in name_response.text
+        assert "SG Dealer" not in name_response.text
         assert phone_response.status_code == 200
-        assert mock_build_rows.call_args_list[1].args[0][0]["display_name"] == "SG Dealer"
+        assert "SG Dealer" in phone_response.text
+        assert "HK Dealer" not in phone_response.text
 
 
 class TestClientHardDelete:

@@ -361,17 +361,19 @@ class TestClientEditing:
 
 
 class TestClientDealerSeparation:
-    @patch("app.build_dealer_list_rows")
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers", return_value=[])
     def test_clients_do_not_appear_on_dealers_page(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
     ) -> None:
-        mock_build_rows.return_value = []
-
         client = TestClient(app)
         response = client.get("/dealers")
 

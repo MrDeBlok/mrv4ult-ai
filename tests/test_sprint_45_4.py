@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app import app
-from contact_classification import CONTACT_TYPE_DEALER, filter_records_by_contact_search
+from contact_classification import CONTACT_TYPE_DEALER, filter_dealer_list_rows_by_search
 from dealer_intelligence import build_dealer_list_rows, compute_dealer_stats
 from database import list_dealers, list_offer_intelligence_rows
 
@@ -199,38 +199,44 @@ class TestListDealersVisibility:
 
 class TestDealersPageSearch:
     def test_search_filters_dealer_rows(self) -> None:
-        dealers = [
-            {"id": "dealer-1", "display_name": "Hong Kong Dealer", "phone_number": "+85291234567"},
-            {"id": "dealer-2", "display_name": "Geneva Dealer", "phone_number": "+41791234567"},
-        ]
-        filtered = filter_records_by_contact_search(dealers, "85291234567")
+        filtered = filter_dealer_list_rows_by_search(
+            [
+                {
+                    "name": "Hong Kong Dealer",
+                    "display_name": "Hong Kong Dealer",
+                    "phone_number": "+85291234567",
+                    "whatsapp_id": "85291234567",
+                    "groups": "HK Dealers",
+                },
+                {
+                    "name": "Geneva Dealer",
+                    "display_name": "Geneva Dealer",
+                    "phone_number": "+41791234567",
+                    "whatsapp_id": "41791234567",
+                    "groups": "EU Dealers",
+                },
+            ],
+            "85291234567",
+        )
         assert len(filtered) == 1
-        assert filtered[0]["id"] == "dealer-1"
+        assert filtered[0]["name"] == "Hong Kong Dealer"
 
-    @patch("app.build_dealer_list_rows")
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers")
     def test_dealers_page_passes_search_query_to_filter(
         self,
         mock_list_dealers: MagicMock,
-        _mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
     ) -> None:
         mock_list_dealers.return_value = [
             {"id": "dealer-1", "display_name": "HK Dealer", "phone_number": "+85291234567"},
             {"id": "dealer-2", "display_name": "Geneva Dealer", "phone_number": "+41791234567"},
-        ]
-        mock_build_rows.return_value = [
-            {
-                "id": "dealer-1",
-                "name": "HK Dealer",
-                "total_offers": 2,
-                "active_offers": 1,
-                "average_asking_price": "$70,000",
-                "lowest_asking_price": "$70,000",
-                "highest_asking_price": "$70,000",
-                "last_activity": "2026-06-27 12:00",
-            }
         ]
 
         client = TestClient(app)
@@ -239,7 +245,3 @@ class TestDealersPageSearch:
         assert response.status_code == 200
         assert "HK Dealer" in response.text
         assert "Geneva Dealer" not in response.text
-        mock_build_rows.assert_called_once()
-        passed_dealers = mock_build_rows.call_args.args[0]
-        assert len(passed_dealers) == 1
-        assert passed_dealers[0]["id"] == "dealer-1"

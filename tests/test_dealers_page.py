@@ -185,49 +185,43 @@ class TestDealerRowBuilders:
 
 
 class TestDealersPage:
-    @patch("app.build_dealer_list_rows")
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.filter_dealer_list_rows_by_search", side_effect=lambda rows, _q: rows)
+    @patch("app.list_dealer_offer_counts", return_value={"dealer-1": {"active_offers": 5}})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers", return_value=[{"id": "dealer-1", "display_name": "HK Dealer"}])
     def test_dealers_page_renders_table(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
+        _mock_filter_rows: MagicMock,
     ) -> None:
-        mock_build_rows.return_value = [
-            {
-                "id": "dealer-1",
-                "name": "HK Dealer",
-                "total_offers": 5,
-                "active_offers": 4,
-                "average_asking_price": "$75,000",
-                "lowest_asking_price": "$70,000",
-                "highest_asking_price": "$82,000",
-                "last_activity": "2026-06-27 12:00",
-            }
-        ]
-
         client = TestClient(app)
         response = client.get("/dealers")
 
         assert response.status_code == 200
         assert "Dealers" in response.text
         assert "HK Dealer" in response.text
-        assert "$75,000" in response.text
+        assert "WhatsApp / Phone" in response.text
         assert 'data-href="/dealers/dealer-1"' in response.text
-        mock_build_rows.assert_called_once_with(
-            mock_list_dealers.return_value,
-            mock_list_offers.return_value,
-        )
+        mock_list_dealers.assert_called_once()
 
-    @patch("app.build_dealer_list_rows", return_value=[])
-    @patch("app.list_offer_intelligence_rows", return_value=[])
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers", return_value=[])
     def test_dealers_page_shows_empty_state(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
     ) -> None:
         client = TestClient(app)
         response = client.get("/dealers")
@@ -297,18 +291,22 @@ class TestDealerDetailPage:
 
         assert response.status_code == 404
 
-    @patch("app.build_dealer_list_rows")
-    @patch("app.list_offer_intelligence_rows")
+    @patch("app.filter_dealer_list_rows_by_search", side_effect=lambda rows, _q: rows)
+    @patch("app.list_dealer_offer_counts", return_value={})
+    @patch("app.list_dealer_import_activity_logs", return_value=[])
+    @patch("app.filter_imports_for_user", side_effect=lambda logs, _user: logs)
+    @patch("app._business_import_logs", side_effect=lambda logs: logs)
     @patch("app.list_dealers")
     def test_navbar_includes_dealers_link(
         self,
         mock_list_dealers: MagicMock,
-        mock_list_offers: MagicMock,
-        mock_build_rows: MagicMock,
+        _mock_business_logs: MagicMock,
+        _mock_filter_imports: MagicMock,
+        _mock_import_logs: MagicMock,
+        _mock_offer_counts: MagicMock,
+        _mock_filter_rows: MagicMock,
     ) -> None:
         mock_list_dealers.return_value = []
-        mock_list_offers.return_value = []
-        mock_build_rows.return_value = []
 
         client = TestClient(app)
         response = client.get("/dealers")

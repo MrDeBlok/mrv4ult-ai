@@ -273,6 +273,24 @@ def filter_records_by_contact_search(records: list[Record], query: str) -> list[
     return [record for record in records if matches_contact_search(record, query)]
 
 
+def matches_dealer_list_row_search(row: Record, query: str) -> bool:
+    """Return True when a trader dealer list row matches a search query."""
+    if matches_contact_search(row, query):
+        return True
+    normalized_query = normalize_search_query(query).lower()
+    if not normalized_query:
+        return True
+    groups = str(row.get("groups") or "")
+    return normalized_query in groups.lower()
+
+
+def filter_dealer_list_rows_by_search(rows: list[Record], query: str) -> list[Record]:
+    """Filter trader dealer list rows by name, phone, WhatsApp, or group."""
+    if not normalize_search_query(query):
+        return rows
+    return [row for row in rows if matches_dealer_list_row_search(row, query)]
+
+
 def is_active_contacts_row(row: Record) -> bool:
     """Return True when a contact belongs on the default active people view."""
     contact_type = str(row.get("contact_type") or "")

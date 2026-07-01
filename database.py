@@ -1745,6 +1745,41 @@ def get_dealer_by_contact_number(number: str) -> Record | None:
     return None
 
 
+def list_dealer_import_activity_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_DEFAULT,
+) -> list[Record]:
+    """Return recent import logs for dealer list activity aggregation."""
+    response = (
+        get_client()
+        .table("import_logs")
+        .select(import_log_list_columns_light())
+        .order("import_time", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return response.data or []
+
+
+def list_dealer_offer_counts() -> dict[str, Record]:
+    """Return lightweight per-dealer offer counts for list badges."""
+    visible_ids = _business_visible_dealer_ids()
+    response = get_client().table("offers").select("dealer_id, status").execute()
+    counts: dict[str, Record] = {}
+    for row in response.data or []:
+        dealer_id = str(row.get("dealer_id") or "")
+        if not dealer_id or dealer_id not in visible_ids:
+            continue
+        bucket = counts.setdefault(
+            dealer_id,
+            {"total_offers": 0, "active_offers": 0},
+        )
+        bucket["total_offers"] = int(bucket["total_offers"]) + 1
+        if row.get("status") == "active":
+            bucket["active_offers"] = int(bucket["active_offers"]) + 1
+    return counts
+
+
 def list_offer_intelligence_rows(*, dealer_id: str | None = None) -> list[Record]:
     """Return offer rows used for dealer intelligence aggregation."""
     visible_dealer_ids = _business_visible_dealer_ids()

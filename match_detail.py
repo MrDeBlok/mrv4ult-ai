@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable
 
 from condition_normalizer import display_condition
@@ -12,18 +11,16 @@ from dashboard_data import (
     MATCH_STRENGTH_LABELS,
     _request_watch_label,
 )
-from dealer_intelligence import format_activity_timestamp
+from dealer_intelligence import (
+    clean_whatsapp_number_for_link,
+    format_activity_timestamp,
+)
 from permissions import can_view_page
 from request_profit import attach_profit_to_matches
 from search import format_price
 from user_visibility import can_view_import
 
 Record = dict[str, Any]
-
-
-def clean_whatsapp_number_for_link(value: str | None) -> str:
-    """Return digits-only WhatsApp number for wa.me links."""
-    return re.sub(r"\D", "", value or "")
 
 
 def resolve_match_dealer_contact(

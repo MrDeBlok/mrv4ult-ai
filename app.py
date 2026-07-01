@@ -65,6 +65,8 @@ from database import (
     list_contacts_for_import_lookup,
     list_client_profiles_by_client_ids,
     list_dealers,
+    list_dealer_import_activity_logs,
+    list_dealer_offer_counts,
     list_parser_review_import_log_candidates,
     list_import_logs,
     list_notifications,
@@ -128,9 +130,9 @@ from client_intelligence import (
     format_activity_timestamp,
 )
 from dealer_intelligence import (
-    build_dealer_list_rows,
     build_dealer_offer_rows,
     build_dealer_profile,
+    build_trader_dealer_list_rows,
     compute_dealer_stats,
     dealer_display_name,
     flatten_offer_intelligence_rows,
@@ -154,6 +156,7 @@ from contact_classification import (
     build_dealer_lookup_by_whatsapp,
     filter_business_import_logs,
     filter_contact_rows,
+    filter_dealer_list_rows_by_search,
     filter_records_by_contact_search,
     format_import_sender_label,
     is_business_contact,
@@ -1885,8 +1888,19 @@ async def notifications_clear_all(confirm: str = Form(...)) -> RedirectResponse:
 @app.get("/dealers", response_class=HTMLResponse, name="dealers_list")
 async def dealers_list(request: Request, q: str = "") -> HTMLResponse:
     search_query = q.strip()
-    dealers = filter_records_by_contact_search(list_dealers(), search_query)
-    dealer_rows = build_dealer_list_rows(dealers, list_offer_intelligence_rows())
+    user = get_current_user(request)
+    dealers = list_dealers()
+    import_logs = _business_import_logs(
+        filter_imports_for_user(list_dealer_import_activity_logs(), user)
+    )
+    dealer_rows = filter_dealer_list_rows_by_search(
+        build_trader_dealer_list_rows(
+            dealers,
+            import_logs,
+            list_dealer_offer_counts(),
+        ),
+        search_query,
+    )
     return templates.TemplateResponse(
         request,
         "dealers.html",
