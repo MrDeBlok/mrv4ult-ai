@@ -96,6 +96,7 @@
                     <th scope="col">Card date</th>
                     <th scope="col">Lowest price</th>
                     <th scope="col">Dealer / WhatsApp</th>
+                    <th scope="col">Source</th>
                 </tr>
             </thead>
             <tbody>
@@ -104,10 +105,22 @@
                     class="watch-row"
                     tabindex="0"
                     role="link"
-                    data-href="/watch/{{ row.watch_id }}"
+                    data-href="{{ row.watch_url or '' }}"
                 >
-                    <td>{{ row.brand }}</td>
-                    <td>{{ row.reference }}</td>
+                    <td>
+                        {% if row.watch_url %}
+                        <a href="{{ row.watch_url }}" class="text-decoration-none">{{ row.brand }}</a>
+                        {% else %}
+                        {{ row.brand }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.source_url %}
+                        <a href="{{ row.source_url }}" class="text-decoration-none fw-semibold">{{ row.reference }}</a>
+                        {% else %}
+                        {{ row.reference }}
+                        {% endif %}
+                    </td>
                     <td>{{ row.dial }}</td>
                     <td>{{ row.bracelet }}</td>
                     <td>
@@ -119,9 +132,20 @@
                     <td>{{ row.card_date }}</td>
                     <td class="fw-semibold">{{ row.lowest_price }}</td>
                     <td>
+                        {% if row.dealer_url %}
+                        <a href="{{ row.dealer_url }}" class="text-decoration-none">{{ row.dealer_primary }}</a>
+                        {% else %}
                         <div>{{ row.dealer_primary }}</div>
+                        {% endif %}
                         {% if row.dealer_secondary %}
                         <div class="text-muted small">{{ row.dealer_secondary }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                        {% if row.source_url %}
+                        <a href="{{ row.source_url }}" class="small">View original</a>
+                        {% else %}
+                        <span class="text-muted">—</span>
                         {% endif %}
                     </td>
                 </tr>
@@ -134,13 +158,27 @@
 
 <script>
     document.querySelectorAll(".watch-row").forEach(function (row) {
-        row.addEventListener("click", function () {
-            window.location.href = row.dataset.href;
+        row.addEventListener("click", function (event) {
+            if (event.target.closest("a")) {
+                return;
+            }
+            var href = row.dataset.href;
+            if (!href) {
+                return;
+            }
+            window.location.href = href;
         });
         row.addEventListener("keydown", function (event) {
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                window.location.href = row.dataset.href;
+                if (event.target.closest("a")) {
+                    return;
+                }
+                var href = row.dataset.href;
+                if (!href) {
+                    return;
+                }
+                window.location.href = href;
             }
         });
     });

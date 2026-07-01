@@ -138,6 +138,8 @@ class TestSearchResultDisplay:
         assert rows[0]["condition"] == NEW_CONDITION
         assert rows[0]["raw_condition"] == "Unworn"
         assert rows[0]["card_date"] == "06/2026"
+        assert rows[0]["source_url"] is None
+        assert rows[0]["watch_url"] == "/watch/w-new"
 
     @patch("app.search_offers")
     def test_search_page_renders_condition_fields(self, mock_search_offers: MagicMock) -> None:

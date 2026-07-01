@@ -619,13 +619,16 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ),
         )
         dealer = cheapest_offer.get("dealer") or {}
+        dealer_id = cheapest_offer.get("dealer_id")
+        source_url = cheapest_offer.get("source_url")
 
         dealer_contact = format_dealer_contact(dealer)
         condition_label, raw_condition = offer_condition_display(cheapest_offer.get("condition"))
+        watch_id = group.get("watch_id")
 
         rows.append(
             {
-                "watch_id": group.get("watch_id"),
+                "watch_id": watch_id,
                 "brand": _display_value(watch.get("brand")),
                 "reference": _display_value(watch.get("reference")),
                 "dial": _display_value(watch.get("dial")),
@@ -633,6 +636,10 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "lowest_price": format_usd_price(group.get("lowest_usd")),
                 "dealer_primary": dealer_contact["primary"],
                 "dealer_secondary": dealer_contact["secondary"],
+                "dealer_id": dealer_id,
+                "dealer_url": f"/dealers/{dealer_id}" if dealer_id else None,
+                "watch_url": f"/watch/{watch_id}" if watch_id else None,
+                "source_url": source_url,
                 "condition": condition_label,
                 "raw_condition": raw_condition,
                 "card_date": cheapest_offer.get("card_date") or "N/A",
@@ -1847,7 +1854,27 @@ async def home(
             offers, cheapest_only_flag = search_offers(query, condition=condition_filter)
             enrich_offers_dealer_contacts(offers)
             groups = group_offers_by_watch(offers, cheapest_only=cheapest_only_flag)
-            results = build_result_rows(groups)
+            user = get_current_user(request)
+            message_ids = [
+                str(offer.get("message_id"))
+                for group in groups
+                for offer in group.get("offers") or []
+                if offer.get("message_id")
+            ]
+            import_logs_by_message_id = get_import_logs_by_message_ids(message_ids)
+            enriched_groups: list[dict[str, Any]] = []
+            for group in groups:
+                enriched_groups.append(
+                    {
+                        **group,
+                        "offers": attach_dealer_offer_source_urls(
+                            group.get("offers") or [],
+                            import_logs_by_message_id,
+                            user=user,
+                        ),
+                    }
+                )
+            results = build_result_rows(enriched_groups)
         except ValueError as exc:
             error = str(exc)
 

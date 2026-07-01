@@ -66,7 +66,8 @@ def search_offers(
         get_client()
         .table("offers")
         .select(
-            "watch_id, original_price, original_currency, usd_price, card_date, condition, "
+            "dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
+            "messages(id), "
             "watches(brand, reference, model, dial, bracelet), "
             f"{dealer_fields}"
         )
@@ -85,6 +86,8 @@ def search_offers(
             continue
         if not offer_matches_condition_filter(offer.get("condition"), condition):
             continue
+        message = _nested_record(offer.get("messages"))
+        offer["message_id"] = message.get("id")
         offer["watch"] = watch
         offer["dealer"] = _nested_record(offer.get("dealers"))
         matches.append(offer)
