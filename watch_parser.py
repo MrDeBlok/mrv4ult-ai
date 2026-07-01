@@ -380,6 +380,7 @@ def empty_watch() -> WatchDict:
         "box_only": None,
         "papers": None,
         "notes": None,
+        "reference_high_confidence": False,
         "confidence": 0,
     }
 
@@ -413,10 +414,9 @@ def parse_message(message: str) -> ParseResult:
     watches: list[WatchDict] = []
 
     blocks, header_brand = _group_offer_lines(iter_content_lines(text))
-    current_brand = header_brand
 
-    for line in blocks:
-        if watch := parse_watch_line(line, current_brand=current_brand):
+    for line, context_brand in blocks:
+        if watch := parse_watch_line(line, current_brand=context_brand):
             watch["source_line"] = line
             watches.append(watch)
 
@@ -441,9 +441,21 @@ def classify_message(text: str, watches: list[WatchDict], is_request: bool) -> s
     return "unknown"
 
 
-def _group_offer_lines(lines: list[str]) -> tuple[list[str], str | None]:
-    """Merge continuation lines into single offer blocks."""
-    blocks: list[str] = []
+def _line_establishes_brand_context(line: str, *, brand_hint: str | None = None) -> str | None:
+    """Return brand when a line sets list context without a reference or price."""
+    brand = _extract_brand(line)
+    if brand is None:
+        return None
+    if _extract_reference(line, brand_hint=brand_hint)[0]:
+        return None
+    if _extract_price(line)[0] is not None:
+        return None
+    return brand
+
+
+def _group_offer_lines(lines: list[str]) -> tuple[list[tuple[str, str | None]], str | None]:
+    """Merge continuation lines into single offer blocks with brand context."""
+    blocks: list[tuple[str, str | None]] = []
     current_brand: str | None = None
 
     for line in lines:
@@ -451,52 +463,73 @@ def _group_offer_lines(lines: list[str]) -> tuple[list[str], str | None]:
             current_brand = brand_only
             continue
 
+        context_brand = current_brand
+
         if not blocks:
-            if _line_begins_offer(line):
-                blocks.append(line)
+            if _line_begins_offer(line, brand_hint=current_brand):
+                blocks.append((line, context_brand))
+                if established := _line_establishes_brand_context(line, brand_hint=current_brand):
+                    current_brand = established
             continue
 
-        if _starts_new_watch_block(line, blocks[-1]):
-            blocks.append(line)
-        elif _is_continuation_line(line, blocks[-1]):
-            blocks[-1] = f"{blocks[-1]}\n{line}"
-        elif _looks_like_watch_line(line):
-            blocks.append(line)
+        previous_line, _ = blocks[-1]
+        if _starts_new_watch_block(line, previous_line, brand_hint=current_brand):
+            blocks.append((line, context_brand))
+        elif _is_continuation_line(line, previous_line, brand_hint=current_brand):
+            merged = f"{previous_line}\n{line}"
+            blocks[-1] = (merged, blocks[-1][1])
+        elif _looks_like_watch_line(line, brand_hint=current_brand):
+            blocks.append((line, context_brand))
+
+        if established := _line_establishes_brand_context(line, brand_hint=current_brand):
+            current_brand = established
 
     return blocks, current_brand
 
 
-def _line_begins_offer(line: str) -> bool:
-    if _extract_reference(line)[0]:
+def _line_begins_offer(line: str, *, brand_hint: str | None = None) -> bool:
+    if _extract_reference(line, brand_hint=brand_hint)[0]:
         return True
     if _extract_brand(line) and len(line.split()) >= 2:
         return True
-    return _looks_like_watch_line(line)
+    return _looks_like_watch_line(line, brand_hint=brand_hint)
 
 
-def _starts_new_watch_block(line: str, previous_block: str) -> bool:
-    reference = _extract_reference(line)[0]
+def _starts_new_watch_block(
+    line: str,
+    previous_block: str,
+    *,
+    brand_hint: str | None = None,
+) -> bool:
+    reference = _extract_reference(line, brand_hint=brand_hint)[0]
     if not reference:
         return False
-    previous_reference = _extract_reference(previous_block)[0]
+    previous_reference = _extract_reference(previous_block, brand_hint=brand_hint)[0]
     if not previous_reference:
         return True
     return reference != previous_reference
 
 
-def _is_continuation_line(line: str, previous_block: str) -> bool:
-    reference = _extract_reference(line)[0]
-    previous_reference = _extract_reference(previous_block)[0]
+def _is_continuation_line(
+    line: str,
+    previous_block: str,
+    *,
+    brand_hint: str | None = None,
+) -> bool:
+    reference = _extract_reference(line, brand_hint=brand_hint)[0]
+    previous_reference = _extract_reference(previous_block, brand_hint=brand_hint)[0]
 
     if reference and previous_reference:
         return reference == previous_reference
     if reference and not previous_reference:
         return False
 
-    return _is_continuation_content(line)
+    return _is_continuation_content(line, brand_hint=brand_hint)
 
 
-def _is_continuation_content(line: str) -> bool:
+def _is_continuation_content(line: str, *, brand_hint: str | None = None) -> bool:
+    if _extract_reference(line, brand_hint=brand_hint)[0]:
+        return False
     if _extract_price(line)[0] is not None:
         return True
     if NEW_CARD_DATE_MMYyyy_PATTERN.search(line):
@@ -511,7 +544,7 @@ def _is_continuation_content(line: str) -> bool:
         return True
     if ACCESSORY_LINE_PATTERN.search(line):
         return True
-    if not _extract_brand(line) and not _extract_reference(line)[0]:
+    if not _extract_brand(line) and not _extract_reference(line, brand_hint=brand_hint)[0]:
         stripped = line.strip()
         if stripped and len(stripped.split()) <= 10:
             return True
@@ -557,18 +590,20 @@ def _is_brand_only_line(line: str) -> str | None:
 DECORATION_ONLY_PATTERN = re.compile(r"[^\w\s&]+")
 
 
-def _looks_like_watch_line(line: str) -> bool:
+def _looks_like_watch_line(line: str, *, brand_hint: str | None = None) -> bool:
     if _is_brand_only_line(line):
         return False
     if len(line) < 4:
         return False
-    if _extract_reference(line)[0]:
+    if _extract_reference(line, brand_hint=brand_hint)[0]:
         return True
     if _extract_price(line)[0] is not None:
         return True
     if _extract_brand(line):
         return True
-    if REQUEST_PATTERN.search(line) and (_extract_brand(line) or _extract_reference(line)[0]):
+    if REQUEST_PATTERN.search(line) and (
+        _extract_brand(line) or _extract_reference(line, brand_hint=brand_hint)[0]
+    ):
         return True
     return False
 
@@ -581,16 +616,30 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
 
     watch = empty_watch()
 
-    brand = _extract_brand(text)
-    if brand is None:
-        brand = current_brand
-    reference, ref_brand = _extract_reference(text, brand_hint=brand)
+    explicit_brand = _extract_brand(text)
+    brand = explicit_brand or current_brand
+    enforce_brand_context = current_brand is not None and explicit_brand is None
+    reference, ref_brand, from_brand_knowledge = _extract_reference(
+        text,
+        brand_hint=brand,
+        enforce_brand_context=enforce_brand_context,
+    )
     if brand is None and ref_brand:
         brand = ref_brand
     if brand is None and reference and ref_brand is None:
         brand = _infer_brand_from_reference(reference)
+    elif (
+        enforce_brand_context
+        and brand
+        and reference
+        and ref_brand
+        and ref_brand != brand
+        and not from_brand_knowledge
+    ):
+        reference = None
     watch["brand"] = brand
     watch["reference"] = reference
+    watch["reference_high_confidence"] = from_brand_knowledge
 
     if brand == "F.P. Journe" and watch["reference"] is None:
         fpj_match = FPJOURNE_REF_PATTERN.search(text)
@@ -807,6 +856,8 @@ def _compute_confidence(watch: WatchDict) -> int:
     if watch.get("condition"):
         score += 10
     if watch.get("production_year") is not None or watch.get("card_date"):
+        score += 10
+    if watch.get("reference_high_confidence"):
         score += 10
     if watch.get("bracelet"):
         score += 5
@@ -1156,6 +1207,12 @@ def _extract_als_brand(text: str) -> str | None:
 
 
 def _infer_brand_from_reference(reference: str) -> str | None:
+    from brand_knowledge import extract_reference_from_brand_knowledge
+
+    brand_match = extract_reference_from_brand_knowledge(reference)
+    if brand_match:
+        return brand_match[1]
+
     normalized = reference.upper().replace(" ", "")
     if re.fullmatch(r"\d{3}\.\d{3}", reference):
         return "A. Lange & Söhne"
@@ -1196,27 +1253,58 @@ def _mask_price_spans(text: str) -> str:
     return masked
 
 
+def _reference_is_blocked(reference: str, price: int | None) -> bool:
+    numeric_reference = reference.replace(" ", "")
+    if price is not None and numeric_reference.isdigit() and int(numeric_reference) == price:
+        return True
+    return _looks_like_year(reference)
+
+
 def _extract_reference(
     text: str,
     *,
     brand_hint: str | None = None,
-) -> tuple[str | None, str | None]:
+    enforce_brand_context: bool = False,
+) -> tuple[str | None, str | None, bool]:
     ref_text = _mask_price_spans(text)
     price, _ = _extract_price(text)
+
+    from brand_knowledge import (
+        extract_reference_from_brand_knowledge,
+        is_embedded_in_compound_reference_token,
+    )
+
+    brand_match = extract_reference_from_brand_knowledge(ref_text, brand_hint=brand_hint)
+    if brand_match:
+        reference, brand, _high_confidence = brand_match
+        if not _reference_is_blocked(reference, price):
+            return reference, brand or brand_hint, True
+
     for pattern, brand_hint_from_pattern in REFERENCE_PATTERNS:
         match = pattern.search(ref_text)
         if not match:
             continue
+        if is_embedded_in_compound_reference_token(
+            ref_text,
+            match.start(1),
+            match.end(1),
+        ):
+            continue
         reference = match.group(1).upper().replace("  ", " ").strip()
-        if price is not None and reference.isdigit() and int(reference) == price:
+        if _reference_is_blocked(reference, price):
             continue
-        if _looks_like_year(reference):
-            continue
-        brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
+        inferred_brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
+        if enforce_brand_context and brand_hint:
+            if inferred_brand and inferred_brand != brand_hint:
+                continue
+            return reference, brand_hint, False
+        brand = inferred_brand
         if brand is None and brand_hint:
             brand = brand_hint
-        return reference, brand
-    return None, None
+        return reference, brand, False
+    if enforce_brand_context and brand_hint:
+        return None, None, False
+    return None, None, False
 
 
 def _looks_like_year(value: str) -> bool:

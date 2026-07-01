@@ -20,7 +20,7 @@ def detect_likely_reference_token(text: str, *, brand: str | None = None) -> str
     if not cleaned:
         return None
 
-    reference, _ = _extract_reference(cleaned, brand_hint=brand)
+    reference = _extract_reference(cleaned, brand_hint=brand)[0]
     if reference:
         return reference
 
