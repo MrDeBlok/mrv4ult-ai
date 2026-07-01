@@ -150,13 +150,13 @@ class TestTradingDeskRequestSplit:
         labels = {action["label"] for action in actions}
 
         assert "New Client Request" in labels
-        assert "Teach AI / Parser Review" not in labels
+        assert "AI Workbench" not in labels
 
-    def test_quick_actions_include_parser_review_for_admin(self) -> None:
+    def test_quick_actions_include_ai_workbench_for_admin(self) -> None:
         actions = build_quick_actions(ADMIN_USER)
         labels = {action["label"] for action in actions}
 
-        assert "Teach AI / Parser Review" in labels
+        assert "AI Workbench" in labels
 
 
 class TestTradingDeskUiVisibility:
@@ -186,7 +186,7 @@ class TestTradingDeskUiVisibility:
         assert response.status_code == 200
         assert 'data-nav-group="ai"' in response.text
         assert "AI needs help" in response.text
-        assert "Teach AI / Parser Review" in response.text
+        assert "AI Workbench" in response.text
         assert "Active client requests" in response.text
         assert "Active market requests" in response.text
 
@@ -221,7 +221,7 @@ class TestTradingDeskUiVisibility:
         assert response.status_code == 200
         assert 'data-nav-group="ai"' not in response.text
         assert ">AI needs help<" not in response.text
-        assert "Teach AI / Parser Review" not in response.text
+        assert "AI Workbench" not in response.text
         assert "New Client Request" in response.text
         assert "Client Requests" in response.text
 

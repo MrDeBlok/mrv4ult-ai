@@ -190,6 +190,7 @@ class TestParserReviewFiltersAndCounts:
             "missing_price": 0,
             "missing_brand": 1,
             "missing_reference": 2,
+            "missing_condition": 1,
             "unknown_brand": 1,
         }
 
@@ -279,7 +280,7 @@ class TestParserReviewPage:
         response = client.get("/parser-review")
 
         assert response.status_code == 200
-        assert "Parser review" in response.text
+        assert "AI Workbench" in response.text
         assert "Needs review:" in response.text
         assert "Missing reference" in response.text
         assert "Rolex Submariner offer" in response.text
@@ -346,7 +347,9 @@ class TestParserReviewPage:
         mock_get_import_log: MagicMock,
         mock_mark_reviewed: MagicMock,
     ) -> None:
-        mock_get_import_log.return_value = _review_import()
+        import_log = _review_import()
+        import_log["summary"]["workbench_fix_applied"] = True
+        mock_get_import_log.return_value = import_log
 
         client = TestClient(app)
         response = client.post("/parser-review/log-1/reviewed", follow_redirects=False)
@@ -368,7 +371,7 @@ class TestParserReviewPage:
         response = client.post("/parser-review/log-1/ignore", follow_redirects=False)
 
         assert response.status_code == 303
-        mock_ignore.assert_called_once_with("log-1")
+        mock_ignore.assert_called_once_with("log-1", reason="")
 
     def test_ignored_issue_disappears_from_default_review_list(self) -> None:
         logs = [

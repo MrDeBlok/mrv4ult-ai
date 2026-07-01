@@ -695,7 +695,7 @@ def build_quick_actions(user: Record | None) -> list[Record]:
         },
         {
             "key": "parser_review",
-            "label": "Teach AI / Parser Review",
+            "label": "AI Workbench",
             "url": "/parser-review",
             "style": "outline-dark",
             "visible": can_access_admin_tools(user),

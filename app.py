@@ -40,6 +40,7 @@ from parser_review import (
     PARSER_REVIEW_FILTERS,
     load_parser_review_page_data,
 )
+from parser_workbench import CONDITION_FIX_OPTIONS, WORKBENCH_CURRENCIES, apply_workbench_fix
 from import_status import (
     filter_discarded_import_logs,
     format_import_status,
@@ -197,6 +198,7 @@ from permissions import (
     USER_ROLE_VIEWER,
     USER_STATUS_ACTIVE,
     USER_STATUS_DISABLED,
+    can_access_admin_tools,
     can_manage_team,
     can_quick_fix_notifications,
     can_view_page,
@@ -1837,8 +1839,11 @@ async def activity_all(request: Request) -> HTMLResponse:
 
 @app.get("/parser-review", response_class=HTMLResponse, name="parser_review")
 async def parser_review_page(request: Request, filter: str = "all") -> HTMLResponse:
-    filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
     user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
     import_logs = _parser_review_import_logs(user)
     rows, counts = load_parser_review_page_data(
         import_logs,
@@ -1855,39 +1860,99 @@ async def parser_review_page(request: Request, filter: str = "all") -> HTMLRespo
             "active_filter": filter_key,
             "canonical_brands": list_canonical_brands(),
             "knowledge_enabled": watch_knowledge_supported(),
+            "condition_fix_options": CONDITION_FIX_OPTIONS,
+            "workbench_currencies": WORKBENCH_CURRENCIES,
             "reviewed": request.query_params.get("reviewed") == "1",
             "ignored": request.query_params.get("ignored") == "1",
+            "fixed": request.query_params.get("fixed") == "1",
             "alias_saved": request.query_params.get("alias_saved") == "1",
         },
     )
 
 
+def _require_admin_workbench(request: Request) -> None:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
 @app.post("/parser-review/{import_id}/reviewed")
-async def parser_review_mark_reviewed(import_id: str) -> RedirectResponse:
+async def parser_review_mark_reviewed(request: Request, import_id: str) -> RedirectResponse:
+    _require_admin_workbench(request)
     import_log = get_import_log(import_id)
     if import_log is None:
         raise HTTPException(status_code=404, detail="Import not found")
+
+    summary = import_log.get("summary") or {}
+    if not summary.get("workbench_fix_applied") and not summary.get("parser_review_ignored"):
+        raise HTTPException(
+            status_code=400,
+            detail="Apply a fix or ignore the issue before marking as reviewed",
+        )
 
     mark_import_parser_reviewed(import_id)
     return RedirectResponse(url="/parser-review?reviewed=1", status_code=303)
 
 
 @app.post("/parser-review/{import_id}/ignore")
-async def parser_review_ignore_issue(import_id: str) -> RedirectResponse:
+async def parser_review_ignore_issue(
+    request: Request,
+    import_id: str,
+    reason: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
     import_log = get_import_log(import_id)
     if import_log is None:
         raise HTTPException(status_code=404, detail="Import not found")
 
-    mark_import_parser_issue_ignored(import_id)
+    mark_import_parser_issue_ignored(import_id, reason=reason)
     return RedirectResponse(url="/parser-review?ignored=1", status_code=303)
+
+
+@app.post("/parser-review/{import_id}/fix")
+async def parser_review_apply_fix(
+    request: Request,
+    import_id: str,
+    fix_action: str = Form(...),
+    brand_name: str = Form(""),
+    reference: str = Form(""),
+    model: str = Form(""),
+    alias_text: str = Form(""),
+    condition: str = Form(""),
+    price: str = Form(""),
+    currency: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    try:
+        apply_workbench_fix(
+            import_id,
+            fix_action,
+            brand_name=brand_name,
+            reference=reference,
+            model=model,
+            alias_text=alias_text,
+            condition=condition,
+            price=price,
+            currency=currency,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RedirectResponse(url="/parser-review?fixed=1", status_code=303)
 
 
 @app.post("/parser-review/{import_id}/add-brand-alias")
 async def parser_review_add_brand_alias(
+    request: Request,
     import_id: str,
     brand_name: str = Form(...),
     alias_text: str = Form(...),
 ) -> RedirectResponse:
+    _require_admin_workbench(request)
     import_log = get_import_log(import_id)
     if import_log is None:
         raise HTTPException(status_code=404, detail="Import not found")

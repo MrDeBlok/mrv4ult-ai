@@ -18,6 +18,7 @@ PARSER_REVIEW_FILTERS = frozenset(
         "missing_price",
         "missing_brand",
         "missing_reference",
+        "missing_condition",
         "unknown_brand",
         "unknown_model",
     }
@@ -165,6 +166,7 @@ def _parser_review_counts_from_index(
         "missing_price": 0,
         "missing_brand": 0,
         "missing_reference": 0,
+        "missing_condition": 0,
         "unknown_brand": 0,
     }
     for import_log in pending:
@@ -175,6 +177,8 @@ def _parser_review_counts_from_index(
             counts["missing_brand"] += 1
         if "missing_reference" in issues:
             counts["missing_reference"] += 1
+        if "missing_condition" in issues:
+            counts["missing_condition"] += 1
         if "unknown_brand" in issues:
             counts["unknown_brand"] += 1
     return counts
@@ -338,16 +342,17 @@ def load_parser_review_page_data(
     ]
     messages_by_id = get_messages_by_ids(list(dict.fromkeys(message_ids)))
 
+    from parser_workbench import enrich_workbench_row
+
     rows: list[Record] = []
     for import_log in filtered_logs:
         import_id = str(import_log["id"])
         message = messages_by_id.get(str(import_log.get("message_id") or ""))
-        rows.append(
-            build_parser_review_row(
-                import_log,
-                message,
-                format_timestamp=format_timestamp,
-                issue_data=issue_index[import_id],
-            )
+        row = build_parser_review_row(
+            import_log,
+            message,
+            format_timestamp=format_timestamp,
+            issue_data=issue_index[import_id],
         )
+        rows.append(enrich_workbench_row(row, import_log, message=message))
     return rows, counts

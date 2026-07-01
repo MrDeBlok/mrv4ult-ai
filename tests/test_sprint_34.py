@@ -175,7 +175,7 @@ class TestSprint34DashboardRoutes:
                 unread_notifications=11,
             ),
             "quick_actions": [
-                {"key": "parser_review", "label": "Teach AI / Parser Review", "url": "/parser-review", "style": "outline-dark", "visible": True},
+                {"key": "parser_review", "label": "AI Workbench", "url": "/parser-review", "style": "outline-dark", "visible": True},
                 {"key": "notifications", "label": "Notifications", "url": "/notifications", "style": "outline-dark", "visible": True},
             ],
             "top_opportunities": [],

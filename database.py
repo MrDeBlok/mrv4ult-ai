@@ -1185,7 +1185,11 @@ def mark_import_parser_reviewed(import_log_id: str) -> Record:
     return patch_import_log(import_log_id, status="success", summary=summary)
 
 
-def mark_import_parser_issue_ignored(import_log_id: str) -> Record:
+def mark_import_parser_issue_ignored(
+    import_log_id: str,
+    *,
+    reason: str | None = None,
+) -> Record:
     """Hide a parser review issue from the default review queue."""
     import_log = get_import_log(import_log_id)
     if import_log is None:
@@ -1193,6 +1197,9 @@ def mark_import_parser_issue_ignored(import_log_id: str) -> Record:
 
     summary = dict(import_log.get("summary") or {})
     summary["parser_review_ignored"] = True
+    cleaned_reason = (reason or "").strip()
+    if cleaned_reason:
+        summary["parser_review_ignore_reason"] = cleaned_reason
     return patch_import_log(import_log_id, summary=summary)
 
 

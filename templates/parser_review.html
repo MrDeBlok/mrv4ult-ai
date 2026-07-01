@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}Parser Review · MRV4ULT AI{% endblock %}
+{% block title %}AI Workbench · MRV4ULT AI{% endblock %}
 
 {% block content %}
 <section class="card shadow-sm mb-4">
     <div class="card-body p-3 p-md-4">
         <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
             <div>
-                <h1 class="h3 mb-1">Parser review</h1>
+                <h1 class="h3 mb-1">AI Workbench</h1>
                 <p class="text-muted mb-0">
-                    Group parser failures, filter common issues, and resolve imports that need review.
+                    Teach the parser from real failures: fix each issue, reprocess the import, and clear the review queue.
                 </p>
             </div>
             <div class="activity-feed-stats">
@@ -17,6 +17,7 @@
                 <span class="activity-stat"><strong>Missing price:</strong> {{ counts.missing_price }}</span>
                 <span class="activity-stat"><strong>Missing brand:</strong> {{ counts.missing_brand }}</span>
                 <span class="activity-stat"><strong>Missing reference:</strong> {{ counts.missing_reference }}</span>
+                <span class="activity-stat"><strong>Missing condition:</strong> {{ counts.missing_condition }}</span>
                 <span class="activity-stat"><strong>Unknown brand:</strong> {{ counts.unknown_brand }}</span>
             </div>
         </div>
@@ -27,7 +28,10 @@
 <div class="alert alert-success" role="alert">Import marked as reviewed for the team.</div>
 {% endif %}
 {% if ignored %}
-<div class="alert alert-secondary" role="alert">Issue ignored and removed from the default review list.</div>
+<div class="alert alert-secondary" role="alert">Issue ignored and removed from the active review queue.</div>
+{% endif %}
+{% if fixed %}
+<div class="alert alert-success" role="alert">Correction saved and import reprocessed.</div>
 {% endif %}
 {% if alias_saved %}
 <div class="alert alert-success" role="alert">Brand alias saved. Future imports will recognize it immediately.</div>
@@ -53,6 +57,10 @@
                 class="btn btn-sm {% if active_filter == 'missing_reference' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Missing reference</a>
             <a
+                href="/parser-review?filter=missing_condition"
+                class="btn btn-sm {% if active_filter == 'missing_condition' %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            >Missing condition</a>
+            <a
                 href="/parser-review?filter=unknown_brand"
                 class="btn btn-sm {% if active_filter == 'unknown_brand' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Unknown brand</a>
@@ -74,11 +82,9 @@
                     <th scope="col">Dealer</th>
                     <th scope="col">Group</th>
                     <th scope="col">Original message</th>
-                    <th scope="col">Status reason</th>
                     <th scope="col">Issues</th>
-                    <th scope="col">Missing fields</th>
                     <th scope="col">Parsed fields</th>
-                    <th scope="col">Actions</th>
+                    <th scope="col">Fix action</th>
                 </tr>
             </thead>
             <tbody>
@@ -87,20 +93,15 @@
                     <td class="text-nowrap">{{ row.import_time }}</td>
                     <td>{{ row.dealer }}</td>
                     <td>{{ row.group_name }}</td>
-                    <td class="small text-muted" style="min-width: 14rem; max-width: 18rem;">{{ row.message_preview }}</td>
-                    <td class="small">{{ row.status_reason }}</td>
+                    <td class="small text-muted" style="min-width: 14rem; max-width: 18rem;">{{ row.original_message or row.message_preview }}</td>
                     <td>
-                        <div class="d-flex flex-wrap gap-1">
+                        <div class="d-flex flex-wrap gap-1 mb-1">
                             {% for label in row.issue_labels %}
                             <span class="badge text-bg-warning">{{ label }}</span>
                             {% endfor %}
                         </div>
-                    </td>
-                    <td class="small">
                         {% if row.missing_fields %}
-                        {{ row.missing_fields | join(", ") }}
-                        {% else %}
-                        —
+                        <div class="small text-muted">Missing: {{ row.missing_fields | join(", ") }}</div>
                         {% endif %}
                     </td>
                     <td class="small">
@@ -110,27 +111,125 @@
                         —
                         {% endif %}
                     </td>
-                    <td style="min-width: 14rem;">
+                    <td style="min-width: 18rem;">
                         <div class="d-flex flex-column gap-2">
                             <a href="{{ row.detail_url }}" class="btn btn-sm btn-outline-primary">Open import detail</a>
+
+                            {% if row.primary_fix_action %}
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-primary"
+                                data-bs-toggle="collapse"
+                                data-bs-target="#workbench-fix-{{ row.id }}"
+                                aria-expanded="false"
+                                aria-controls="workbench-fix-{{ row.id }}"
+                            >Fix</button>
+                            <div class="collapse" id="workbench-fix-{{ row.id }}">
+                                <form
+                                    method="post"
+                                    action="/parser-review/{{ row.id }}/fix"
+                                    class="border rounded p-2 bg-light d-flex flex-column gap-2"
+                                >
+                                    <input type="hidden" name="fix_action" value="{{ row.primary_fix_action }}">
+
+                                    {% if row.primary_fix_action == 'missing_brand' %}
+                                    <label class="form-label small mb-0" for="fix-brand-{{ row.id }}">Brand</label>
+                                    <select class="form-select form-select-sm" id="fix-brand-{{ row.id }}" name="brand_name" required>
+                                        <option value="">Select brand…</option>
+                                        {% for brand in canonical_brands %}
+                                        <option value="{{ brand }}" {% if row.fix_prefill.brand == brand %}selected{% endif %}>{{ brand }}</option>
+                                        {% endfor %}
+                                    </select>
+
+                                    {% elif row.primary_fix_action == 'missing_reference' %}
+                                    <label class="form-label small mb-0" for="fix-reference-{{ row.id }}">Reference</label>
+                                    <input
+                                        class="form-control form-control-sm"
+                                        id="fix-reference-{{ row.id }}"
+                                        name="reference"
+                                        value="{{ row.fix_prefill.reference }}"
+                                        required
+                                    >
+
+                                    {% elif row.primary_fix_action == 'unknown_brand' and knowledge_enabled %}
+                                    <label class="form-label small mb-0" for="fix-unknown-brand-{{ row.id }}">Canonical brand</label>
+                                    <input type="hidden" name="alias_text" value="{{ row.unknown_brand_text }}">
+                                    <select class="form-select form-select-sm" id="fix-unknown-brand-{{ row.id }}" name="brand_name" required>
+                                        <option value="">Select brand…</option>
+                                        {% for brand in canonical_brands %}
+                                        <option value="{{ brand }}">{{ brand }}</option>
+                                        {% endfor %}
+                                    </select>
+
+                                    {% elif row.primary_fix_action == 'unknown_model' %}
+                                    <label class="form-label small mb-0" for="fix-model-brand-{{ row.id }}">Brand</label>
+                                    <select class="form-select form-select-sm" id="fix-model-brand-{{ row.id }}" name="brand_name" required>
+                                        <option value="">Select brand…</option>
+                                        {% for brand in canonical_brands %}
+                                        <option value="{{ brand }}" {% if row.fix_prefill.brand == brand %}selected{% endif %}>{{ brand }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <label class="form-label small mb-0" for="fix-model-reference-{{ row.id }}">Reference</label>
+                                    <input
+                                        class="form-control form-control-sm"
+                                        id="fix-model-reference-{{ row.id }}"
+                                        name="reference"
+                                        value="{{ row.fix_prefill.reference }}"
+                                        required
+                                    >
+                                    <label class="form-label small mb-0" for="fix-model-name-{{ row.id }}">Model (optional)</label>
+                                    <input class="form-control form-control-sm" id="fix-model-name-{{ row.id }}" name="model">
+                                    <label class="form-label small mb-0" for="fix-model-alias-{{ row.id }}">Nickname / alias</label>
+                                    <input
+                                        class="form-control form-control-sm"
+                                        id="fix-model-alias-{{ row.id }}"
+                                        name="alias_text"
+                                        value="{{ row.fix_prefill.alias_text }}"
+                                        required
+                                    >
+
+                                    {% elif row.primary_fix_action == 'missing_condition' %}
+                                    <label class="form-label small mb-0" for="fix-condition-{{ row.id }}">Condition</label>
+                                    <select class="form-select form-select-sm" id="fix-condition-{{ row.id }}" name="condition" required>
+                                        <option value="">Choose condition…</option>
+                                        {% for value, label in condition_fix_options %}
+                                        <option value="{{ value }}">{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+
+                                    {% elif row.primary_fix_action == 'missing_price' %}
+                                    <label class="form-label small mb-0" for="fix-price-{{ row.id }}">Price</label>
+                                    <input class="form-control form-control-sm" id="fix-price-{{ row.id }}" name="price" required>
+                                    <label class="form-label small mb-0" for="fix-currency-{{ row.id }}">Currency</label>
+                                    <select class="form-select form-select-sm" id="fix-currency-{{ row.id }}" name="currency" required>
+                                        <option value="">Select currency…</option>
+                                        {% for code in workbench_currencies %}
+                                        <option value="{{ code }}">{{ code }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    {% endif %}
+
+                                    <button type="submit" class="btn btn-sm btn-success">Save correction &amp; reprocess</button>
+                                </form>
+                            </div>
+                            {% endif %}
+
+                            {% if row.can_mark_reviewed %}
                             <form method="post" action="/parser-review/{{ row.id }}/reviewed">
                                 <button type="submit" class="btn btn-sm btn-outline-success w-100">Mark as reviewed</button>
                             </form>
-                            <form method="post" action="/parser-review/{{ row.id }}/ignore">
+                            {% endif %}
+
+                            <form method="post" action="/parser-review/{{ row.id }}/ignore" class="d-flex flex-column gap-1">
+                                <label class="form-label small mb-0" for="ignore-reason-{{ row.id }}">Ignore reason</label>
+                                <input
+                                    class="form-control form-control-sm"
+                                    id="ignore-reason-{{ row.id }}"
+                                    name="reason"
+                                    placeholder="Optional reason"
+                                >
                                 <button type="submit" class="btn btn-sm btn-outline-secondary w-100">Ignore issue</button>
                             </form>
-                            {% if row.has_unknown_brand and knowledge_enabled %}
-                            <form method="post" action="/parser-review/{{ row.id }}/add-brand-alias" class="d-flex flex-wrap gap-2">
-                                <input type="hidden" name="alias_text" value="{{ row.unknown_brand_text }}">
-                                <select class="form-select form-select-sm" name="brand_name" required aria-label="Canonical brand for {{ row.unknown_brand_text }}">
-                                    <option value="">Select brand…</option>
-                                    {% for brand in canonical_brands %}
-                                    <option value="{{ brand }}">{{ brand }}</option>
-                                    {% endfor %}
-                                </select>
-                                <button type="submit" class="btn btn-sm btn-primary">Add brand alias</button>
-                            </form>
-                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -141,6 +240,6 @@
 </section>
 {% endif %}
 {% if not rows %}
-<div class="alert alert-secondary" role="alert">No imports need parser review.</div>
+<div class="alert alert-secondary" role="alert">No imports need AI workbench review.</div>
 {% endif %}
 {% endblock %}

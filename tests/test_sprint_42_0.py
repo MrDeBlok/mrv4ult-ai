@@ -176,7 +176,7 @@ class TestTradingDeskPage:
         response = client.get("/dashboard")
 
         assert response.status_code == 200
-        assert "Teach AI / Parser Review" not in response.text
+        assert "AI Workbench" not in response.text
         assert 'href="/import"' not in response.text
         assert 'href="/"' in response.text
 
