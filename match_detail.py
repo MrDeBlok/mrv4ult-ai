@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from condition_normalizer import display_condition
-from contact_classification import format_import_sender_label
+from contact_classification import REDACTED_SENDER_LABEL
 from dashboard_data import (
     MATCH_STRENGTH_BADGE_CLASSES,
     MATCH_STRENGTH_LABELS,
@@ -18,6 +19,45 @@ from search import format_price
 from user_visibility import can_view_import
 
 Record = dict[str, Any]
+
+
+def clean_whatsapp_number_for_link(value: str | None) -> str:
+    """Return digits-only WhatsApp number for wa.me links."""
+    return re.sub(r"\D", "", value or "")
+
+
+def resolve_match_dealer_contact(
+    import_log: Record,
+    *,
+    dealer: Record | None = None,
+) -> Record:
+    """Resolve dealer display and contact details for match detail views."""
+    alias = str(import_log.get("dealer_alias") or "").strip()
+    dealer_whatsapp = str(import_log.get("dealer_whatsapp") or "").strip()
+    phone_number = str((dealer or {}).get("phone_number") or "").strip()
+    whatsapp_id = str((dealer or {}).get("whatsapp_id") or "").strip()
+    display_name = str((dealer or {}).get("display_name") or "").strip()
+
+    contact_number = next(
+        (
+            candidate
+            for candidate in (dealer_whatsapp, phone_number, whatsapp_id)
+            if candidate
+        ),
+        "",
+    )
+
+    name = alias or display_name or REDACTED_SENDER_LABEL
+    digits = clean_whatsapp_number_for_link(contact_number)
+    message_dealer_url = f"https://wa.me/{digits}" if digits else None
+
+    return {
+        "name": name,
+        "contact_number": contact_number or "No contact number available",
+        "group_name": import_log.get("group_name") or "—",
+        "message_dealer_url": message_dealer_url,
+        "has_contact_number": bool(contact_number),
+    }
 
 
 def _format_request_budget(max_price: Any, currency: Any) -> str:
@@ -64,6 +104,7 @@ def build_match_detail(
     message: Record | None = None,
     user: Record | None = None,
     format_timestamp: Callable[[str | None], str] | None = None,
+    dealer: Record | None = None,
 ) -> Record:
     """Build template payload for one enriched request match."""
     format_timestamp = format_timestamp or format_activity_timestamp
@@ -73,6 +114,7 @@ def build_match_detail(
     import_log = match.get("import_log") or {}
     strength = str(match.get("match_strength") or "")
     raw_message = (message or {}).get("raw_text") or ""
+    dealer_contact = resolve_match_dealer_contact(import_log, dealer=dealer)
 
     request_url = "/requests" if can_view_page(user, "/requests") else None
     import_log_id = import_log.get("id")
@@ -107,7 +149,8 @@ def build_match_detail(
             "original_text": (request.get("notes") or "").strip(),
         },
         "offer": {
-            "dealer": format_import_sender_label(import_log),
+            "dealer": dealer_contact["name"],
+            "dealer_contact": dealer_contact["contact_number"],
             "brand": watch.get("brand") or "—",
             "reference": watch.get("reference") or watch.get("model") or "—",
             "model": watch.get("model") or "—",
@@ -124,7 +167,7 @@ def build_match_detail(
             "year": offer.get("production_year") or "—",
             "card_date": offer.get("card_date") or "—",
             "offer_date": format_timestamp(import_log.get("import_time")),
-            "group_name": import_log.get("group_name") or "—",
+            "group_name": dealer_contact["group_name"],
             "raw_message": raw_message.strip(),
         },
         "deal": {
@@ -143,6 +186,7 @@ def build_match_detail(
             "dashboard_url": "/dashboard",
             "request_url": request_url,
             "activity_url": activity_url,
+            "message_dealer_url": dealer_contact["message_dealer_url"],
         },
     }
 
@@ -155,6 +199,7 @@ def load_match_detail(
 ) -> Record | None:
     """Load one match detail payload when the user can view linked data."""
     from database import (
+        get_dealer_by_contact_number,
         get_message_by_id,
         get_request,
         get_request_match,
@@ -178,6 +223,11 @@ def load_match_detail(
     if request is None:
         return None
 
+    dealer = None
+    dealer_whatsapp = str(import_log.get("dealer_whatsapp") or "").strip()
+    if dealer_whatsapp:
+        dealer = get_dealer_by_contact_number(dealer_whatsapp)
+
     profit_match = attach_profit_to_matches(request, [enriched])[0]
     message = None
     message_id = import_log.get("message_id")
@@ -190,4 +240,5 @@ def load_match_detail(
         message=message,
         user=user,
         format_timestamp=format_timestamp,
+        dealer=dealer,
     )

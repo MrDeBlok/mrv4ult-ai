@@ -26,6 +26,9 @@
             {% if detail.actions.activity_url %}
             <a href="{{ detail.actions.activity_url }}" class="btn btn-sm btn-outline-secondary">View offer/import</a>
             {% endif %}
+            {% if detail.actions.message_dealer_url %}
+            <a href="{{ detail.actions.message_dealer_url }}" class="btn btn-sm btn-success" target="_blank" rel="noopener noreferrer">Message dealer</a>
+            {% endif %}
         </div>
     </div>
 </section>
@@ -93,6 +96,12 @@
                     <dt class="col-sm-4">Dealer</dt>
                     <dd class="col-sm-8">{{ detail.offer.dealer }}</dd>
 
+                    <dt class="col-sm-4">WhatsApp / phone</dt>
+                    <dd class="col-sm-8">{{ detail.offer.dealer_contact }}</dd>
+
+                    <dt class="col-sm-4">Group</dt>
+                    <dd class="col-sm-8">{{ detail.offer.group_name }}</dd>
+
                     <dt class="col-sm-4">Watch</dt>
                     <dd class="col-sm-8">{{ detail.offer.brand }} {{ detail.offer.reference }}</dd>
 
@@ -113,9 +122,6 @@
 
                     <dt class="col-sm-4">Offer date</dt>
                     <dd class="col-sm-8">{{ detail.offer.offer_date }}</dd>
-
-                    <dt class="col-sm-4">Group</dt>
-                    <dd class="col-sm-8">{{ detail.offer.group_name }}</dd>
                 </dl>
                 {% if detail.offer.raw_message %}
                 <div class="mt-4">

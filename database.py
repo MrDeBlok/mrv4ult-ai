@@ -1688,6 +1688,27 @@ def get_dealer_by_id(dealer_id: str) -> Record | None:
     return response.data[0]
 
 
+def get_dealer_by_contact_number(number: str) -> Record | None:
+    """Return a dealer matched by whatsapp_id or phone_number."""
+    cleaned = number.strip()
+    if not cleaned:
+        return None
+
+    fields = "display_name, phone_number, whatsapp_id"
+    for column in ("whatsapp_id", "phone_number"):
+        response = (
+            get_client()
+            .table("dealers")
+            .select(fields)
+            .eq(column, cleaned)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return response.data[0]
+    return None
+
+
 def list_offer_intelligence_rows(*, dealer_id: str | None = None) -> list[Record]:
     """Return offer rows used for dealer intelligence aggregation."""
     dealer_fields = (
