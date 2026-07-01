@@ -15,6 +15,7 @@ TRADING_DESK_KPI_TITLES = (
     "New offers today",
     "High opportunities",
     "Active market requests",
+    "Active client requests",
     "AI needs help",
     "Unread notifications",
 )
@@ -26,14 +27,15 @@ class TestSprint34DashboardRules:
             new_offers_today=2,
             high_opportunities=1,
             active_market_requests=3,
+            active_client_requests=2,
             ai_needs_help=4,
             unread_notifications=6,
         )
 
         assert [card["title"] for card in cards] == list(TRADING_DESK_KPI_TITLES)
         assert cards[0]["url"] == "/activity"
-        assert cards[3]["url"] == "/parser-review"
-        assert cards[4]["url"] == "/notifications"
+        assert cards[4]["url"] == "/parser-review"
+        assert cards[5]["url"] == "/notifications"
 
     @patch("dashboard_data.get_messages_by_ids", return_value={})
     @patch(
@@ -51,8 +53,12 @@ class TestSprint34DashboardRules:
     @patch("dashboard_data.list_dashboard_market_request_import_logs", return_value=[])
     @patch("dashboard_data.list_dashboard_today_import_logs", return_value=[])
     @patch("dashboard_data.list_dashboard_recent_import_logs", return_value=[])
-    def test_parser_review_count_uses_user_scoped_import_logs(
+    @patch("dashboard_data.list_recent_request_matches", return_value=[])
+    @patch("dashboard_data.list_requests", return_value=[])
+    def test_parser_review_count_hidden_for_traders(
         self,
+        _mock_list_requests: MagicMock,
+        _mock_matches: MagicMock,
         _mock_recent: MagicMock,
         _mock_today: MagicMock,
         _mock_market: MagicMock,
@@ -80,14 +86,12 @@ class TestSprint34DashboardRules:
             trader_desk = load_trading_desk(TRADER_ONE, format_timestamp=lambda value: value)
             admin_desk = load_trading_desk(ADMIN_USER, format_timestamp=lambda value: value)
 
-        trader_ai_count = next(
-            card["count"] for card in trader_desk["kpis"] if card["key"] == "ai_needs_help"
-        )
+        trader_keys = {card["key"] for card in trader_desk["kpis"]}
         admin_ai_count = next(
             card["count"] for card in admin_desk["kpis"] if card["key"] == "ai_needs_help"
         )
 
-        assert trader_ai_count == 1
+        assert "ai_needs_help" not in trader_keys
         assert admin_ai_count == 2
 
 
@@ -107,6 +111,7 @@ class TestSprint34DashboardRoutes:
                 new_offers_today=1,
                 high_opportunities=0,
                 active_market_requests=2,
+                active_client_requests=0,
                 ai_needs_help=1,
                 unread_notifications=5,
             ),
@@ -137,6 +142,7 @@ class TestSprint34DashboardRoutes:
                 new_offers_today=0,
                 high_opportunities=0,
                 active_market_requests=1,
+                active_client_requests=0,
                 ai_needs_help=0,
                 unread_notifications=4,
             ),
@@ -164,6 +170,7 @@ class TestSprint34DashboardRoutes:
                 new_offers_today=7,
                 high_opportunities=0,
                 active_market_requests=8,
+                active_client_requests=0,
                 ai_needs_help=7,
                 unread_notifications=11,
             ),

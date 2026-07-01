@@ -4,20 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from dashboard_data import load_trading_desk, parser_review_import_logs_for_user
+from dashboard_data import (
+    ACTIVE_CLIENT_REQUEST_STATUSES,
+    count_active_client_requests,
+    load_trading_desk,
+    parser_review_import_logs_for_user,
+)
 
 Record = dict[str, Any]
 
-ACTIVE_REQUEST_STATUSES = frozenset({"open", "active"})
-
-
-def count_active_requests(requests: list[Record]) -> int:
-    """Return the number of open client requests."""
-    return sum(
-        1
-        for request in requests
-        if (request.get("status") or "").lower() in ACTIVE_REQUEST_STATUSES
-    )
+ACTIVE_REQUEST_STATUSES = ACTIVE_CLIENT_REQUEST_STATUSES
+count_active_requests = count_active_client_requests
 
 
 def load_dashboard_cards(user: Record | None, *, format_timestamp) -> list[Record]:

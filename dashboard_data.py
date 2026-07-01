@@ -24,6 +24,7 @@ from database import (
     list_dashboard_today_import_logs,
     list_recent_notifications,
     list_recent_request_matches,
+    list_requests,
     load_enriched_request_match_batch,
 )
 from dealer_intelligence import dealer_display_name, format_activity_timestamp
@@ -48,7 +49,7 @@ from opportunity_intelligence import (
     recommendation_badge_class,
 )
 from parser_review import build_parser_review_row, filter_parser_review_imports, parser_review_counts
-from permissions import can_view_page, is_viewer
+from permissions import can_access_admin_tools, can_view_page, is_viewer
 from request_profit import attach_profit_to_matches, offer_price_usd
 from search import _nested_record
 from timezone_utils import DISPLAY_TIMEZONE, ensure_utc_datetime, parse_utc_timestamp
@@ -57,6 +58,8 @@ from user_visibility import can_view_import, filter_imports_for_user
 Record = dict[str, Any]
 
 logger = logging.getLogger(__name__)
+
+ACTIVE_CLIENT_REQUEST_STATUSES = frozenset({"open", "active"})
 
 HIGH_OPPORTUNITY_MIN_SCORE = 75
 TOP_OPPORTUNITIES_LIMIT = 5
@@ -79,6 +82,15 @@ LIGHTWEIGHT_BASE_SCORE = 25
 LIGHTWEIGHT_EXACT_BOOST = 35
 LIGHTWEIGHT_ALIAS_BOOST = 20
 LIGHTWEIGHT_BUDGET_ABOVE_BOOST = 25
+
+
+def count_active_client_requests(requests: list[Record]) -> int:
+    """Return the number of open client requests."""
+    return sum(
+        1
+        for request in requests
+        if (request.get("status") or "").lower() in ACTIVE_CLIENT_REQUEST_STATUSES
+    )
 
 
 def _log_dashboard_section(section: str, started: float) -> None:
@@ -547,6 +559,8 @@ def load_dashboard_matched_requests(
             {
                 "match_id": str(match.get("id") or ""),
                 "match_url": f"/matches/{match['id']}",
+                "request_type": "Client",
+                "request_type_class": "primary",
                 "client_name": request.get("client_name") or "Client",
                 "watch_label": _request_watch_label(request, watch),
                 "dealer": format_import_sender_label(import_log),
@@ -581,6 +595,7 @@ def build_trading_desk_kpis(
     new_offers_today: int,
     high_opportunities: int,
     active_market_requests: int,
+    active_client_requests: int,
     ai_needs_help: int,
     unread_notifications: int,
 ) -> list[Record]:
@@ -605,7 +620,14 @@ def build_trading_desk_kpis(
             "title": "Active market requests",
             "count": active_market_requests,
             "url": "/market-requests",
-            "description": "Open buy-side requests in the market feed.",
+            "description": "WhatsApp WTB, sold order, and looking-for demand.",
+        },
+        {
+            "key": "active_client_requests",
+            "title": "Active client requests",
+            "count": active_client_requests,
+            "url": "/requests",
+            "description": "Open manually tracked client requests.",
         },
         {
             "key": "ai_needs_help",
@@ -613,6 +635,7 @@ def build_trading_desk_kpis(
             "count": ai_needs_help,
             "url": "/parser-review",
             "description": "Parser review items waiting for a fix.",
+            "admin_only": True,
         },
         {
             "key": "unread_notifications",
@@ -628,7 +651,10 @@ def _visible_kpi_cards(user: Record | None, cards: list[Record]) -> list[Record]
     """Drop KPI links the current user cannot open."""
     visible_cards: list[Record] = []
     for card in cards:
+        if card.get("admin_only") and not can_access_admin_tools(user):
+            continue
         item = dict(card)
+        item.pop("admin_only", None)
         if item.get("url") and not can_view_page(user, str(item["url"])):
             item["url"] = None
         visible_cards.append(item)
@@ -654,7 +680,7 @@ def build_quick_actions(user: Record | None) -> list[Record]:
         },
         {
             "key": "new_request",
-            "label": "New Request",
+            "label": "New Client Request",
             "url": "/requests",
             "style": "outline-dark",
             "visible": can_view_page(user, "/requests"),
@@ -671,7 +697,7 @@ def build_quick_actions(user: Record | None) -> list[Record]:
             "label": "Teach AI / Parser Review",
             "url": "/parser-review",
             "style": "outline-dark",
-            "visible": can_view_page(user, "/parser-review"),
+            "visible": can_access_admin_tools(user),
         },
     ]
     return [action for action in actions if action["visible"]]
@@ -701,11 +727,13 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
     _log_dashboard_section("top_opportunities", started)
 
     started = time.perf_counter()
-    ai_items = load_ai_needs_help_items(
-        user,
-        business_imports=parser_business,
-        format_timestamp=format_timestamp,
-    )
+    ai_items: list[Record] = []
+    if can_access_admin_tools(user):
+        ai_items = load_ai_needs_help_items(
+            user,
+            business_imports=parser_business,
+            format_timestamp=format_timestamp,
+        )
     _log_dashboard_section("ai_needs_help", started)
 
     started = time.perf_counter()
@@ -713,13 +741,15 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
     _log_dashboard_section("live_market", started)
 
     started = time.perf_counter()
-    parser_counts = parser_review_counts(parser_business)
+    parser_counts = parser_review_counts(parser_business) if can_access_admin_tools(user) else {"total": 0}
+    active_client_requests = count_active_client_requests(list_requests())
     kpis = _visible_kpi_cards(
         user,
         build_trading_desk_kpis(
             new_offers_today=count_new_offers_today(business_today, now=now),
             high_opportunities=high_opportunity_count,
             active_market_requests=len(market_request_logs),
+            active_client_requests=active_client_requests,
             ai_needs_help=parser_counts["total"],
             unread_notifications=get_unread_notification_count(),
         ),
@@ -734,5 +764,6 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
         "top_opportunities": top_opportunities,
         "ai_needs_help": ai_items,
         "live_market": live_market,
+        "show_ai_needs_help": can_access_admin_tools(user),
         "show_write_actions": not is_viewer(user),
     }

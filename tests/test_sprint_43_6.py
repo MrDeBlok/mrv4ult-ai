@@ -207,6 +207,7 @@ class TestDashboardRouteBehavior:
                 for index in range(AI_NEEDS_HELP_LIMIT)
             ],
             "live_market": [],
+            "show_ai_needs_help": True,
             "show_write_actions": True,
         }
 

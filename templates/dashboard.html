@@ -65,6 +65,7 @@
             <table class="table table-hover align-middle mb-0 trading-desk-table">
                 <thead class="table-light">
                     <tr>
+                        <th scope="col">Type</th>
                         <th scope="col">Client</th>
                         <th scope="col">Watch</th>
                         <th scope="col">Dealer</th>
@@ -79,6 +80,9 @@
                 <tbody>
                     {% for row in desk.matched_requests %}
                     <tr>
+                        <td>
+                            <span class="badge text-bg-{{ row.request_type_class }}">{{ row.request_type }}</span>
+                        </td>
                         <td>{{ row.client_name }}</td>
                         <td>{{ row.watch_label }}</td>
                         <td>{{ row.dealer }}</td>
@@ -156,6 +160,7 @@
     </div>
 
     <div class="col-12 col-xxl-5">
+        {% if desk.show_ai_needs_help %}
         <section class="card shadow-sm h-100">
             <div class="card-header bg-white py-3">
                 <h2 class="h5 mb-0">AI needs help</h2>
@@ -177,6 +182,7 @@
                 {% endif %}
             </div>
         </section>
+        {% endif %}
     </div>
 </div>
 

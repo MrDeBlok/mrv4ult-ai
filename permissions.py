@@ -29,6 +29,13 @@ VIEWER_FORBIDDEN_GET_PREFIXES = (
     "/settings/team",
     "/users",
 )
+ADMIN_ONLY_PATH_PREFIXES = (
+    "/import",
+    "/parser-review",
+    "/knowledge",
+    "/whatsapp",
+    "/performance-profile",
+)
 TEAM_MANAGEMENT_PREFIX = "/settings/team"
 WRITE_EXEMPT_POST_PATHS = frozenset({"/logout"})
 
@@ -79,6 +86,15 @@ def can_manage_team(user: Record | None) -> bool:
     return is_admin(user)
 
 
+def can_access_admin_tools(user: Record | None) -> bool:
+    """Return True when the user may access AI tooling and admin-only pages."""
+    return is_admin(user)
+
+
+def _is_admin_only_path(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in ADMIN_ONLY_PATH_PREFIXES)
+
+
 def can_quick_fix_notifications(user: Record | None) -> bool:
     return is_admin(user) or is_trader(user)
 
@@ -88,14 +104,18 @@ def can_write(user: Record | None, path: str, *, method: str = "POST") -> bool:
         return False
     if is_viewer(user):
         return method == "POST" and path in WRITE_EXEMPT_POST_PATHS
+    if is_trader(user) and _is_admin_only_path(path):
+        return False
     return is_admin(user) or is_trader(user)
 
 
 def can_view_page(user: Record | None, path: str) -> bool:
     if not is_active_user(user):
         return False
-    if is_admin(user) or is_trader(user):
+    if is_admin(user):
         return True
+    if is_trader(user):
+        return not _is_admin_only_path(path)
     if not is_viewer(user):
         return False
     if path in VIEWER_ALLOWED_GET_EXACT:

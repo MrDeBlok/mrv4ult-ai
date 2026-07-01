@@ -27,6 +27,7 @@ def _desk_payload(**overrides) -> dict:
             new_offers_today=4,
             high_opportunities=0,
             active_market_requests=2,
+            active_client_requests=1,
             ai_needs_help=1,
             unread_notifications=3,
         ),
@@ -57,6 +58,7 @@ def _desk_payload(**overrides) -> dict:
                 "detail_url": "/activity/log-1",
             }
         ],
+        "show_ai_needs_help": True,
         "show_write_actions": True,
     }
     payload.update(overrides)
@@ -82,19 +84,21 @@ class TestTradingDeskData:
             new_offers_today=1,
             high_opportunities=2,
             active_market_requests=3,
-            ai_needs_help=4,
-            unread_notifications=5,
+            active_client_requests=4,
+            ai_needs_help=5,
+            unread_notifications=6,
         )
 
         assert [card["title"] for card in cards] == [
             "New offers today",
             "High opportunities",
             "Active market requests",
+            "Active client requests",
             "AI needs help",
             "Unread notifications",
         ]
         assert cards[0]["url"] == "/activity"
-        assert cards[3]["url"] == "/parser-review"
+        assert cards[4]["url"] == "/parser-review"
 
 
 class TestTradingDeskPage:

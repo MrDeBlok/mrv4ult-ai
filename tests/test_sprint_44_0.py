@@ -19,6 +19,7 @@ class TestNavigationGroups:
         item_paths = {link["path"] for group in groups for link in group["links"]}
 
         assert "Admin" not in labels
+        assert "AI" not in labels
         assert "/import" not in item_paths
         assert "/performance-profile" not in item_paths
         assert "/whatsapp" not in item_paths

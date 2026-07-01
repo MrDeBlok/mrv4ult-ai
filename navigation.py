@@ -31,13 +31,13 @@ NAV_GROUPS: tuple[Record, ...] = (
         "links": (
             {"label": "Search", "path": "/", "match": "exact"},
             {"label": "Market Requests", "path": "/market-requests", "match": "prefix"},
-            {"label": "Requests", "path": "/requests", "match": "prefix"},
+            {"label": "Client Requests", "path": "/requests", "match": "prefix"},
         ),
     },
     {
         "key": "ai",
         "label": "AI",
-        "admin_only": False,
+        "admin_only": True,
         "links": (
             {"label": "Parser Review", "path": "/parser-review", "match": "prefix"},
             {"label": "Unknown Brands", "path": "/knowledge/unknown-brands", "match": "prefix"},
