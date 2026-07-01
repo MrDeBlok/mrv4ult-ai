@@ -115,7 +115,17 @@ ACCESSORY_LINE_PATTERN = re.compile(
 )
 
 REQUEST_PATTERN = re.compile(
-    r"\b(wtb|looking\s+for|lf\b|iso\b|need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch))\b",
+    r"\b("
+    r"wtb|"
+    r"looking\s+for|"
+    r"lf\b|"
+    r"iso\b|"
+    r"need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch)|"
+    r"sold[\s_-]*order|"
+    r"sold\s+for\s+client|"
+    r"client\s+sold\s+need|"
+    r"need\s+for\s+sold\s+client"
+    r")\b",
     re.I,
 )
 OFFER_PATTERN = re.compile(r"\b(fs|for\s+sale|asking|avail(?:able)?|stock)\b", re.I)

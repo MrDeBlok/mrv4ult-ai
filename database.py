@@ -562,8 +562,49 @@ def create_request(
     notes: str | None = None,
     status: str = "open",
     client_id: str | None = None,
+    created_by_user_id: str | None = None,
 ) -> Record:
     """Create a manual client request."""
+    payload = build_request_storage_payload(
+        client_name=client_name,
+        brand=brand,
+        reference=reference,
+        model=model,
+        alias=alias,
+        dial=dial,
+        condition=condition,
+        min_year=min_year,
+        max_year=max_year,
+        max_price=max_price,
+        currency=currency,
+        notes=notes,
+        status=status,
+    )
+    if client_id:
+        payload["client_id"] = client_id
+    if created_by_user_id and user_ownership_columns_supported():
+        payload["created_by_user_id"] = created_by_user_id
+    response = get_client().table("requests").insert(payload).execute()
+    return _first_row(response.data, "requests")
+
+
+def build_request_storage_payload(
+    *,
+    client_name: str,
+    brand: str | None = None,
+    reference: str | None = None,
+    model: str | None = None,
+    alias: str | None = None,
+    dial: str | None = None,
+    condition: str | None = None,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    max_price: int | None = None,
+    currency: str | None = None,
+    notes: str | None = None,
+    status: str | None = None,
+) -> Record:
+    """Normalize request fields for create/update storage."""
     payload: Record = {
         "client_name": client_name.strip(),
         "brand": _storage_value(brand),
@@ -577,12 +618,10 @@ def create_request(
         "max_price": max_price,
         "currency": _storage_value(currency),
         "notes": _storage_value(notes),
-        "status": status,
     }
-    if client_id:
-        payload["client_id"] = client_id
-    response = get_client().table("requests").insert(payload).execute()
-    return _first_row(response.data, "requests")
+    if status is not None:
+        payload["status"] = status
+    return payload
 
 
 def list_requests(*, status: str | None = None) -> list[Record]:
@@ -619,6 +658,54 @@ def update_request_status(request_id: str, status: str) -> Record:
         .execute()
     )
     return _first_row(response.data, "requests")
+
+
+def update_request(
+    request_id: str,
+    *,
+    client_name: str,
+    brand: str | None = None,
+    reference: str | None = None,
+    model: str | None = None,
+    alias: str | None = None,
+    dial: str | None = None,
+    condition: str | None = None,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    max_price: int | None = None,
+    currency: str | None = None,
+    notes: str | None = None,
+    status: str,
+) -> Record:
+    """Update an existing client request."""
+    payload = build_request_storage_payload(
+        client_name=client_name,
+        brand=brand,
+        reference=reference,
+        model=model,
+        alias=alias,
+        dial=dial,
+        condition=condition,
+        min_year=min_year,
+        max_year=max_year,
+        max_price=max_price,
+        currency=currency,
+        notes=notes,
+        status=status,
+    )
+    response = (
+        get_client()
+        .table("requests")
+        .update(payload)
+        .eq("id", request_id)
+        .execute()
+    )
+    return _first_row(response.data, "requests")
+
+
+def delete_request(request_id: str) -> None:
+    """Permanently delete a client request and cascade request matches."""
+    get_client().table("requests").delete().eq("id", request_id).execute()
 
 
 def create_request_match(

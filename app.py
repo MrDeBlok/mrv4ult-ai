@@ -49,6 +49,7 @@ from database import (
     create_client_contact,
     create_request,
     delete_client_permanently,
+    delete_request,
     get_active_offers_for_watch,
     get_active_offers_for_dealer,
     get_client,
@@ -61,6 +62,7 @@ from database import (
     get_message_by_id,
     get_messages_by_ids,
     get_notification_by_id,
+    get_request,
     get_watch_by_id,
     dealer_contact_type,
     dealer_has_offers,
@@ -98,6 +100,7 @@ from database import (
     update_client_name,
     update_client_profile,
     update_dealer_contact_type,
+    update_request,
     update_request_status,
     list_pending_unknown_brands,
     list_pending_unknown_nicknames,
@@ -213,6 +216,7 @@ from auth import (
     session_secret_key,
 )
 from user_visibility import (
+    can_manage_request,
     can_view_import,
     filter_contacts_for_user,
     filter_contacts_page_for_user,
@@ -947,6 +951,7 @@ def build_request_row(
     request: dict[str, Any],
     *,
     matches: list[dict[str, Any]] | None = None,
+    user: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if matches is None:
         matches = load_enriched_request_matches_by_request_ids([str(request["id"])]).get(
@@ -1011,16 +1016,62 @@ def build_request_row(
         "best_potential_profit": profit_summary["best_potential_profit"],
         "best_margin": profit_summary["best_margin"],
         "match_count": profit_summary["match_count"],
+        "can_manage": can_manage_request(user, request),
     }
 
 
-def build_request_rows(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_request_rows(
+    requests: list[dict[str, Any]],
+    *,
+    user: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     request_ids = [str(request["id"]) for request in requests]
     matches_by_request = load_enriched_request_matches_by_request_ids(request_ids)
     return [
-        build_request_row(request, matches=matches_by_request.get(str(request["id"]), []))
+        build_request_row(
+            request,
+            matches=matches_by_request.get(str(request["id"]), []),
+            user=user,
+        )
         for request in requests
     ]
+
+
+def build_request_edit_form(request: dict[str, Any]) -> dict[str, Any]:
+    status = (request.get("status") or "open").lower()
+    if status == "active":
+        status = "open"
+    return {
+        "id": request["id"],
+        "client_name": request.get("client_name") or "",
+        "brand": request.get("brand") or "",
+        "reference": request.get("reference") or "",
+        "model": request.get("model") or "",
+        "alias": request.get("alias") or "",
+        "dial": request.get("dial") or "",
+        "min_year": request.get("min_year") or "",
+        "max_year": request.get("max_year") or "",
+        "max_price": request.get("max_price") or "",
+        "currency": request.get("currency") or "USD",
+        "notes": request.get("notes") or "",
+        "status": status,
+    }
+
+
+def _normalize_request_status(value: str) -> str:
+    cleaned = value.strip().lower()
+    if cleaned in {"open", "matched", "closed"}:
+        return cleaned
+    raise ValueError("Invalid request status. Use Open, Matched, or Closed.")
+
+
+def _get_manageable_request(request_id: str, user: dict[str, Any] | None) -> dict[str, Any]:
+    request = get_request(request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if not can_manage_request(user, request):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return request
 
 
 def _format_year_range(min_year: Any, max_year: Any) -> str:
@@ -1100,6 +1151,8 @@ def _deal_analysis_watch_sources(summary: dict[str, Any]) -> list[dict[str, Any]
     if summary.get("status") == "insufficient_evidence":
         return []
     if summary.get("import_classification") == "insufficient_evidence":
+        return []
+    if summary.get("import_classification") == "request_intent":
         return []
 
     parsed_watches = _import_parsed_watches(summary)
@@ -1514,8 +1567,9 @@ async def requests_list(
     client_name: str = "",
 ) -> HTMLResponse:
     status_filter = status.strip().lower() or None
+    user = get_current_user(request)
     all_requests = list_requests()
-    all_rows = build_request_rows(all_requests)
+    all_rows = build_request_rows(all_requests, user=user)
     if status_filter:
         filtered_ids = {
             str(item["id"])
@@ -1534,6 +1588,8 @@ async def requests_list(
             "summary": summary,
             "status_filter": status_filter or "all",
             "saved": request.query_params.get("saved") == "1",
+            "updated": request.query_params.get("updated") == "1",
+            "deleted": request.query_params.get("deleted") == "1",
             "prefill_client_id": client_id.strip(),
             "prefill_client_name": client_name.strip(),
         },
@@ -1559,6 +1615,7 @@ async def requests_create(
     if not client_name.strip():
         return RedirectResponse(url="/requests?error=client", status_code=303)
 
+    user = get_current_user(request)
     create_request(
         client_name=client_name,
         brand=brand or None,
@@ -1572,12 +1629,125 @@ async def requests_create(
         currency=currency or None,
         notes=notes or None,
         client_id=client_id.strip() or None,
+        created_by_user_id=str(user["id"]) if user and user.get("id") else None,
     )
     return RedirectResponse(url="/requests?saved=1", status_code=303)
 
 
+@app.get("/requests/{request_id}/edit", response_class=HTMLResponse, name="request_edit")
+async def request_edit_page(request: Request, request_id: str) -> HTMLResponse:
+    user = get_current_user(request)
+    client_request = _get_manageable_request(request_id, user)
+    return templates.TemplateResponse(
+        request,
+        "request_edit.html",
+        {"form": build_request_edit_form(client_request), "error": None},
+    )
+
+
+@app.post("/requests/{request_id}/edit")
+async def request_edit_submit(
+    request: Request,
+    request_id: str,
+    client_name: str = Form(""),
+    brand: str = Form(""),
+    reference: str = Form(""),
+    model: str = Form(""),
+    alias: str = Form(""),
+    dial: str = Form(""),
+    min_year: str = Form(""),
+    max_year: str = Form(""),
+    max_price: str = Form(""),
+    currency: str = Form("USD"),
+    notes: str = Form(""),
+    status: str = Form("open"),
+):
+    user = get_current_user(request)
+    client_request = _get_manageable_request(request_id, user)
+    if not client_name.strip():
+        return templates.TemplateResponse(
+            request,
+            "request_edit.html",
+            {
+                "form": {
+                    **build_request_edit_form(client_request),
+                    "client_name": client_name,
+                    "brand": brand,
+                    "reference": reference,
+                    "model": model,
+                    "alias": alias,
+                    "dial": dial,
+                    "min_year": min_year,
+                    "max_year": max_year,
+                    "max_price": max_price,
+                    "currency": currency,
+                    "notes": notes,
+                    "status": status,
+                },
+                "error": "Client name is required.",
+            },
+            status_code=400,
+        )
+
+    try:
+        normalized_status = _normalize_request_status(status)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "request_edit.html",
+            {
+                "form": build_request_edit_form(
+                    {
+                        **client_request,
+                        "client_name": client_name,
+                        "brand": brand or None,
+                        "reference": reference or None,
+                        "model": model or None,
+                        "alias": alias or None,
+                        "dial": dial or None,
+                        "min_year": _parse_optional_int(min_year),
+                        "max_year": _parse_optional_int(max_year),
+                        "max_price": _parse_optional_int(max_price),
+                        "currency": currency or None,
+                        "notes": notes or None,
+                        "status": status,
+                    }
+                ),
+                "error": str(exc),
+            },
+            status_code=400,
+        )
+
+    update_request(
+        request_id,
+        client_name=client_name,
+        brand=brand or None,
+        reference=reference or None,
+        model=model or None,
+        alias=alias or None,
+        dial=dial or None,
+        min_year=_parse_optional_int(min_year),
+        max_year=_parse_optional_int(max_year),
+        max_price=_parse_optional_int(max_price),
+        currency=currency or None,
+        notes=notes or None,
+        status=normalized_status,
+    )
+    return RedirectResponse(url="/requests?updated=1", status_code=303)
+
+
+@app.post("/requests/{request_id}/delete")
+async def request_delete(request: Request, request_id: str) -> RedirectResponse:
+    user = get_current_user(request)
+    _get_manageable_request(request_id, user)
+    delete_request(request_id)
+    return RedirectResponse(url="/requests?deleted=1", status_code=303)
+
+
 @app.post("/requests/{request_id}/close")
-async def requests_close(request_id: str) -> RedirectResponse:
+async def requests_close(request: Request, request_id: str) -> RedirectResponse:
+    user = get_current_user(request)
+    _get_manageable_request(request_id, user)
     update_request_status(request_id, "closed")
     return RedirectResponse(url="/requests", status_code=303)
 

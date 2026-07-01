@@ -39,7 +39,13 @@ from condition_normalizer import (
     normalize_watch_condition,
 )
 from watch_knowledge import enrich_parsed_watch
-from import_classification import is_buyer_request_message, split_offer_watches
+from import_classification import (
+    enrich_sold_order_watches,
+    is_buyer_request_message,
+    is_sold_order_message,
+    sold_order_has_actionable_identity,
+    split_offer_watches,
+)
 from ingest_lifecycle import (
     bind_import_log_id,
     end_import_trace,
@@ -503,7 +509,12 @@ def ingest_message(
         normalize_watch_condition(enrich_parsed_watch(watch))
         for watch in parsed["watches"]
     ]
-    offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
+    sold_order_message = is_sold_order_message(text)
+    if sold_order_message:
+        parsed_watches = enrich_sold_order_watches(parsed_watches)
+        offer_watches, import_classification = [], "request_intent"
+    else:
+        offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
     insufficient_evidence_watches: list[dict[str, Any]] = []
     if import_classification is None and offer_watches:
         offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
@@ -742,6 +753,9 @@ def ingest_message(
         offer_watches,
         classification=import_classification,
         bulk_mode=bulk_mode,
+        sold_order_message=sold_order_message,
+        sold_order_needs_review=sold_order_message
+        and not sold_order_has_actionable_identity(parsed_watches),
     )
     summary["status_reason"] = status_reason
     summary["parsed_watches"] = list(parsed_watches)
@@ -750,6 +764,11 @@ def ingest_message(
         summary["message_type"] = "request"
     if import_classification:
         summary["import_classification"] = import_classification
+    if sold_order_message:
+        summary["request_intent_kind"] = "sold_order"
+        summary["request_urgency"] = "high"
+        if not sold_order_has_actionable_identity(parsed_watches):
+            summary["request_intent_needs_review"] = True
     if insufficient_evidence_watches:
         summary["insufficient_evidence_watches"] = len(insufficient_evidence_watches)
         summary["insufficient_evidence_details"] = [
@@ -1174,11 +1193,23 @@ def _import_status(
     *,
     classification: str | None = None,
     bulk_mode: bool = False,
+    sold_order_message: bool = False,
+    sold_order_needs_review: bool = False,
 ) -> tuple[str, str]:
     if parse_status == "failed":
         return "error", "Technical failure during parsing."
 
     if classification == "request_intent":
+        if sold_order_message and sold_order_needs_review:
+            return (
+                "request_intent",
+                "Sold order WTB needs review — missing reference or brand details.",
+            )
+        if sold_order_message:
+            return (
+                "request_intent",
+                "Sold order detected. Dealer urgently needs to source this watch.",
+            )
         return "request_intent", "Buyer request detected. Offer was not created."
 
     if classification == "noise":

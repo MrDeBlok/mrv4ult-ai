@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from permissions import is_admin
+from permissions import is_active_user, is_admin, is_trader
 from contact_classification import (
     CONTACT_TYPE_CLIENT,
     CONTACT_TYPE_DEALER,
@@ -19,6 +19,18 @@ Record = dict[str, Any]
 PRIVATE_IMPORT_STATUSES = frozenset(
     {"noise", "request_intent", "no_watch_detected", "insufficient_evidence"}
 )
+
+
+def can_manage_request(user: Record | None, request: Record) -> bool:
+    """Return whether the user may edit or delete a client request."""
+    if not is_active_user(user):
+        return False
+    if is_admin(user):
+        return True
+    owner_id = request.get("created_by_user_id")
+    if not owner_id:
+        return is_trader(user)
+    return str(owner_id) == str(user.get("id"))
 
 
 def user_columns_supported() -> bool:

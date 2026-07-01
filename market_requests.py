@@ -58,6 +58,24 @@ def _primary_watch(import_log: Record) -> Record:
     return {}
 
 
+def market_request_intent_meta(import_log: Record) -> Record:
+    """Return sold-order / urgency badges for a market request import."""
+    summary = import_log.get("summary") or {}
+    badges: list[Record] = []
+    if summary.get("request_intent_kind") == "sold_order":
+        badges.append({"label": "Sold order", "class": "warning"})
+    if summary.get("request_urgency") == "high":
+        badges.append({"label": "Urgent", "class": "danger"})
+    if summary.get("request_intent_needs_review"):
+        badges.append({"label": "WTB Needs Review", "class": "secondary"})
+    return {
+        "intent_kind": summary.get("request_intent_kind"),
+        "urgency": summary.get("request_urgency"),
+        "needs_review": bool(summary.get("request_intent_needs_review")),
+        "badges": badges,
+    }
+
+
 def _watch_nickname(watch: Record) -> str | None:
     nickname = watch.get("nickname")
     if nickname:
@@ -144,6 +162,7 @@ def build_market_request_row(
     watch = _primary_watch(import_log)
     contact = resolve_market_request_contact(import_log)
     import_id = str(import_log["id"])
+    intent_meta = market_request_intent_meta(import_log)
     return {
         "id": import_id,
         "detail_url": f"/market-requests/{import_id}",
@@ -159,6 +178,11 @@ def build_market_request_row(
         "nickname": _display_value(_watch_nickname(watch)),
         "budget": _watch_budget(watch),
         "message_preview": message_preview(message.get("raw_text") if message else None),
+        "activity_url": f"/activity/{import_id}",
+        "intent_kind": intent_meta["intent_kind"],
+        "urgency": intent_meta["urgency"],
+        "needs_review": intent_meta["needs_review"],
+        "badges": intent_meta["badges"],
         "_dedupe_key": market_request_dedupe_key(import_log, message),
         "groups_seen_count": 1,
         "groups_seen_label": "",
@@ -320,6 +344,10 @@ def build_market_request_detail(
         "message_preview": row["message_preview"],
         "raw_message": raw_message or "N/A",
         "activity_url": f"/activity/{import_log['id']}",
+        "intent_kind": row.get("intent_kind"),
+        "urgency": row.get("urgency"),
+        "needs_review": row.get("needs_review"),
+        "badges": row.get("badges") or [],
         "groups_seen_count": len(groups),
         "groups_seen_label": (
             f"Seen in {len(groups)} groups" if len(groups) > 1 else ""

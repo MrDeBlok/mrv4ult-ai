@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import app, build_request_row, build_request_rows
 from database import combine_request_match_records
+from tests.conftest import ADMIN_USER
 
 
 class TestCombineRequestMatchRecords:
@@ -208,4 +209,5 @@ class TestRequestsPage:
         response = client.get("/requests")
 
         assert response.status_code == 200
-        mock_build_request_rows.assert_called_once_with(mock_list_requests.return_value)
+        mock_build_request_rows.assert_called_once()
+        mock_build_request_rows.assert_called_with(mock_list_requests.return_value, user=ADMIN_USER)
