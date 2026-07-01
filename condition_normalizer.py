@@ -89,6 +89,44 @@ def normalize_condition_value(value: str | None) -> str | None:
     return normalized
 
 
+REQUEST_CONDITION_ANY_LABEL = "Any / Unknown"
+
+REQUEST_CONDITION_FORM_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("", REQUEST_CONDITION_ANY_LABEL),
+    (NEW_CONDITION, NEW_CONDITION),
+    (PRE_OWNED_CONDITION, PRE_OWNED_CONDITION),
+)
+
+
+def request_condition_form_value(value: str | None) -> str:
+    """Map stored request condition to a form select value."""
+    normalized = normalize_condition_value(value)
+    if normalized in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return normalized
+    return ""
+
+
+def parse_request_condition_form(value: str | None) -> str | None:
+    """Parse a client request condition form value for storage."""
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    if lowered in {"any", "unknown", "any / unknown"}:
+        return None
+    return normalize_condition_value(cleaned)
+
+
+def request_condition_display(value: str | None) -> str:
+    """Format stored request condition for cards and detail views."""
+    normalized = normalize_condition_value(value)
+    if normalized in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return normalized
+    return REQUEST_CONDITION_ANY_LABEL
+
+
 def parse_condition_filter(value: str | None) -> str | None:
     """Parse a search condition filter into a normalized wear condition."""
     if value is None:

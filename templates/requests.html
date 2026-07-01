@@ -96,6 +96,14 @@
                 <input type="text" class="form-control" id="dial" name="dial" placeholder="Blue">
             </div>
             <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="condition">Condition</label>
+                <select class="form-select" id="condition" name="condition">
+                    {% for value, label in request_condition_options %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
                 <label class="form-label fw-semibold" for="min-year">Min year</label>
                 <input type="number" class="form-control" id="min-year" name="min_year" min="1900" max="2100">
             </div>
@@ -178,6 +186,7 @@
             <dt class="col-sm-3 col-md-2">Model</dt><dd class="col-sm-9 col-md-4">{{ item.model }}</dd>
             <dt class="col-sm-3 col-md-2">Alias</dt><dd class="col-sm-9 col-md-4">{{ item.alias }}</dd>
             <dt class="col-sm-3 col-md-2">Dial</dt><dd class="col-sm-9 col-md-4">{{ item.dial }}</dd>
+            <dt class="col-sm-3 col-md-2">Condition</dt><dd class="col-sm-9 col-md-4">{{ item.condition }}</dd>
             <dt class="col-sm-3 col-md-2">Year range</dt><dd class="col-sm-9 col-md-4">{{ item.year_range }}</dd>
             <dt class="col-sm-3 col-md-2">Max price</dt><dd class="col-sm-9 col-md-4">{{ item.max_price }}</dd>
         </dl>

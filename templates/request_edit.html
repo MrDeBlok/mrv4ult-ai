@@ -43,6 +43,14 @@
                 <input type="text" class="form-control" id="dial" name="dial" value="{{ form.dial }}">
             </div>
             <div class="col-12 col-md-4">
+                <label class="form-label fw-semibold" for="condition">Condition</label>
+                <select class="form-select" id="condition" name="condition">
+                    {% for value, label in request_condition_options %}
+                    <option value="{{ value }}" {% if form.condition == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
                 <label class="form-label fw-semibold" for="min-year">Min year</label>
                 <input type="number" class="form-control" id="min-year" name="min_year" min="1900" max="2100" value="{{ form.min_year }}">
             </div>

@@ -20,9 +20,13 @@ from timezone_utils import format_display_timestamp
 from condition_normalizer import (
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
+    REQUEST_CONDITION_FORM_OPTIONS,
     deal_condition_label,
     display_condition,
     normalized_wear_condition_for_comparison,
+    parse_request_condition_form,
+    request_condition_display,
+    request_condition_form_value,
 )
 from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
@@ -273,6 +277,7 @@ templates.env.globals["visible_nav_groups"] = visible_nav_groups
 templates.env.globals["nav_current_path"] = nav_current_path
 templates.env.globals["nav_group_active"] = nav_group_active
 templates.env.globals["nav_item_active"] = nav_item_active
+templates.env.globals["request_condition_options"] = REQUEST_CONDITION_FORM_OPTIONS
 
 
 def _forbidden_response(detail: str) -> JSONResponse:
@@ -1003,7 +1008,7 @@ def build_request_row(
         "model": request.get("model") or "—",
         "alias": request.get("alias") or "—",
         "dial": request.get("dial") or "—",
-        "condition": display_condition(request.get("condition")) if request.get("condition") else "—",
+        "condition": request_condition_display(request.get("condition")),
         "year_range": _format_year_range(request.get("min_year"), request.get("max_year")),
         "max_price": _format_request_budget(request.get("max_price"), request.get("currency")),
         "notes": request.get("notes") or "",
@@ -1049,6 +1054,7 @@ def build_request_edit_form(request: dict[str, Any]) -> dict[str, Any]:
         "model": request.get("model") or "",
         "alias": request.get("alias") or "",
         "dial": request.get("dial") or "",
+        "condition": request_condition_form_value(request.get("condition")),
         "min_year": request.get("min_year") or "",
         "max_year": request.get("max_year") or "",
         "max_price": request.get("max_price") or "",
@@ -1606,6 +1612,7 @@ async def requests_create(
     model: str = Form(""),
     alias: str = Form(""),
     dial: str = Form(""),
+    condition: str = Form(""),
     min_year: str = Form(""),
     max_year: str = Form(""),
     max_price: str = Form(""),
@@ -1623,6 +1630,7 @@ async def requests_create(
         model=model or None,
         alias=alias or None,
         dial=dial or None,
+        condition=parse_request_condition_form(condition),
         min_year=_parse_optional_int(min_year),
         max_year=_parse_optional_int(max_year),
         max_price=_parse_optional_int(max_price),
@@ -1655,6 +1663,7 @@ async def request_edit_submit(
     model: str = Form(""),
     alias: str = Form(""),
     dial: str = Form(""),
+    condition: str = Form(""),
     min_year: str = Form(""),
     max_year: str = Form(""),
     max_price: str = Form(""),
@@ -1677,6 +1686,7 @@ async def request_edit_submit(
                     "model": model,
                     "alias": alias,
                     "dial": dial,
+                    "condition": condition,
                     "min_year": min_year,
                     "max_year": max_year,
                     "max_price": max_price,
@@ -1705,6 +1715,7 @@ async def request_edit_submit(
                         "model": model or None,
                         "alias": alias or None,
                         "dial": dial or None,
+                        "condition": parse_request_condition_form(condition),
                         "min_year": _parse_optional_int(min_year),
                         "max_year": _parse_optional_int(max_year),
                         "max_price": _parse_optional_int(max_price),
@@ -1726,6 +1737,7 @@ async def request_edit_submit(
         model=model or None,
         alias=alias or None,
         dial=dial or None,
+        condition=parse_request_condition_form(condition),
         min_year=_parse_optional_int(min_year),
         max_year=_parse_optional_int(max_year),
         max_price=_parse_optional_int(max_price),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from condition_normalizer import display_condition
+from condition_normalizer import display_condition, request_condition_display
 from contact_classification import REDACTED_SENDER_LABEL
 from dashboard_data import (
     MATCH_STRENGTH_BADGE_CLASSES,
@@ -135,9 +135,7 @@ def build_match_detail(
             "model": request.get("model") or "—",
             "alias": request.get("alias") or "—",
             "dial": request.get("dial") or "—",
-            "condition": display_condition(request.get("condition"))
-            if request.get("condition")
-            else "—",
+            "condition": request_condition_display(request.get("condition")),
             "year_range": _format_year_range(request.get("min_year"), request.get("max_year")),
             "budget": _format_request_budget(request.get("max_price"), request.get("currency")),
             "request_date": format_timestamp(request.get("created_at")),
