@@ -115,37 +115,53 @@
     <div class="col-12 col-xxl-7">
         <section class="card shadow-sm h-100">
             <div class="card-header bg-white py-3">
-                <h2 class="h5 mb-0">Top opportunities</h2>
+                <h2 class="h5 mb-0">Today's Best Deals</h2>
             </div>
             <div class="card-body p-0">
-                {% if desk.top_opportunities %}
+                {% if desk.todays_best_deals %}
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0 trading-desk-table">
                         <thead class="table-light">
                             <tr>
-                                <th scope="col">Score</th>
-                                <th scope="col">Watch</th>
+                                <th scope="col">Brand</th>
+                                <th scope="col">Reference</th>
+                                <th scope="col">Condition</th>
                                 <th scope="col">Dealer</th>
-                                <th scope="col">Profit</th>
+                                <th scope="col">Offer price</th>
+                                <th scope="col">Market price</th>
+                                <th scope="col">Potential profit</th>
                                 <th scope="col">Recommendation</th>
+                                <th scope="col">Confidence</th>
                                 <th scope="col"></th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for row in desk.top_opportunities %}
+                            {% for row in desk.todays_best_deals %}
                             <tr>
-                                <td>
-                                    <span class="badge text-bg-{{ row.score_badge_class }}">{{ row.score }}</span>
-                                    <span class="text-muted small d-block">{{ row.score_label }}</span>
-                                </td>
-                                <td>{{ row.watch_label }}</td>
+                                <td>{{ row.brand }}</td>
+                                <td>{{ row.reference }}</td>
+                                <td>{{ row.condition }}</td>
                                 <td>{{ row.dealer }}</td>
-                                <td>{{ row.potential_profit }}</td>
+                                <td>{{ row.offer_price }}</td>
+                                <td>{{ row.market_price }}</td>
+                                <td>
+                                    {% if row.show_potential_profit %}
+                                    {{ row.potential_profit }}
+                                    {% else %}
+                                    —
+                                    {% endif %}
+                                </td>
                                 <td>
                                     <span class="badge text-bg-{{ row.recommendation_badge_class }}">{{ row.recommendation }}</span>
                                 </td>
-                                <td class="text-end">
-                                    <a href="{{ row.detail_url }}" class="btn btn-sm btn-outline-primary">Open</a>
+                                <td>{{ row.confidence }}</td>
+                                <td class="text-end text-nowrap">
+                                    {% if row.deal_url %}
+                                    <a href="{{ row.deal_url }}" class="btn btn-sm btn-outline-primary">Open Deal</a>
+                                    {% endif %}
+                                    {% if row.message_dealer_url %}
+                                    <a href="{{ row.message_dealer_url }}" class="btn btn-sm btn-outline-success" target="_blank" rel="noopener noreferrer">Message</a>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -153,7 +169,10 @@
                     </table>
                 </div>
                 {% else %}
-                <p class="text-muted mb-0 p-3 p-md-4">No high opportunities yet.</p>
+                <div class="p-3 p-md-4">
+                    <p class="text-muted mb-2">No condition-safe deals found yet.</p>
+                    <p class="text-muted small mb-0">Deals appear here when an active offer has a known condition and matching same-condition market data.</p>
+                </div>
                 {% endif %}
             </div>
         </section>

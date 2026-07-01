@@ -53,6 +53,7 @@ from permissions import can_access_admin_tools, can_view_page, is_viewer
 from request_profit import attach_profit_to_matches, offer_price_usd
 from search import _nested_record
 from timezone_utils import DISPLAY_TIMEZONE, ensure_utc_datetime, parse_utc_timestamp
+from todays_best_deals import load_dashboard_todays_best_deals
 from user_visibility import can_view_import, filter_imports_for_user
 
 Record = dict[str, Any]
@@ -719,12 +720,12 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
     _log_dashboard_section("matched_requests", started)
 
     started = time.perf_counter()
-    top_opportunities, high_opportunity_count = load_dashboard_top_opportunities(
+    business_recent = attach_import_log_summaries(business_recent)
+    todays_best_deals, high_opportunity_count = load_dashboard_todays_best_deals(
         user,
-        market_request_logs,
-        now=now,
+        business_recent,
     )
-    _log_dashboard_section("top_opportunities", started)
+    _log_dashboard_section("todays_best_deals", started)
 
     started = time.perf_counter()
     ai_items: list[Record] = []
@@ -761,7 +762,7 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
         "kpis": kpis,
         "quick_actions": quick_actions,
         "matched_requests": matched_requests,
-        "top_opportunities": top_opportunities,
+        "todays_best_deals": todays_best_deals,
         "ai_needs_help": ai_items,
         "live_market": live_market,
         "show_ai_needs_help": can_access_admin_tools(user),

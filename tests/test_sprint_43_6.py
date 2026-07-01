@@ -37,7 +37,7 @@ class TestDashboardTargetedQueries:
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
     @patch("dashboard_data.load_ai_needs_help_items", return_value=[])
-    @patch("dashboard_data.load_dashboard_top_opportunities", return_value=([], 0))
+    @patch("dashboard_data.load_dashboard_todays_best_deals", return_value=([], 0))
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
@@ -77,8 +77,9 @@ class TestDashboardTargetedQueries:
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows")
     @patch("dashboard_data.load_ai_needs_help_items", return_value=[])
-    @patch("dashboard_data.load_dashboard_top_opportunities", return_value=([], 0))
+    @patch("dashboard_data.load_dashboard_todays_best_deals", return_value=([], 0))
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
+    @patch("dashboard_data.attach_import_log_summaries", side_effect=lambda logs: logs)
     @patch("dashboard_data.filter_business_import_logs", side_effect=lambda logs, _lookup: logs)
     @patch("dashboard_data.filter_imports_for_user", side_effect=lambda logs, _user: logs)
     @patch("dashboard_data.filter_discarded_import_logs", side_effect=lambda logs: logs)
@@ -101,6 +102,7 @@ class TestDashboardTargetedQueries:
         _mock_discard: MagicMock,
         _mock_visibility: MagicMock,
         _mock_business: MagicMock,
+        _mock_attach: MagicMock,
         _mock_parser_counts: MagicMock,
         _mock_top_opportunities: MagicMock,
         _mock_ai: MagicMock,
@@ -125,7 +127,7 @@ class TestDashboardTargetedQueries:
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
     @patch("dashboard_data.load_ai_needs_help_items", return_value=[])
-    @patch("dashboard_data.load_dashboard_top_opportunities", return_value=([], 0))
+    @patch("dashboard_data.load_dashboard_todays_best_deals", return_value=([], 0))
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
@@ -155,7 +157,7 @@ class TestDashboardTargetedQueries:
         logged_sections = [call.args[1] for call in mock_logger.info.call_args_list]
         assert "kpi_cards" in logged_sections
         assert "matched_requests" in logged_sections
-        assert "top_opportunities" in logged_sections
+        assert "todays_best_deals" in logged_sections
         assert "ai_needs_help" in logged_sections
         assert "live_market" in logged_sections
 
@@ -175,7 +177,7 @@ class TestDashboardRouteBehavior:
             ],
             "quick_actions": [],
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -194,7 +196,7 @@ class TestDashboardRouteBehavior:
             "kpis": [],
             "quick_actions": [],
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [
                 {
                     "reason": f"Reason {index}",
@@ -223,7 +225,7 @@ class TestDashboardRouteBehavior:
             "kpis": [],
             "quick_actions": [],
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [
                 {
@@ -258,7 +260,7 @@ class TestDashboardRouteBehavior:
             "quick_actions": [
                 {"key": "search", "label": "Search", "url": "/", "style": "primary", "visible": True},
             ],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": False,
@@ -305,7 +307,7 @@ class TestDashboardMatchedRequests:
                     "request_url": "/requests",
                 }
             ],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -383,7 +385,7 @@ class TestDashboardMatchedRequests:
             "kpis": [],
             "quick_actions": [],
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -422,7 +424,7 @@ class TestDashboardMatchedRequests:
                     "request_url": None,
                 }
             ],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": False,

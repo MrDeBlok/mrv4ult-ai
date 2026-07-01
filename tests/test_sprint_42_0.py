@@ -36,7 +36,7 @@ def _desk_payload(**overrides) -> dict:
             {"key": "import", "label": "Import", "url": "/import", "style": "outline-dark", "visible": True},
         ],
         "matched_requests": [],
-        "top_opportunities": [],
+        "todays_best_deals": [],
         "ai_needs_help": [
             {
                 "reason": "Important fields are missing — watch 1: missing price",
@@ -138,14 +138,14 @@ class TestTradingDeskPage:
         assert 'href="/activity/log-1"' in response.text
 
     @patch("app.load_trading_desk")
-    def test_top_opportunities_empty_state_renders(self, mock_load_desk: MagicMock) -> None:
-        mock_load_desk.return_value = _desk_payload(top_opportunities=[])
+    def test_todays_best_deals_empty_state_renders(self, mock_load_desk: MagicMock) -> None:
+        mock_load_desk.return_value = _desk_payload(todays_best_deals=[])
 
         client = TestClient(app)
         response = client.get("/dashboard")
 
-        assert "Top opportunities" in response.text
-        assert "No high opportunities yet." in response.text
+        assert "Today's Best Deals" in response.text
+        assert "No condition-safe deals found yet." in response.text
 
     @patch("app.load_trading_desk")
     def test_live_market_section_renders(self, mock_load_desk: MagicMock) -> None:
@@ -220,7 +220,7 @@ class TestTradingDeskPage:
         assert "kpis" in desk
         assert len(desk["kpis"]) == 5
         assert desk["matched_requests"] == []
-        assert desk["top_opportunities"] == []
+        assert desk["todays_best_deals"] == []
         assert desk["live_market"] == []
 
         client = TestClient(app)
