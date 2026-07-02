@@ -33,7 +33,7 @@
     {% for card in desk.kpis %}
     <div class="col-12 col-md-6 col-xl">
         {% if card.url %}
-        <a href="{{ card.url }}" class="text-decoration-none text-reset dashboard-card-link">
+        <a href="{{ card.url }}" class="text-decoration-none text-reset dashboard-card-link" data-kpi-key="{{ card.key }}">
             <div class="card shadow-sm h-100 request-summary-card dashboard-summary-card trading-desk-kpi-card">
                 <div class="card-body">
                     <div class="request-summary-label">{{ card.title }}</div>
@@ -43,7 +43,7 @@
             </div>
         </a>
         {% else %}
-        <div class="card shadow-sm h-100 request-summary-card dashboard-summary-card trading-desk-kpi-card">
+        <div class="card shadow-sm h-100 request-summary-card dashboard-summary-card trading-desk-kpi-card" data-kpi-key="{{ card.key }}">
             <div class="card-body">
                 <div class="request-summary-label">{{ card.title }}</div>
                 <div class="request-summary-value">{{ card.count }}</div>
@@ -113,7 +113,7 @@
 
 <div class="row g-4">
     <div class="col-12 col-xxl-7">
-        <section class="card shadow-sm h-100">
+        <section class="card shadow-sm h-100" id="todays-best-deals">
             <div class="card-header bg-white py-3">
                 <h2 class="h5 mb-0">Today's Best Deals</h2>
             </div>

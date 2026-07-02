@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from brand_registry import invalidate_brand_registry_cache
-from condition_normalizer import normalize_watch_condition
+from condition_normalizer import normalize_watch_condition, propagate_message_batch_condition, sync_summary_row_conditions
 from notification_quick_fix import build_quick_fix_prefill, teach_watch_mapping_from_quick_fix
 from parser_review import _parsed_watches, detect_import_issues
 
@@ -167,6 +167,7 @@ def reprocess_import_log(
         normalize_watch_condition(enrich_parsed_watch(watch))
         for watch in parsed["watches"]
     ]
+    parsed_watches = propagate_message_batch_condition(text, parsed_watches)
     sold_order_message = is_sold_order_message(text)
     insufficient_evidence_watches: list[Record] = []
     if sold_order_message:
@@ -199,7 +200,10 @@ def reprocess_import_log(
         "group": old_summary.get("group") or import_log.get("group_name"),
         "dealer_whatsapp": old_summary.get("dealer_whatsapp") or import_log.get("dealer_whatsapp"),
         "dealer_alias": old_summary.get("dealer_alias") or import_log.get("dealer_alias"),
-        "rows": list(old_summary.get("rows") or []),
+        "rows": sync_summary_row_conditions(
+            list(old_summary.get("rows") or []),
+            status_watches,
+        ),
         "bulk_import": bulk_mode,
         "parsed_watches": list(parsed_watches),
         "offer_watches": list(offer_watches),

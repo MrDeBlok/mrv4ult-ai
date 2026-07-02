@@ -203,7 +203,7 @@ class TestPerformanceReportRoute:
         mock_load_desk.return_value = {
             "kpis": [],
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -227,7 +227,7 @@ class TestPerformanceReportRoute:
         mock_load_desk.return_value = {
             "kpis": [],
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -288,7 +288,7 @@ class TestBuildPerformanceReport:
         mock_load_desk.return_value = {
             "kpis": [],
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -430,7 +430,7 @@ class TestProfilerDatabaseInstrumentation:
         return {
             "kpis": [],
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -497,6 +497,7 @@ class TestProfilerDatabaseInstrumentation:
             result.database_ms + result.python_ms + result.render_ms - 1.0
         )
 
+    @patch("app._parser_accuracy_import_logs", return_value=[])
     @patch("database.get_messages_by_ids")
     @patch("app.watch_knowledge_supported", return_value=False)
     @patch("app.list_canonical_brands", return_value=[])
@@ -507,6 +508,7 @@ class TestProfilerDatabaseInstrumentation:
         _mock_brands: MagicMock,
         _mock_knowledge: MagicMock,
         mock_get_messages: MagicMock,
+        _mock_accuracy_logs: MagicMock,
     ) -> None:
         import performance_profiler as profiler_module
 

@@ -10,6 +10,20 @@ Record = dict[str, Any]
 NEW_CONDITION = "New"
 PRE_OWNED_CONDITION = "Pre-Owned"
 
+MESSAGE_ALL_BATCH_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\ball\s+new\b", re.I), "All new"),
+    (re.compile(r"\ball\s+unworn\b", re.I), "All unworn"),
+    (re.compile(r"\ball\s+(?:pre[-\s]?owned|preowned)\b", re.I), "All pre-owned"),
+    (re.compile(r"\ball\s+used\b", re.I), "All used"),
+    (re.compile(r"\ball\s+worn\b", re.I), "All worn"),
+    (re.compile(r"\ball\s+second\s+hand\b", re.I), "All second hand"),
+]
+
+MESSAGE_NEW_YEAR_BATCH_PATTERN = re.compile(
+    r"\bnew\s+(?:\d{4}\s*/\s*)?\d{4}(?:\s*/\s*\d{4})?\b",
+    re.I,
+)
+
 NEW_ALIASES: dict[str, str] = {
     "brand new": NEW_CONDITION,
     "bn": NEW_CONDITION,
@@ -185,6 +199,125 @@ def resolve_offer_wear_condition(*values: str | None) -> str | None:
         if normalized is not None:
             return normalized
     return None
+
+
+def watch_has_explicit_wear_condition(watch: Record) -> bool:
+    """Return True when a parsed watch already has a resolved wear condition."""
+    return resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")) is not None
+
+
+def _normalize_batch_condition_text(raw: str) -> tuple[str | None, str | None]:
+    normalized, raw_condition = normalize_wear_condition(raw)
+    if normalized:
+        return normalized, raw_condition or raw
+
+    without_all = re.sub(r"^all\s+", "", raw.strip(), flags=re.I)
+    if without_all != raw.strip():
+        normalized, raw_condition = normalize_wear_condition(without_all)
+        if normalized:
+            return normalized, raw or raw_condition
+
+    return None, None
+
+
+def _clean_batch_condition_line(line: str) -> str:
+    try:
+        from dealer_list_splitter import clean_dealer_list_line
+    except ImportError:  # pragma: no cover
+        return line.strip()
+    return clean_dealer_list_line(line)
+
+
+def _line_is_watch_offer_line(line: str) -> bool:
+    """Return True when a line looks like an individual watch offer row."""
+    try:
+        from dealer_list_splitter import clean_dealer_list_line, is_dealer_list_offer_line
+        from watch_parser import _extract_price, _extract_reference
+    except ImportError:  # pragma: no cover
+        return False
+
+    cleaned = clean_dealer_list_line(line)
+    if not cleaned:
+        return False
+    if is_dealer_list_offer_line(cleaned):
+        return True
+    return bool(_extract_reference(cleaned)[0] and _extract_price(cleaned)[0] is not None)
+
+
+def detect_message_batch_condition(message: str) -> tuple[str | None, str | None]:
+    """Detect a shared wear condition declared once for a multi-watch message."""
+    text = message.strip()
+    if not text:
+        return None, None
+
+    for pattern, raw_label in MESSAGE_ALL_BATCH_PATTERNS:
+        if pattern.search(text):
+            normalized, raw = _normalize_batch_condition_text(raw_label)
+            if normalized:
+                return normalized, raw
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or _line_is_watch_offer_line(line):
+            continue
+        cleaned = _clean_batch_condition_line(line)
+        if not cleaned:
+            continue
+
+        year_match = MESSAGE_NEW_YEAR_BATCH_PATTERN.search(cleaned)
+        if year_match:
+            raw = year_match.group(0).strip()
+            normalized, _ = normalize_wear_condition("New")
+            if normalized:
+                return normalized, raw
+
+        normalized, raw = _normalize_batch_condition_text(cleaned)
+        if normalized:
+            return normalized, raw
+
+    return None, None
+
+
+def propagate_message_batch_condition(message: str, watches: list[Record]) -> list[Record]:
+    """Apply a message-level wear condition to watches missing their own condition."""
+    batch_condition, batch_raw = detect_message_batch_condition(message)
+    if batch_condition is None or not watches:
+        return watches
+
+    updated: list[Record] = []
+    for watch in watches:
+        row = dict(watch)
+        if watch_has_explicit_wear_condition(row):
+            updated.append(row)
+            continue
+        row["condition"] = batch_condition
+        if batch_raw and batch_raw != batch_condition:
+            row["raw_condition"] = batch_raw
+        updated.append(row)
+    return updated
+
+
+def sync_summary_row_conditions(rows: list[Record], watches: list[Record]) -> list[Record]:
+    """Copy propagated watch conditions onto aligned summary rows when rows are still unknown."""
+    synced: list[Record] = []
+    for index, row in enumerate(rows):
+        updated = dict(row)
+        if index >= len(watches):
+            synced.append(updated)
+            continue
+        if resolve_offer_wear_condition(updated.get("condition"), updated.get("raw_condition")):
+            synced.append(updated)
+            continue
+        watch = watches[index]
+        watch_condition = resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition"))
+        if watch_condition is None:
+            synced.append(updated)
+            continue
+        updated["condition"] = watch.get("condition")
+        if watch.get("raw_condition"):
+            updated["raw_condition"] = watch.get("raw_condition")
+        synced.append(updated)
+    return synced
 
 
 def deal_condition_label(value: str | None) -> str:

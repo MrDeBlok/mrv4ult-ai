@@ -25,7 +25,7 @@ def _desk_payload(**overrides) -> dict:
     payload = {
         "kpis": build_trading_desk_kpis(
             new_offers_today=4,
-            high_opportunities=0,
+            todays_best_deals=0,
             active_market_requests=2,
             active_client_requests=1,
             ai_needs_help=1,
@@ -82,7 +82,7 @@ class TestTradingDeskData:
     def test_kpi_cards_include_expected_links(self) -> None:
         cards = build_trading_desk_kpis(
             new_offers_today=1,
-            high_opportunities=2,
+            todays_best_deals=2,
             active_market_requests=3,
             active_client_requests=4,
             ai_needs_help=5,
@@ -91,7 +91,7 @@ class TestTradingDeskData:
 
         assert [card["title"] for card in cards] == [
             "New offers today",
-            "High opportunities",
+            "Today's Best Deals",
             "Active market requests",
             "Active client requests",
             "AI needs help",
@@ -122,7 +122,7 @@ class TestTradingDeskPage:
 
         assert response.status_code == 200
         assert "New offers today" in response.text
-        assert "High opportunities" in response.text
+        assert "Today's Best Deals" in response.text
         assert "AI needs help" in response.text
         assert ">4<" in response.text
 

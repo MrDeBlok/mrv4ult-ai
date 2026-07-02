@@ -15,7 +15,7 @@ from tests.conftest import ADMIN_USER, TRADER_ONE
 
 TRADING_DESK_KPI_TITLES = (
     "New offers today",
-    "High opportunities",
+    "Today's Best Deals",
     "Active market requests",
     "Active client requests",
     "AI needs help",
@@ -80,7 +80,7 @@ class TestTradingDeskRequestSplit:
     def test_build_trading_desk_kpis_include_split_request_cards(self) -> None:
         cards = build_trading_desk_kpis(
             new_offers_today=1,
-            high_opportunities=2,
+            todays_best_deals=2,
             active_market_requests=3,
             active_client_requests=4,
             ai_needs_help=5,
@@ -165,7 +165,7 @@ class TestTradingDeskUiVisibility:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
                 new_offers_today=1,
-                high_opportunities=0,
+                todays_best_deals=0,
                 active_market_requests=2,
                 active_client_requests=3,
                 ai_needs_help=4,
@@ -173,7 +173,7 @@ class TestTradingDeskUiVisibility:
             ),
             "quick_actions": build_quick_actions(ADMIN_USER),
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [{"reason": "missing price", "message_preview": "Rolex", "group_name": "HK", "dealer": "A", "review_url": "/activity/log-1", "review_label": "Open"}],
             "live_market": [],
             "show_ai_needs_help": True,
@@ -197,7 +197,7 @@ class TestTradingDeskUiVisibility:
                 card
                 for card in build_trading_desk_kpis(
                     new_offers_today=1,
-                    high_opportunities=0,
+                    todays_best_deals=0,
                     active_market_requests=2,
                     active_client_requests=3,
                     ai_needs_help=4,
@@ -207,7 +207,7 @@ class TestTradingDeskUiVisibility:
             ],
             "quick_actions": build_quick_actions(TRADER_ONE),
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_ai_needs_help": False,
@@ -248,7 +248,7 @@ class TestTradingDeskUiVisibility:
                     "confidence_class": "success",
                 }
             ],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_ai_needs_help": True,

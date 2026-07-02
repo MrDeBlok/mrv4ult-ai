@@ -71,7 +71,7 @@ class TestDashboardSingleFetch:
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
     @patch("dashboard_data.load_ai_needs_help_items", return_value=[])
-    @patch("dashboard_data.load_dashboard_top_opportunities", return_value=([], 0))
+    @patch("dashboard_data.load_dashboard_todays_best_deals", return_value=([], 0))
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
@@ -88,7 +88,7 @@ class TestDashboardSingleFetch:
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
         _mock_parser_counts: MagicMock,
-        _mock_top_opportunities: MagicMock,
+        _mock_best_deals: MagicMock,
         _mock_ai: MagicMock,
         _mock_live_market: MagicMock,
         _mock_actions: MagicMock,
@@ -234,7 +234,7 @@ class TestDashboardTimingLogs:
     @patch("dashboard_data.build_quick_actions", return_value=[])
     @patch("dashboard_data.load_live_market_rows", return_value=[])
     @patch("dashboard_data.load_ai_needs_help_items", return_value=[])
-    @patch("dashboard_data.load_dashboard_top_opportunities", return_value=([], 0))
+    @patch("dashboard_data.load_dashboard_todays_best_deals", return_value=([], 0))
     @patch("dashboard_data.parser_review_counts", return_value={"total": 0})
     @patch("dashboard_data.list_contacts_for_import_lookup", return_value=[])
     @patch("dashboard_data.build_dealer_lookup_by_whatsapp", return_value={})
@@ -251,7 +251,7 @@ class TestDashboardTimingLogs:
         _mock_lookup: MagicMock,
         _mock_contacts: MagicMock,
         _mock_parser_counts: MagicMock,
-        _mock_top_opportunities: MagicMock,
+        _mock_best_deals: MagicMock,
         _mock_ai: MagicMock,
         _mock_live_market: MagicMock,
         _mock_actions: MagicMock,
@@ -264,6 +264,6 @@ class TestDashboardTimingLogs:
         logged_sections = [call.args[1] for call in mock_logger.info.call_args_list]
         assert "matched_requests" in logged_sections
         assert "kpi_cards" in logged_sections
-        assert "top_opportunities" in logged_sections
+        assert "todays_best_deals" in logged_sections
         assert "ai_needs_help" in logged_sections
         assert "live_market" in logged_sections

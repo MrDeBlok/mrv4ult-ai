@@ -594,13 +594,16 @@ def load_dashboard_matched_requests(
 def build_trading_desk_kpis(
     *,
     new_offers_today: int,
-    high_opportunities: int,
+    todays_best_deals: int | None = None,
     active_market_requests: int,
     active_client_requests: int,
     ai_needs_help: int,
     unread_notifications: int,
+    high_opportunities: int | None = None,
 ) -> list[Record]:
     """Build Today KPI cards for the trading desk."""
+    if todays_best_deals is None:
+        todays_best_deals = 0 if high_opportunities is None else high_opportunities
     return [
         {
             "key": "new_offers_today",
@@ -610,11 +613,11 @@ def build_trading_desk_kpis(
             "description": "Fresh dealer offers imported today.",
         },
         {
-            "key": "high_opportunities",
-            "title": "High opportunities",
-            "count": high_opportunities,
-            "url": "/market-requests",
-            "description": "Strong market request matches worth a look.",
+            "key": "todays_best_deals",
+            "title": "Today's Best Deals",
+            "count": todays_best_deals,
+            "url": "#todays-best-deals",
+            "description": "Condition-safe offers worth reviewing today.",
         },
         {
             "key": "active_market_requests",
@@ -656,7 +659,12 @@ def _visible_kpi_cards(user: Record | None, cards: list[Record]) -> list[Record]
             continue
         item = dict(card)
         item.pop("admin_only", None)
-        if item.get("url") and not can_view_page(user, str(item["url"])):
+        url = str(item.get("url") or "")
+        if url.startswith("#"):
+            visible_cards.append(item)
+            continue
+        path = url.split("#", 1)[0]
+        if path and not can_view_page(user, path):
             item["url"] = None
         visible_cards.append(item)
     return visible_cards
@@ -721,7 +729,7 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
 
     started = time.perf_counter()
     business_recent = attach_import_log_summaries(business_recent)
-    todays_best_deals, high_opportunity_count = load_dashboard_todays_best_deals(
+    todays_best_deals, _strong_count = load_dashboard_todays_best_deals(
         user,
         business_recent,
     )
@@ -748,7 +756,7 @@ def load_trading_desk(user: Record | None, *, format_timestamp, now: datetime | 
         user,
         build_trading_desk_kpis(
             new_offers_today=count_new_offers_today(business_today, now=now),
-            high_opportunities=high_opportunity_count,
+            todays_best_deals=len(todays_best_deals),
             active_market_requests=len(market_request_logs),
             active_client_requests=active_client_requests,
             ai_needs_help=parser_counts["total"],

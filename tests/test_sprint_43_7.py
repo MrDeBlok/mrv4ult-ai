@@ -154,7 +154,7 @@ class TestActivityLightRows:
             "kpis": [],
             "quick_actions": [],
             "matched_requests": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,

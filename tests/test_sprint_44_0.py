@@ -52,7 +52,7 @@ class TestNavigationGroups:
 class TestNavigationRoutes:
     @patch("app.load_trading_desk")
     def test_trader_dashboard_hides_import_link(self, mock_load_desk: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "top_opportunities": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": True}
+        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "todays_best_deals": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": True}
         monkeypatch.setattr("app.get_current_user", lambda _request: TRADER_ONE)
 
         client = TestClient(app)
@@ -74,7 +74,7 @@ class TestNavigationRoutes:
 
     @patch("app.load_trading_desk")
     def test_admin_nav_shows_admin_dropdown(self, mock_load_desk: MagicMock) -> None:
-        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "top_opportunities": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": True}
+        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "todays_best_deals": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": True}
 
         client = TestClient(app)
         response = client.get("/dashboard")
@@ -87,7 +87,7 @@ class TestNavigationRoutes:
 
     @patch("app.load_trading_desk")
     def test_viewer_nav_hides_admin_and_write_links(self, mock_load_desk: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "top_opportunities": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": False}
+        mock_load_desk.return_value = {"kpis": [], "quick_actions": [], "todays_best_deals": [], "ai_needs_help": [], "live_market": [], "matched_requests": [], "show_write_actions": False}
         monkeypatch.setattr("app.get_current_user", lambda _request: VIEWER_USER)
 
         client = TestClient(app)
@@ -124,7 +124,7 @@ class TestNavigationRoutes:
         mock_load_desk.return_value = {
             "kpis": [],
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "matched_requests": [],

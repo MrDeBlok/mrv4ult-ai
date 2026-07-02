@@ -37,6 +37,7 @@ from condition_normalizer import (
     PRE_OWNED_CONDITION,
     normalize_condition_value,
     normalize_watch_condition,
+    propagate_message_batch_condition,
 )
 from watch_knowledge import enrich_parsed_watch
 from import_classification import (
@@ -509,6 +510,7 @@ def ingest_message(
         normalize_watch_condition(enrich_parsed_watch(watch))
         for watch in parsed["watches"]
     ]
+    parsed_watches = propagate_message_batch_condition(text, parsed_watches)
     sold_order_message = is_sold_order_message(text)
     if sold_order_message:
         parsed_watches = enrich_sold_order_watches(parsed_watches)

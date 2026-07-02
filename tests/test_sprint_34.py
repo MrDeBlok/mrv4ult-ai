@@ -13,7 +13,7 @@ from tests.conftest import ADMIN_USER, TRADER_ONE
 
 TRADING_DESK_KPI_TITLES = (
     "New offers today",
-    "High opportunities",
+    "Today's Best Deals",
     "Active market requests",
     "Active client requests",
     "AI needs help",
@@ -25,7 +25,7 @@ class TestSprint34DashboardRules:
     def test_build_trading_desk_kpis_include_expected_links(self) -> None:
         cards = build_trading_desk_kpis(
             new_offers_today=2,
-            high_opportunities=1,
+            todays_best_deals=1,
             active_market_requests=3,
             active_client_requests=2,
             ai_needs_help=4,
@@ -109,14 +109,14 @@ class TestSprint34DashboardRoutes:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
                 new_offers_today=1,
-                high_opportunities=0,
+                todays_best_deals=0,
                 active_market_requests=2,
                 active_client_requests=0,
                 ai_needs_help=1,
                 unread_notifications=5,
             ),
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -140,14 +140,14 @@ class TestSprint34DashboardRoutes:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
                 new_offers_today=0,
-                high_opportunities=0,
+                todays_best_deals=0,
                 active_market_requests=1,
                 active_client_requests=0,
                 ai_needs_help=0,
                 unread_notifications=4,
             ),
             "quick_actions": [],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
@@ -168,7 +168,7 @@ class TestSprint34DashboardRoutes:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
                 new_offers_today=7,
-                high_opportunities=0,
+                todays_best_deals=0,
                 active_market_requests=8,
                 active_client_requests=0,
                 ai_needs_help=7,
@@ -178,7 +178,7 @@ class TestSprint34DashboardRoutes:
                 {"key": "parser_review", "label": "AI Workbench", "url": "/parser-review", "style": "outline-dark", "visible": True},
                 {"key": "notifications", "label": "Notifications", "url": "/notifications", "style": "outline-dark", "visible": True},
             ],
-            "top_opportunities": [],
+            "todays_best_deals": [],
             "ai_needs_help": [],
             "live_market": [],
             "show_write_actions": True,
