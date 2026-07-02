@@ -12,8 +12,11 @@ FULLSET_PATTERN = re.compile(r"\bfull\s*set\b", re.I)
 
 def clean_dealer_list_line(line: str) -> str:
     """Remove decorative emoji/checkmarks and normalize whitespace."""
+    from watch_parser import _normalize_glued_brand_prefixes
+
     cleaned = DECORATION_PATTERN.sub(" ", line)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return _normalize_glued_brand_prefixes(cleaned)
 
 
 def is_buy_side_list_message(message: str) -> bool:

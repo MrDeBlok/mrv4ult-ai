@@ -347,29 +347,41 @@ def apply_identification_to_watch(watch: Record) -> Record:
     if not result:
         return enriched
 
+    from watch_knowledge import resolve_reference_brand_identity
+
+    watch_brand = enriched.get("brand")
+    result_brand = result.get("brand")
+    known_brand, known_confident = resolve_reference_brand_identity(enriched.get("reference"))
+    if known_confident and known_brand:
+        watch_brand = known_brand
+    brands_compatible = (
+        not watch_brand or not result_brand or watch_brand == result_brand
+    )
+
     if result.get("brand") and not enriched.get("brand"):
         enriched["brand"] = result["brand"]
-    if result.get("model") and not enriched.get("model"):
-        enriched["model"] = result["model"]
-    if result.get("nickname") and not enriched.get("nickname"):
-        enriched["nickname"] = result["nickname"]
+    if brands_compatible:
+        if result.get("model") and not enriched.get("model"):
+            enriched["model"] = result["model"]
+        if result.get("nickname") and not enriched.get("nickname"):
+            enriched["nickname"] = result["nickname"]
 
-    likely_references = list(result.get("likely_references") or [])
-    if not enriched.get("reference") and len(likely_references) == 1:
-        if float(result.get("confidence") or 0) >= 0.9:
-            enriched["reference"] = likely_references[0]
+        likely_references = list(result.get("likely_references") or [])
+        if not enriched.get("reference") and len(likely_references) == 1:
+            if float(result.get("confidence") or 0) >= 0.9:
+                enriched["reference"] = likely_references[0]
 
-    enriched["watch_identification"] = {
-        "matched_key": result.get("matched_key"),
-        "brand": result.get("brand"),
-        "collection": result.get("collection"),
-        "model": result.get("model"),
-        "nickname": result.get("nickname"),
-        "likely_references": likely_references,
-        "confidence": result.get("confidence"),
-        "alternatives": result.get("alternatives"),
-        "match_type": result.get("match_type"),
-    }
+        enriched["watch_identification"] = {
+            "matched_key": result.get("matched_key"),
+            "brand": result.get("brand"),
+            "collection": result.get("collection"),
+            "model": result.get("model"),
+            "nickname": result.get("nickname"),
+            "likely_references": likely_references,
+            "confidence": result.get("confidence"),
+            "alternatives": result.get("alternatives"),
+            "match_type": result.get("match_type"),
+        }
     return enriched
 
 

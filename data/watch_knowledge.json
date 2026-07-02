@@ -40,5 +40,20 @@
     "movement": "3235",
     "production_status": "Current Production",
     "launch_year": 2020
+  },
+  "5968A": {
+    "brand": "Patek Philippe",
+    "collection": "Aquanaut",
+    "model": "Aquanaut"
+  },
+  "7010R": {
+    "brand": "Patek Philippe",
+    "collection": "Nautilus",
+    "model": "Nautilus"
+  },
+  "5500V": {
+    "brand": "Vacheron Constantin",
+    "collection": "Overseas",
+    "model": "Overseas"
   }
 }

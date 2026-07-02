@@ -72,9 +72,44 @@ def lookup_reference(reference: str | None) -> dict[str, Any] | None:
     return knowledge or None
 
 
+def resolve_reference_brand_identity(reference: str | None) -> tuple[str | None, bool]:
+    """Return the canonical brand for a reference when confidently known."""
+    if not reference or not isinstance(reference, str):
+        return None, False
+
+    knowledge = lookup_reference(reference)
+    if knowledge and knowledge.get("brand"):
+        return str(knowledge["brand"]).strip(), True
+
+    from brand_knowledge import resolve_unambiguous_reference_brand
+
+    return resolve_unambiguous_reference_brand(reference)
+
+
+def apply_reference_brand_identity(watch: dict[str, Any]) -> dict[str, Any]:
+    """Override inherited brand context when reference identity is known."""
+    enriched = dict(watch)
+    resolved_brand, resolved_confident = resolve_reference_brand_identity(enriched.get("reference"))
+    if not resolved_confident or not resolved_brand:
+        return enriched
+
+    existing_brand = enriched.get("brand")
+    if existing_brand and existing_brand != resolved_brand:
+        enriched["brand_context_conflict"] = {
+            "inherited_brand": existing_brand,
+            "resolved_brand": resolved_brand,
+        }
+
+    enriched["brand"] = resolved_brand
+    enriched["reference_high_confidence"] = True
+    return enriched
+
+
 def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     """Attach model aliases, identification, and reference knowledge to a parsed watch."""
-    enriched = apply_identification_to_watch(enrich_with_model_alias(dict(watch)))
+    enriched = apply_reference_brand_identity(
+        apply_identification_to_watch(enrich_with_model_alias(dict(watch)))
+    )
     knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:
         enriched["knowledge"] = knowledge

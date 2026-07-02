@@ -60,6 +60,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
     "Audemars Piguet": BrandKnowledge(
         brand="Audemars Piguet",
         reference_patterns=(
+            r"\bAP\s*(\d{4,5}[A-Za-z]{0,4})\b",
             r"\b(\d{5}(?!usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy)[A-Za-z]{2,4})\b",
             r"\b(\d{4}[A-Za-z])\b",
             r"\b(\d{5})\b",
@@ -232,6 +233,22 @@ def extract_reference_from_brand_knowledge(
         key=lambda item: (item[3], item[1] == brand_hint if brand_hint else True),
     )
     return reference, brand, True
+
+
+def resolve_unambiguous_reference_brand(reference: str) -> tuple[str | None, bool]:
+    """Return brand when exactly one brand pattern matches the reference token."""
+    token = normalize_reference_token(reference)
+    if not token or token.isdigit() or not re.search(r"[A-Z]", token):
+        return None, False
+
+    matching_brands = [
+        brand_name
+        for brand_name in BRAND_KNOWLEDGE
+        if reference_matches_brand_pattern(token, brand_name)
+    ]
+    if len(matching_brands) == 1:
+        return matching_brands[0], True
+    return None, False
 
 
 def invalidate_brand_knowledge_cache() -> None:

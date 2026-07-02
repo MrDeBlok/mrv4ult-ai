@@ -157,6 +157,20 @@ CURRENCY_CODE_PATTERN = r"usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
 DOTTED_WATCH_REFERENCE_PATTERN = re.compile(r"\b\d{3}\.\d{3}\b")
 
+_GLUED_BRAND_PREFIX_REPLACEMENTS = (
+    (re.compile(r"\bAP(\d{4,5}[A-Za-z]{0,4})\b", re.I), r"AP \1"),
+    (re.compile(r"\bPP(\d{4}(?:/[0-9A-Z]+)?)\b", re.I), r"PP \1"),
+    (re.compile(r"\bRLX(\d{5}[A-Za-z]{0,4})\b", re.I), r"RLX \1"),
+)
+
+
+def _normalize_glued_brand_prefixes(text: str) -> str:
+    """Split glued dealer prefixes like AP26239BC into AP 26239BC."""
+    normalized = text
+    for pattern, replacement in _GLUED_BRAND_PREFIX_REPLACEMENTS:
+        normalized = pattern.sub(replacement, normalized)
+    return normalized
+
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{3}\.\d{3})\b"), "A. Lange & Söhne"),
     (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
@@ -624,7 +638,7 @@ def _looks_like_watch_line(line: str, *, brand_hint: str | None = None) -> bool:
 
 def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict | None:
     """Parse a single watch line into a structured watch dict."""
-    text = _strip_markdown(line.strip())
+    text = _normalize_glued_brand_prefixes(_strip_markdown(line.strip()))
     if not text:
         return None
 
@@ -654,6 +668,12 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     watch["brand"] = brand
     watch["reference"] = reference
     watch["reference_high_confidence"] = from_brand_knowledge
+
+    from watch_knowledge import apply_reference_brand_identity
+
+    watch = apply_reference_brand_identity(watch)
+    brand = watch.get("brand")
+    reference = watch.get("reference")
 
     if brand == "F.P. Journe" and watch["reference"] is None:
         fpj_match = FPJOURNE_REF_PATTERN.search(text)
