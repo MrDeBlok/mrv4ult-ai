@@ -859,12 +859,7 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         if _has_display_value(merged.get(key))
     ]
 
-    title_parts = [
-        part
-        for part in (merged.get("brand"), merged.get("reference") or merged.get("model"))
-        if _has_display_value(part)
-    ]
-    title = " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
+    title = _watch_card_identity_title(row, watch, index, enriched_watch=enriched_watch)
 
     intelligence_fields: list[dict[str, str]] = []
     for key, label in (
@@ -1208,6 +1203,10 @@ def _watch_identity_matches(row: dict[str, Any], watch: dict[str, Any]) -> bool:
     watch_ref = _normalize_watch_identity_token(watch.get("reference"))
     if row_ref and watch_ref and row_ref != watch_ref:
         return False
+    if row_ref and not watch_ref:
+        return False
+    if watch_ref and not row_ref:
+        return False
 
     row_brand = _normalize_watch_identity_token(row.get("brand"))
     watch_brand = _normalize_watch_identity_token(watch.get("brand"))
@@ -1226,6 +1225,24 @@ def _watch_context_from_row(row: dict[str, Any]) -> dict[str, Any]:
     return watch
 
 
+def _merge_deal_analysis_watch_context(row: dict[str, Any], watch: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing identity fields on a resolved watch from the aligned summary row."""
+    merged = dict(watch)
+    for key in ("brand", "reference", "model", "condition", "raw_condition", "usd_price", "confidence"):
+        row_value = row.get(key)
+        watch_value = merged.get(key)
+        if key == "reference":
+            if (
+                not _has_display_value(watch_value)
+                or watch_value == "N/A"
+            ) and _has_display_value(row_value) and row_value != "N/A":
+                merged[key] = row_value
+            continue
+        if not _has_display_value(watch_value) and _has_display_value(row_value):
+            merged[key] = row_value
+    return merged
+
+
 def _resolve_deal_analysis_watch(
     row: dict[str, Any],
     offer_watches: list[dict[str, Any]],
@@ -1236,17 +1253,17 @@ def _resolve_deal_analysis_watch(
     if index < len(offer_watches):
         candidate = offer_watches[index]
         if _watch_identity_matches(row, candidate):
-            return candidate
+            return _merge_deal_analysis_watch_context(row, candidate)
 
     for candidates in (offer_watches, parsed_watches):
         for candidate in candidates:
             if _watch_identity_matches(row, candidate):
-                return candidate
+                return _merge_deal_analysis_watch_context(row, candidate)
 
     if index < len(offer_watches):
-        return offer_watches[index]
+        return _merge_deal_analysis_watch_context(row, offer_watches[index])
     if index < len(parsed_watches):
-        return parsed_watches[index]
+        return _merge_deal_analysis_watch_context(row, parsed_watches[index])
     return _watch_context_from_row(row)
 
 
@@ -1338,15 +1355,40 @@ def _deal_recommendation_confidence(
     return min(score, 100)
 
 
+def _watch_card_identity_title(
+    row: dict[str, Any],
+    watch: dict[str, Any],
+    index: int,
+    *,
+    enriched_watch: dict[str, Any] | None = None,
+) -> str:
+    """Build Brand · Reference/Model/Unknown reference for import cards."""
+    enriched = enriched_watch or (
+        watch
+        if isinstance(watch.get("model_alias"), dict)
+        else enrich_with_model_alias(dict(watch))
+    )
+    brand = _card_text(row, enriched, "brand", "brand")
+    if not _has_display_value(brand):
+        return f"Watch offer {index + 1}"
+
+    reference = _reference_card_value(row, enriched)
+    if _has_display_value(reference) and reference != "Unknown":
+        secondary = reference
+    else:
+        model = _card_text(row, enriched, "model", "model")
+        if _has_display_value(model):
+            secondary = model
+        elif _has_display_value(reference):
+            secondary = reference
+        else:
+            secondary = "Unknown reference"
+
+    return f"{brand} · {secondary}"
+
+
 def _deal_analysis_title(row: dict[str, Any], watch: dict[str, Any], index: int) -> str:
-    brand = watch.get("brand") or row.get("brand")
-    reference = watch.get("reference") or row.get("reference")
-    if isinstance(brand, str):
-        brand = _display_value(brand)
-    if isinstance(reference, str):
-        reference = _display_value(reference)
-    title_parts = [part for part in (brand, reference) if _has_display_value(part)]
-    return " · ".join(title_parts) if title_parts else f"Watch offer {index + 1}"
+    return _watch_card_identity_title(row, watch, index)
 
 
 def _deal_offer_condition(row: dict[str, Any], watch: dict[str, Any]) -> str | None:
