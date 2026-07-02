@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from app import build_deal_analysis_cards
 from condition_normalizer import (
+    CONDITION_CONFIDENCE_MEDIUM,
+    CONDITION_SOURCE_INFERRED_DEFAULT,
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
     normalize_wear_condition,
@@ -122,14 +124,14 @@ class TestDealAnalysisDataFlow:
         assert analysis["market_price"] == "$255,000"
         assert analysis["recommendation"] == "Good Buy"
 
-    def test_missing_condition_remains_needs_review(self) -> None:
+    def test_missing_condition_without_price_remains_needs_review(self) -> None:
         analysis = build_deal_analysis_cards(
             self._summary(
                 row={
                     "brand": "Audemars Piguet",
                     "reference": "5168G",
                     "condition": None,
-                    "usd_price": 85_000,
+                    "usd_price": None,
                     "previous_lowest_usd": "N/A",
                     "price_label": "No comparables",
                     "market_condition": None,
@@ -141,6 +143,30 @@ class TestDealAnalysisDataFlow:
         assert analysis["condition_label"] == "Unknown"
         assert analysis["recommendation"] == "Needs Review"
         assert analysis["market_price"] == "Unknown"
+
+    def test_missing_condition_with_price_infers_pre_owned_for_deal_analysis(self) -> None:
+        analysis = build_deal_analysis_cards(
+            self._summary(
+                row={
+                    "brand": "Audemars Piguet",
+                    "reference": "5168G",
+                    "condition": None,
+                    "usd_price": 85_000,
+                    "previous_lowest_usd": "$88,000",
+                    "price_label": "Good price",
+                    "rank": "2",
+                    "market_condition": PRE_OWNED_CONDITION,
+                    "condition_source": CONDITION_SOURCE_INFERRED_DEFAULT,
+                    "condition_confidence": CONDITION_CONFIDENCE_MEDIUM,
+                    "condition_explicit": False,
+                },
+                parsed_watch={"brand": "Audemars Piguet", "reference": "5168G", "usd_price": 85_000},
+            )
+        )[0]
+
+        assert analysis["condition_label"] == PRE_OWNED_CONDITION
+        assert analysis["condition_is_inferred"] is True
+        assert analysis["market_price"] == "$88,000"
 
     def test_missing_market_condition_on_old_import_stays_safe(self) -> None:
         analysis = build_deal_analysis_cards(

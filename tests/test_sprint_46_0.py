@@ -82,7 +82,7 @@ class TestConditionAwareDealAnalysis:
         *,
         condition: str | None,
         market_condition: str | None,
-        offer_usd: int = 10_500,
+        offer_usd: int | None = 10_500,
         market_usd: str = "$10,800",
         price_label: str = "Good price",
     ) -> dict:
@@ -92,6 +92,8 @@ class TestConditionAwareDealAnalysis:
             "condition": condition,
             "confidence": 90,
         }
+        if offer_usd is not None:
+            watch["usd_price"] = offer_usd
         row = {
             "brand": "Rolex",
             "reference": "126334",
@@ -106,7 +108,13 @@ class TestConditionAwareDealAnalysis:
 
     def test_unknown_condition_renders_unknown(self) -> None:
         analysis = build_deal_analysis_cards(
-            self._summary(condition=None, market_condition=None, market_usd="N/A", price_label="No comparables")
+            self._summary(
+                condition=None,
+                market_condition=None,
+                offer_usd=None,
+                market_usd="N/A",
+                price_label="No comparables",
+            )
         )[0]
 
         assert analysis["condition_label"] == "Unknown"
@@ -115,7 +123,13 @@ class TestConditionAwareDealAnalysis:
 
     def test_unknown_condition_shows_warning(self) -> None:
         analysis = build_deal_analysis_cards(
-            self._summary(condition=None, market_condition=None, market_usd="N/A", price_label="No comparables")
+            self._summary(
+                condition=None,
+                market_condition=None,
+                offer_usd=None,
+                market_usd="N/A",
+                price_label="No comparables",
+            )
         )[0]
 
         assert analysis["show_condition_warning"] is True
@@ -139,6 +153,7 @@ class TestConditionAwareDealAnalysis:
             self._summary(
                 condition=None,
                 market_condition=NEW_CONDITION,
+                offer_usd=None,
                 market_usd="$13,500",
                 price_label="New lowest price",
             )

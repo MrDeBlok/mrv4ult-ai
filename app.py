@@ -18,15 +18,18 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from timezone_utils import format_display_timestamp
 from condition_normalizer import (
+    CONDITION_SOURCE_INFERRED_DEFAULT,
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
     REQUEST_CONDITION_FORM_OPTIONS,
+    condition_display_metadata,
     deal_condition_label,
     display_condition,
     normalize_condition_value,
     parse_request_condition_form,
     request_condition_display,
     request_condition_form_value,
+    resolve_effective_watch_condition,
     resolve_offer_wear_condition,
 )
 from model_aliases import alias_display_fields, enrich_with_model_alias
@@ -844,7 +847,7 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         "nickname": _card_text(row, enriched_watch, "nickname", "nickname"),
         "dial": _card_text(row, enriched_watch, "dial", "dial"),
         "bracelet": _card_text(row, enriched_watch, "bracelet", "bracelet"),
-        "condition": _card_text(row, enriched_watch, "condition", "condition"),
+        "condition": condition_display_metadata(row, enriched_watch)["display_label"],
         "card_date": _card_text(row, enriched_watch, "card_date", "card_date"),
         "original_price_display": row.get("price")
         or (format_price(original_price, original_currency) if original_price is not None else None),
@@ -1229,6 +1232,10 @@ def _watch_context_from_row(row: dict[str, Any]) -> dict[str, Any]:
         value = row.get(key)
         if value is not None:
             watch[key] = value
+    for key in ("condition_source", "condition_confidence", "condition_explicit"):
+        value = row.get(key)
+        if value is not None:
+            watch[key] = value
     return watch
 
 
@@ -1247,6 +1254,9 @@ def _merge_deal_analysis_watch_context(row: dict[str, Any], watch: dict[str, Any
             continue
         if not _has_display_value(watch_value) and _has_display_value(row_value):
             merged[key] = row_value
+    for key in ("condition_source", "condition_confidence", "condition_explicit"):
+        if row.get(key) is not None:
+            merged[key] = row.get(key)
     return merged
 
 
@@ -1405,32 +1415,24 @@ def _deal_analysis_title(row: dict[str, Any], watch: dict[str, Any], index: int)
 
 
 def _deal_offer_condition(row: dict[str, Any], watch: dict[str, Any]) -> str | None:
+    effective = resolve_effective_watch_condition(row, watch)
     return resolve_offer_wear_condition(
-        row.get("condition"),
-        watch.get("condition"),
-        row.get("raw_condition"),
-        watch.get("raw_condition"),
+        effective.get("condition"),
+        effective.get("raw_condition"),
     )
 
 
 def _deal_condition_display(row: dict[str, Any], watch: dict[str, Any]) -> dict[str, Any]:
-    for source in (
-        row.get("condition"),
-        watch.get("condition"),
-        row.get("raw_condition"),
-        watch.get("raw_condition"),
-    ):
-        label = deal_condition_label(source)
-        if label != "Unknown":
-            return {
-                "label": label,
-                "icon": DEAL_CONDITION_ICONS[label],
-                "is_known": True,
-            }
+    metadata = condition_display_metadata(row, watch)
     return {
-        "label": "Unknown",
-        "icon": DEAL_CONDITION_ICONS["Unknown"],
-        "is_known": False,
+        "label": metadata["label"],
+        "display_label": metadata["display_label"],
+        "icon": metadata["icon"],
+        "is_known": metadata["is_known"],
+        "is_inferred": metadata["is_inferred"],
+        "inference_note": metadata["inference_note"],
+        "condition_source": metadata["condition_source"],
+        "condition_confidence": metadata["condition_confidence"],
     }
 
 
@@ -1514,6 +1516,8 @@ def _build_deal_analysis(
         or parser_confidence < DEAL_EXCELLENT_CONFIDENCE_THRESHOLD
     ):
         recommendation, recommendation_class = "Good Buy", "good"
+    if recommendation == "Excellent Buy" and condition.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
+        recommendation, recommendation_class = "Good Buy", "good"
 
     show_condition_warning = market_context.needs_review and not condition["is_known"]
     show_no_matching_market = (
@@ -1529,8 +1533,11 @@ def _build_deal_analysis(
     result = {
         "title": _deal_analysis_title(row, watch, index),
         "condition_label": condition["label"],
+        "condition_display_label": condition.get("display_label", condition["label"]),
         "condition_icon": condition["icon"],
         "condition_is_known": condition["is_known"],
+        "condition_is_inferred": condition.get("is_inferred", False),
+        "condition_inference_note": condition.get("inference_note"),
         "show_condition_warning": show_condition_warning,
         "show_no_matching_market": show_no_matching_market,
         "market_status_message": market_context.market_status_message,

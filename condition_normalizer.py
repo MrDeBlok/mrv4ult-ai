@@ -10,6 +10,22 @@ Record = dict[str, Any]
 NEW_CONDITION = "New"
 PRE_OWNED_CONDITION = "Pre-Owned"
 
+CONDITION_SOURCE_EXPLICIT = "explicit"
+CONDITION_SOURCE_INFERRED_DEFAULT = "inferred_default"
+CONDITION_CONFIDENCE_HIGH = "high"
+CONDITION_CONFIDENCE_MEDIUM = "medium"
+CONDITION_INFERENCE_NOTE = (
+    "Condition inferred as Pre-Owned because dealer did not specify New/Unworn."
+)
+
+CONDITION_METADATA_FIELDS = (
+    "condition",
+    "raw_condition",
+    "condition_source",
+    "condition_confidence",
+    "condition_explicit",
+)
+
 MESSAGE_ALL_BATCH_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\ball\s+new\b", re.I), "All new"),
     (re.compile(r"\ball\s+unworn\b", re.I), "All unworn"),
@@ -47,6 +63,8 @@ PRE_OWNED_ALIASES: dict[str, str] = {
     "used": PRE_OWNED_CONDITION,
     "lnib": PRE_OWNED_CONDITION,
     "second hand": PRE_OWNED_CONDITION,
+    "serviced": PRE_OWNED_CONDITION,
+    "polished": PRE_OWNED_CONDITION,
 }
 
 ACCESSORY_CONDITIONS = frozenset(
@@ -202,8 +220,95 @@ def resolve_offer_wear_condition(*values: str | None) -> str | None:
 
 
 def watch_has_explicit_wear_condition(watch: Record) -> bool:
-    """Return True when a parsed watch already has a resolved wear condition."""
+    """Return True when a parsed watch already has a dealer-confirmed wear condition."""
+    if watch.get("condition_explicit") is True:
+        return True
+    if watch.get("condition_source") == CONDITION_SOURCE_EXPLICIT:
+        return True
+    if watch.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
+        return False
     return resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")) is not None
+
+
+def watch_has_offer_price(watch: Record) -> bool:
+    """Return True when a parsed watch includes an offer price."""
+    return bool(
+        watch.get("original_price") is not None
+        or watch.get("price") is not None
+        or watch.get("usd_price") is not None
+    )
+
+
+def mark_explicit_condition_metadata(watch: Record) -> Record:
+    """Mark parsed condition metadata when wear condition came from explicit dealer text."""
+    if watch.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
+        return watch
+    if resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")):
+        watch["condition_source"] = CONDITION_SOURCE_EXPLICIT
+        watch["condition_confidence"] = CONDITION_CONFIDENCE_HIGH
+        watch["condition_explicit"] = True
+    return watch
+
+
+def apply_inferred_pre_owned_default(watch: Record) -> Record:
+    """Infer Pre-Owned for active priced offers missing explicit wear condition."""
+    updated = dict(watch)
+    if updated.get("condition_explicit") or updated.get("condition_source") == CONDITION_SOURCE_EXPLICIT:
+        return updated
+    if resolve_offer_wear_condition(updated.get("condition"), updated.get("raw_condition")):
+        return mark_explicit_condition_metadata(updated)
+    if not watch_has_offer_price(updated):
+        return updated
+    updated["condition"] = PRE_OWNED_CONDITION
+    updated["condition_source"] = CONDITION_SOURCE_INFERRED_DEFAULT
+    updated["condition_confidence"] = CONDITION_CONFIDENCE_MEDIUM
+    updated["condition_explicit"] = False
+    return updated
+
+
+def apply_inferred_pre_owned_defaults(watches: list[Record]) -> list[Record]:
+    """Apply default Pre-Owned inference to active offer watches."""
+    return [apply_inferred_pre_owned_default(watch) for watch in watches]
+
+
+def resolve_effective_watch_condition(row: Record, watch: Record) -> Record:
+    """Resolve wear condition for display and market comparison, including safe inference."""
+    merged = dict(watch)
+    for key in CONDITION_METADATA_FIELDS:
+        row_value = row.get(key)
+        if row_value is not None:
+            merged[key] = row_value
+
+    if resolve_offer_wear_condition(merged.get("condition"), merged.get("raw_condition")):
+        if merged.get("condition_source") is None:
+            mark_explicit_condition_metadata(merged)
+        return merged
+
+    if watch_has_offer_price(merged):
+        return apply_inferred_pre_owned_default(merged)
+    return merged
+
+
+def condition_display_metadata(row: Record, watch: Record | None = None) -> dict[str, Any]:
+    """Return UI metadata for condition labels and inference notes."""
+    effective = resolve_effective_watch_condition(row, watch or {})
+    label = deal_condition_label(effective.get("condition"))
+    is_inferred = effective.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT
+    is_known = label != "Unknown"
+    display_label = f"{label} (inferred)" if is_inferred and is_known else label
+    return {
+        "label": label,
+        "display_label": display_label,
+        "icon": "🟢" if label == NEW_CONDITION else "🟡" if label == PRE_OWNED_CONDITION else "⚪",
+        "is_known": is_known,
+        "is_inferred": is_inferred,
+        "is_explicit": effective.get("condition_explicit") is True
+        or effective.get("condition_source") == CONDITION_SOURCE_EXPLICIT,
+        "condition_source": effective.get("condition_source"),
+        "condition_confidence": effective.get("condition_confidence"),
+        "inference_note": CONDITION_INFERENCE_NOTE if is_inferred else None,
+        "effective_watch": effective,
+    }
 
 
 def _normalize_batch_condition_text(raw: str) -> tuple[str | None, str | None]:
@@ -316,6 +421,9 @@ def sync_summary_row_conditions(rows: list[Record], watches: list[Record]) -> li
         updated["condition"] = watch.get("condition")
         if watch.get("raw_condition"):
             updated["raw_condition"] = watch.get("raw_condition")
+        for key in ("condition_source", "condition_confidence", "condition_explicit"):
+            if watch.get(key) is not None:
+                updated[key] = watch.get(key)
         synced.append(updated)
     return synced
 

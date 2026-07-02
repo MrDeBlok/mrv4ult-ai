@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION, normalize_condition_value, resolve_offer_wear_condition
+from condition_normalizer import (
+    NEW_CONDITION,
+    PRE_OWNED_CONDITION,
+    normalize_condition_value,
+    resolve_effective_watch_condition,
+    resolve_offer_wear_condition,
+)
 from database import get_offers_by_ids
 
 Record = dict[str, Any]
@@ -191,11 +197,16 @@ def resolve_deal_market_context(
     include_debug: bool = False,
 ) -> DealMarketContext:
     """Resolve market comparables from live active offers with stored fallback."""
+    effective_watch = resolve_effective_watch_condition(row, watch)
+    effective_row = {**row}
+    for key in ("condition", "raw_condition", "condition_source", "condition_confidence", "condition_explicit"):
+        value = effective_watch.get(key)
+        if value is not None:
+            effective_row[key] = value
+
     offer_condition = resolve_offer_wear_condition(
-        row.get("condition"),
-        watch.get("condition"),
-        row.get("raw_condition"),
-        watch.get("raw_condition"),
+        effective_row.get("condition"),
+        effective_row.get("raw_condition"),
     )
 
     offer_id = str(row.get("offer_id") or "")
@@ -226,6 +237,9 @@ def resolve_deal_market_context(
             market_status_message="Condition unknown. Market comparison unavailable.",
             debug=debug,
         )
+
+    row = effective_row
+    watch = effective_watch
 
     stored_market_condition = normalize_condition_value(row.get("market_condition"))
     if (

@@ -35,6 +35,8 @@ from contact_classification import (
 from condition_normalizer import (
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
+    apply_inferred_pre_owned_defaults,
+    mark_explicit_condition_metadata,
     normalize_condition_value,
     normalize_watch_condition,
     propagate_message_batch_condition,
@@ -507,16 +509,22 @@ def ingest_message(
     parse_started_at = time.perf_counter()
     parsed = parse_message(text)
     parsed_watches = [
-        normalize_watch_condition(enrich_parsed_watch(watch))
+        mark_explicit_condition_metadata(
+            normalize_watch_condition(enrich_parsed_watch(watch))
+        )
         for watch in parsed["watches"]
     ]
     parsed_watches = propagate_message_batch_condition(text, parsed_watches)
+    for watch in parsed_watches:
+        mark_explicit_condition_metadata(watch)
     sold_order_message = is_sold_order_message(text)
     if sold_order_message:
         parsed_watches = enrich_sold_order_watches(parsed_watches)
         offer_watches, import_classification = [], "request_intent"
     else:
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
+        if import_classification is None and offer_watches:
+            offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
     insufficient_evidence_watches: list[dict[str, Any]] = []
     if import_classification is None and offer_watches:
         offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
@@ -1096,6 +1104,9 @@ def _build_watch_row(
         "bracelet": _optional_display_value(watch.get("bracelet")),
         "condition": watch.get("condition"),
         "raw_condition": watch.get("raw_condition"),
+        "condition_source": watch.get("condition_source"),
+        "condition_confidence": watch.get("condition_confidence"),
+        "condition_explicit": watch.get("condition_explicit"),
         "card_date": watch.get("card_date"),
         "original_price": watch.get("original_price") or watch.get("price"),
         "original_currency": watch.get("original_currency") or watch.get("currency"),

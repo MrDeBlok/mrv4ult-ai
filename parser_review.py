@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from activity_feed import format_dealer_label, message_preview
+from condition_normalizer import resolve_offer_wear_condition
 from import_classification import looks_like_parser_review_offer
 from import_status import normalize_import_status
 from ingest import _watch_missing_fields, is_large_dealer_list_import_log
@@ -135,7 +136,10 @@ def detect_watch_issues(watch: Record) -> tuple[set[str], list[str]]:
         issues.add("missing_brand")
     if "reference" in missing:
         issues.add("missing_reference")
-    if not watch.get("condition"):
+    if not watch.get("condition") and not resolve_offer_wear_condition(
+        watch.get("condition"),
+        watch.get("raw_condition"),
+    ):
         missing.append("condition")
         issues.add("missing_condition")
     if _has_price_amount(watch) and not _has_currency(watch):

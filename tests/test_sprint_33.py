@@ -28,6 +28,22 @@ MIGRATION_PATH = (
     / "sprint_33_users_private_contacts.sql"
 )
 
+MINIMAL_TRADING_DESK = {
+    "kpis": {},
+    "quick_actions": [],
+    "todays_best_deals": [],
+    "ai_needs_help": [],
+    "live_market": [],
+    "show_write_actions": True,
+}
+
+
+@pytest.fixture
+def route_test_client():
+    """FastAPI client with app lifespan hooks stubbed to avoid external I/O."""
+    with patch("app.start_whatsapp_listener"), patch("app.stop_whatsapp_listener"):
+        yield TestClient(app)
+
 
 class TestSprint33MigrationFile:
     def test_migration_creates_users_and_ownership_columns(self) -> None:
@@ -153,6 +169,7 @@ class TestUserVisibilityRules:
 
 class TestSprint33Routes:
     @pytest.mark.no_auto_login
+    @patch("app.load_trading_desk", return_value=MINIMAL_TRADING_DESK)
     @patch("database.get_user_by_id")
     @patch("database.get_user_by_email")
     @patch("database.users_table_supported", return_value=True)
@@ -161,10 +178,12 @@ class TestSprint33Routes:
         _mock_supported: MagicMock,
         mock_get_user: MagicMock,
         mock_get_user_by_id: MagicMock,
+        _mock_load_desk: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_get_user.return_value = TRADER_ONE
         mock_get_user_by_id.return_value = TRADER_ONE
-        client = TestClient(app)
+        client = route_test_client
 
         protected = client.get("/", follow_redirects=False)
         assert protected.status_code == 303
@@ -182,9 +201,13 @@ class TestSprint33Routes:
         assert logout.headers["location"] == "/login"
 
     @patch("app.list_users")
-    def test_users_page_requires_admin(self, mock_list_users: MagicMock) -> None:
+    def test_users_page_requires_admin(
+        self,
+        mock_list_users: MagicMock,
+        route_test_client: TestClient,
+    ) -> None:
         mock_list_users.return_value = [ADMIN_USER, TRADER_ONE]
-        client = TestClient(app)
+        client = route_test_client
 
         admin_response = client.get("/settings/team")
         assert admin_response.status_code == 200
@@ -196,8 +219,9 @@ class TestSprint33Routes:
         self,
         mock_list_users: MagicMock,
         _mock_user: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
-        client = TestClient(app)
+        client = route_test_client
         response = client.get("/settings/team")
 
         assert response.status_code == 403
@@ -207,6 +231,7 @@ class TestSprint33Routes:
     def test_contacts_page_hides_other_users_removed_contacts(
         self,
         mock_list_contacts: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_contacts.return_value = [
             {"id": "d-1", "display_name": "Shared Dealer", "whatsapp_id": "+1", "contact_type": "dealer"},
@@ -227,7 +252,7 @@ class TestSprint33Routes:
         ]
 
         with patch("app.get_current_user", return_value=TRADER_ONE):
-            client = TestClient(app)
+            client = route_test_client
             response = client.get("/contacts?filter=removed")
 
         assert response.status_code == 200
@@ -238,6 +263,7 @@ class TestSprint33Routes:
     def test_activity_hides_other_users_private_imports(
         self,
         mock_list_activity: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_activity.side_effect = [
             [
@@ -292,7 +318,7 @@ class TestSprint33Routes:
         ]
 
         with patch("app.get_current_user", return_value=TRADER_ONE):
-            client = TestClient(app)
+            client = route_test_client
             response = client.get("/activity/ignored")
 
         assert response.status_code == 200
@@ -302,6 +328,7 @@ class TestSprint33Routes:
     def test_admin_can_see_all_private_imports(
         self,
         mock_list_activity: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_activity.side_effect = [
             [
@@ -340,7 +367,7 @@ class TestSprint33Routes:
             ],
         ]
 
-        client = TestClient(app)
+        client = route_test_client
         response = client.get("/activity/ignored")
 
         assert response.status_code == 200

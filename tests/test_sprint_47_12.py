@@ -61,7 +61,7 @@ class TestDatejust126331ConditionParsing:
         assert watch["reference"] == "126331"
         assert resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")) == PRE_OWNED_CONDITION
 
-    def test_full_set_message_without_condition_stays_unknown(self) -> None:
+    def test_full_set_message_without_condition_stays_unknown_before_inference(self) -> None:
         watch = normalize_watch_condition(
             enrich_parsed_watch(parse_message(DATEJUST_MESSAGE)["watches"][0])
         )
@@ -118,8 +118,8 @@ class TestDealMarketLookup:
         mock_pool.return_value = [("offer-other", 13_500, PRE_OWNED_CONDITION)]
 
         context = resolve_deal_market_context(
-            _row(condition=None, raw_condition=None, market_condition=None),
-            _watch(condition=None, raw_condition=None),
+            _row(condition=None, raw_condition=None, usd_price=None, market_condition=None),
+            _watch(condition=None, raw_condition=None, usd_price=None),
             include_debug=True,
         )
 
@@ -233,19 +233,20 @@ class TestDealAnalysisPresentation:
         assert analysis["market_price"] == "Unknown"
         assert analysis["market_status_message"] == "No other same-condition comparables yet."
 
-    def test_unknown_condition_shows_needs_review(self) -> None:
+    def test_unknown_condition_without_price_shows_needs_review(self) -> None:
         analysis = build_deal_analysis_cards(
             {
                 "rows": [
                     _row(
                         condition=None,
                         raw_condition=None,
+                        usd_price=None,
                         market_condition=None,
                         previous_lowest_usd="N/A",
                         price_label="No comparables",
                     )
                 ],
-                "parsed_watches": [_watch(condition=None, raw_condition=None)],
+                "parsed_watches": [_watch(condition=None, raw_condition=None, usd_price=None)],
             }
         )[0]
 

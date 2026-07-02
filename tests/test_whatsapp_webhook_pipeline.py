@@ -7,12 +7,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from evolution_client import EvolutionAPIError
 from evolution_webhook import (
     WEBHOOK_TRACE_PREFIX,
+    _group_name_cache,
     build_webhook_trace,
     handle_evolution_webhook,
     jid_to_contact_id,
     log_webhook_trace,
+    reset_group_name_cache,
+    resolve_group_name,
 )
 from whatsapp_ingest_config import set_app_started_at_for_tests
 
@@ -88,6 +92,22 @@ def _reset_startup_time() -> None:
     set_app_started_at_for_tests(APP_STARTED_AT)
     yield
     set_app_started_at_for_tests(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_group_name_cache() -> None:
+    reset_group_name_cache()
+    yield
+    reset_group_name_cache()
+
+
+@pytest.fixture(autouse=True)
+def _mock_fetch_group_info() -> MagicMock:
+    with patch(
+        "evolution_webhook.fetch_group_info",
+        side_effect=EvolutionAPIError("group metadata unavailable in tests"),
+    ) as mock_fetch:
+        yield mock_fetch
 
 
 class TestWebhookPipelineIngest:
@@ -215,3 +235,34 @@ class TestContactIdResolution:
 
     def test_private_phone_jid_maps_to_digits(self) -> None:
         assert jid_to_contact_id("85291234567@s.whatsapp.net") == "85291234567"
+
+
+class TestGroupNameResolution:
+    GROUP_JID = "120363000000000000@g.us"
+
+    def test_payload_subject_wins_over_cached_jid_fallback(self) -> None:
+        _group_name_cache[self.GROUP_JID] = self.GROUP_JID
+
+        resolved = resolve_group_name(
+            self.GROUP_JID,
+            {"subject": "HK Dealers"},
+        )
+
+        assert resolved == "HK Dealers"
+        assert _group_name_cache[self.GROUP_JID] == "HK Dealers"
+
+    def test_cached_display_name_used_when_payload_has_no_subject(self) -> None:
+        _group_name_cache[self.GROUP_JID] = "HK Dealers"
+
+        resolved = resolve_group_name(self.GROUP_JID, {})
+
+        assert resolved == "HK Dealers"
+
+    def test_falls_back_to_remote_jid_when_no_group_name_exists(
+        self,
+        _mock_fetch_group_info: MagicMock,
+    ) -> None:
+        resolved = resolve_group_name(self.GROUP_JID, {})
+
+        assert resolved == self.GROUP_JID
+        _mock_fetch_group_info.assert_called_once()

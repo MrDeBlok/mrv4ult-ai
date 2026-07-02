@@ -47,6 +47,10 @@ VIEWER_USER = {
 }
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "no_auto_login: disable shared admin auto-login fixture")
+
+
 @pytest.fixture(autouse=True)
 def _reset_contact_type_column_cache() -> None:
     reset_contact_type_column_cache()

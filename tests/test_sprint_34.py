@@ -20,6 +20,22 @@ TRADING_DESK_KPI_TITLES = (
     "Unread notifications",
 )
 
+MINIMAL_TRADING_DESK = {
+    "kpis": [],
+    "quick_actions": [],
+    "todays_best_deals": [],
+    "ai_needs_help": [],
+    "live_market": [],
+    "show_write_actions": True,
+}
+
+
+@pytest.fixture
+def route_test_client():
+    """FastAPI client with app lifespan hooks stubbed to avoid external I/O."""
+    with patch("app.start_whatsapp_listener"), patch("app.stop_whatsapp_listener"):
+        yield TestClient(app)
+
 
 class TestSprint34DashboardRules:
     def test_build_trading_desk_kpis_include_expected_links(self) -> None:
@@ -97,15 +113,18 @@ class TestSprint34DashboardRules:
 
 class TestSprint34DashboardRoutes:
     @pytest.mark.no_auto_login
-    def test_dashboard_requires_login(self) -> None:
-        client = TestClient(app)
-        response = client.get("/dashboard", follow_redirects=False)
+    def test_dashboard_requires_login(self, route_test_client: TestClient) -> None:
+        response = route_test_client.get("/dashboard", follow_redirects=False)
 
         assert response.status_code == 303
         assert response.headers["location"] == "/login"
 
     @patch("app.load_trading_desk")
-    def test_admin_can_access_dashboard(self, mock_load_desk: MagicMock) -> None:
+    def test_admin_can_access_dashboard(
+        self,
+        mock_load_desk: MagicMock,
+        route_test_client: TestClient,
+    ) -> None:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
                 new_offers_today=1,
@@ -122,8 +141,7 @@ class TestSprint34DashboardRoutes:
             "show_write_actions": True,
         }
 
-        client = TestClient(app)
-        response = client.get("/dashboard")
+        response = route_test_client.get("/dashboard")
 
         assert response.status_code == 200
         assert "Trading Desk" in response.text
@@ -136,6 +154,7 @@ class TestSprint34DashboardRoutes:
         self,
         mock_load_desk: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        route_test_client: TestClient,
     ) -> None:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
@@ -154,8 +173,7 @@ class TestSprint34DashboardRoutes:
         }
         monkeypatch.setattr("app.get_current_user", lambda _request: TRADER_ONE)
 
-        client = TestClient(app)
-        response = client.get("/dashboard")
+        response = route_test_client.get("/dashboard")
 
         assert response.status_code == 200
         assert "Welcome back, Trader One" in response.text
@@ -164,6 +182,7 @@ class TestSprint34DashboardRoutes:
     def test_dashboard_shows_expected_cards_with_links(
         self,
         mock_load_desk: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_load_desk.return_value = {
             "kpis": build_trading_desk_kpis(
@@ -184,8 +203,7 @@ class TestSprint34DashboardRoutes:
             "show_write_actions": True,
         }
 
-        client = TestClient(app)
-        response = client.get("/dashboard")
+        response = route_test_client.get("/dashboard")
 
         assert response.status_code == 200
         assert 'href="/parser-review"' in response.text
@@ -194,6 +212,7 @@ class TestSprint34DashboardRoutes:
         assert ">11<" in response.text
 
     @pytest.mark.no_auto_login
+    @patch("app.load_trading_desk", return_value=MINIMAL_TRADING_DESK)
     @patch("database.get_user_by_id")
     @patch("database.get_user_by_email")
     @patch("database.users_table_supported", return_value=True)
@@ -202,10 +221,12 @@ class TestSprint34DashboardRoutes:
         _mock_supported: MagicMock,
         mock_get_user: MagicMock,
         mock_get_user_by_id: MagicMock,
+        _mock_load_desk: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_get_user.return_value = TRADER_ONE
         mock_get_user_by_id.return_value = TRADER_ONE
-        client = TestClient(app)
+        client = route_test_client
 
         login = client.post("/login", data={"email": TRADER_ONE["email"]}, follow_redirects=False)
 

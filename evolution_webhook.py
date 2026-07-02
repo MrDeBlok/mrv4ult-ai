@@ -31,6 +31,52 @@ WEBHOOK_TRACE_PREFIX = "[WhatsApp webhook trace]"
 _group_name_cache: dict[str, str] = {}
 
 
+def reset_group_name_cache() -> None:
+    """Clear in-memory group name cache (for tests)."""
+    _group_name_cache.clear()
+
+
+def _payload_group_name(data: dict[str, Any]) -> str | None:
+    """Extract a group display name from the current webhook message payload."""
+    for field in ("subject", "groupSubject", "name"):
+        value = data.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _is_group_jid_fallback_name(value: str, group_jid: str) -> bool:
+    cleaned = value.strip()
+    return cleaned == group_jid or cleaned.endswith("@g.us")
+
+
+def _cached_group_name(group_jid: str) -> str | None:
+    """Return a cached display name, ignoring jid fallbacks stored from earlier lookups."""
+    cached = _group_name_cache.get(group_jid)
+    if not isinstance(cached, str) or not cached.strip():
+        return None
+    cleaned = cached.strip()
+    if _is_group_jid_fallback_name(cleaned, group_jid):
+        return None
+    return cleaned
+
+
+def _resolve_group_name_from_sources(
+    group_jid: str,
+    data: dict[str, Any],
+) -> str | None:
+    """Resolve a group display name from payload fields or a valid cache entry."""
+    payload_name = _payload_group_name(data)
+    if payload_name:
+        _group_name_cache[group_jid] = payload_name
+        return payload_name
+
+    cached_name = _cached_group_name(group_jid)
+    if cached_name:
+        return cached_name
+    return None
+
+
 class WebhookProcessingError(Exception):
     """Raised when a webhook payload cannot be imported."""
 
@@ -61,15 +107,7 @@ def build_webhook_trace(payload: dict[str, Any], data: dict[str, Any] | None = N
     chat_id = remote_jid or remote_jid_alt or "—"
     group_name = None
     if isinstance(message_data, dict):
-        for candidate in (
-            _group_name_cache.get(remote_jid),
-            message_data.get("subject"),
-            message_data.get("groupSubject"),
-            message_data.get("name"),
-        ):
-            if isinstance(candidate, str) and candidate.strip():
-                group_name = candidate.strip()
-                break
+        group_name = _resolve_group_name_from_sources(remote_jid, message_data)
     message_text = extract_message_text(message_data) if isinstance(message_data, dict) else None
     sender_id = resolve_dealer_whatsapp(key, message_data or {}, payload) if isinstance(message_data, dict) else None
     if sender_id is None and isinstance(message_data, dict) and is_private_chat(key):
@@ -457,16 +495,9 @@ def resolve_group_name(
     *,
     instance_name: str = "",
 ) -> str:
-    for candidate in (
-        _group_name_cache.get(group_jid),
-        data.get("subject"),
-        data.get("groupSubject"),
-        data.get("name"),
-    ):
-        if isinstance(candidate, str) and candidate.strip():
-            resolved = candidate.strip()
-            _group_name_cache[group_jid] = resolved
-            return resolved
+    resolved = _resolve_group_name_from_sources(group_jid, data)
+    if resolved:
+        return resolved
 
     logger.info("[Evolution webhook group] Group name missing for %s", group_jid)
 

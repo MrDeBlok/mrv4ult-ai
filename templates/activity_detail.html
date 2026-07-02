@@ -78,8 +78,13 @@
                     <h3 class="deal-analysis-title">{{ deal.title }}</h3>
                     <div class="deal-analysis-condition">
                         <span class="deal-condition-label">Condition</span>
-                        <span class="deal-condition-value">{{ deal.condition_icon }} {{ deal.condition_label }}</span>
+                        <span class="deal-condition-value">{{ deal.condition_icon }} {{ deal.condition_display_label or deal.condition_label }}</span>
                     </div>
+                    {% if deal.condition_inference_note %}
+                    <div class="deal-analysis-alert deal-analysis-alert-info small" role="note">
+                        {{ deal.condition_inference_note }}
+                    </div>
+                    {% endif %}
                     {% if deal.show_condition_warning %}
                     <div class="deal-analysis-alert deal-analysis-alert-warning" role="alert">
                         Condition unknown. Market comparison may be inaccurate.

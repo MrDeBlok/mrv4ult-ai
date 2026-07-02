@@ -25,6 +25,23 @@ from market_requests import (
 from tests.conftest import ADMIN_USER, TRADER_ONE, TRADER_TWO
 
 
+@pytest.fixture
+def route_test_client():
+    """FastAPI client with app lifespan hooks stubbed to avoid external I/O."""
+    with patch("app.start_whatsapp_listener"), patch("app.stop_whatsapp_listener"):
+        yield TestClient(app)
+
+
+MINIMAL_TRADING_DESK = {
+    "kpis": [],
+    "quick_actions": [],
+    "todays_best_deals": [],
+    "ai_needs_help": [],
+    "live_market": [],
+    "show_write_actions": True,
+}
+
+
 def _market_request_log(
     *,
     import_id: str,
@@ -176,21 +193,23 @@ class TestMarketRequestRules:
 
 class TestMarketRequestRoutes:
     @pytest.mark.no_auto_login
-    def test_market_requests_requires_login(self) -> None:
-        client = TestClient(app)
-        response = client.get("/market-requests", follow_redirects=False)
+    def test_market_requests_requires_login(self, route_test_client: TestClient) -> None:
+        response = route_test_client.get("/market-requests", follow_redirects=False)
 
         assert response.status_code == 303
         assert response.headers["location"] == "/login"
 
     @patch("app.load_market_request_rows")
-    def test_admin_can_access_market_requests(self, mock_load_rows: MagicMock) -> None:
+    def test_admin_can_access_market_requests(
+        self,
+        mock_load_rows: MagicMock,
+        route_test_client: TestClient,
+    ) -> None:
         mock_load_rows.return_value = [
             build_market_request_row(_market_request_log(import_id="req-1")),
         ]
 
-        client = TestClient(app)
-        response = client.get("/market-requests")
+        response = route_test_client.get("/market-requests")
 
         assert response.status_code == 200
         assert "Market Requests" in response.text
@@ -202,14 +221,14 @@ class TestMarketRequestRoutes:
         self,
         mock_load_rows: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        route_test_client: TestClient,
     ) -> None:
         mock_load_rows.return_value = [
             build_market_request_row(_market_request_log(import_id="req-1")),
         ]
         monkeypatch.setattr("app.get_current_user", lambda _request: TRADER_ONE)
 
-        client = TestClient(app)
-        response = client.get("/market-requests")
+        response = route_test_client.get("/market-requests")
 
         assert response.status_code == 200
         assert "Market Requests" in response.text
@@ -223,14 +242,14 @@ class TestMarketRequestRoutes:
         self,
         mock_list_import_logs: MagicMock,
         _mock_get_messages: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(import_id="req-1"),
             {"id": "offer-1", "status": "success", "watches_parsed": 1, "new_offers": 1, "summary": {}},
         ]
 
-        client = TestClient(app)
-        response = client.get("/market-requests")
+        response = route_test_client.get("/market-requests")
 
         assert response.status_code == 200
         assert "126500LN" in response.text
@@ -242,6 +261,7 @@ class TestMarketRequestRoutes:
         self,
         mock_list_import_logs: MagicMock,
         _mock_get_messages: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(import_id="req-1", brand="Rolex", group_name="HK Dealers"),
@@ -253,16 +273,19 @@ class TestMarketRequestRoutes:
             ),
         ]
 
-        client = TestClient(app)
-        response = client.get("/market-requests?brand=Rolex&group=HK")
+        response = route_test_client.get("/market-requests?brand=Rolex&group=HK")
 
         assert response.status_code == 200
         assert "126500LN" in response.text
         assert "15510" not in response.text
 
-    def test_navbar_contains_market_requests_link(self) -> None:
-        client = TestClient(app)
-        response = client.get("/dashboard")
+    @patch("app.load_trading_desk", return_value=MINIMAL_TRADING_DESK)
+    def test_navbar_contains_market_requests_link(
+        self,
+        _mock_load_desk: MagicMock,
+        route_test_client: TestClient,
+    ) -> None:
+        response = route_test_client.get("/dashboard")
 
         assert response.status_code == 200
         assert 'href="/market-requests"' in response.text
@@ -349,6 +372,7 @@ class TestMarketRequest351Routes:
         self,
         mock_list_import_logs: MagicMock,
         mock_get_messages: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         shared_message = "WTB Rolex Daytona 126500LN budget 25k"
         mock_list_import_logs.return_value = [
@@ -370,7 +394,7 @@ class TestMarketRequest351Routes:
             "msg-2": {"raw_text": shared_message},
         }
 
-        client = TestClient(app)
+        client = route_test_client
         response = client.get("/market-requests")
 
         assert response.status_code == 200
@@ -387,11 +411,12 @@ class TestMarketRequest351Routes:
         self,
         mock_list_import_logs: MagicMock,
         _mock_get_messages: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         mock_list_import_logs.return_value = [_market_request_log(import_id=import_id)]
 
-        client = TestClient(app)
+        client = route_test_client
         response = client.get("/market-requests")
 
         assert response.status_code == 200
@@ -405,6 +430,7 @@ class TestMarketRequest351Routes:
         mock_list_import_logs: MagicMock,
         mock_get_message: MagicMock,
         mock_get_import_log: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         import_log = _market_request_log(import_id=import_id)
@@ -414,8 +440,7 @@ class TestMarketRequest351Routes:
             "raw_text": "WTB Rolex Daytona 126500LN budget 25k please ping me",
         }
 
-        client = TestClient(app)
-        response = client.get(f"/market-requests/{import_id}")
+        response = route_test_client.get(f"/market-requests/{import_id}")
 
         assert response.status_code == 200
         assert "WTB Rolex Daytona 126500LN budget 25k please ping me" in response.text
@@ -431,6 +456,7 @@ class TestMarketRequest351Routes:
         mock_list_import_logs: MagicMock,
         mock_get_import_log: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        route_test_client: TestClient,
     ) -> None:
         hidden = _market_request_log(
             import_id="33333333-3333-4333-8333-333333333333",
@@ -440,8 +466,7 @@ class TestMarketRequest351Routes:
         mock_list_import_logs.return_value = [hidden]
         monkeypatch.setattr("app.get_current_user", lambda _request: TRADER_ONE)
 
-        client = TestClient(app)
-        response = client.get(f"/market-requests/{hidden['id']}")
+        response = route_test_client.get(f"/market-requests/{hidden['id']}")
 
         assert response.status_code == 404
 
@@ -451,6 +476,7 @@ class TestMarketRequest351Routes:
         self,
         mock_list_import_logs: MagicMock,
         mock_get_messages: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         mock_list_import_logs.return_value = [
             _market_request_log(
@@ -479,8 +505,7 @@ class TestMarketRequest351Routes:
             "msg-ap": {"raw_text": "Looking for AP 15510"},
         }
 
-        client = TestClient(app)
-        response = client.get("/market-requests?brand=Rolex&group=EU")
+        response = route_test_client.get("/market-requests?brand=Rolex&group=EU")
 
         assert response.status_code == 200
         assert "126500LN" in response.text
@@ -684,6 +709,7 @@ class TestMarketRequest352Matching:
         mock_get_message: MagicMock,
         mock_get_import_log: MagicMock,
         mock_opportunity_bundle: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         import_log = _market_request_log(import_id=import_id)
@@ -719,8 +745,7 @@ class TestMarketRequest352Matching:
             },
         )
 
-        client = TestClient(app)
-        response = client.get(f"/market-requests/{import_id}")
+        response = route_test_client.get(f"/market-requests/{import_id}")
 
         assert response.status_code == 200
         assert "Matching Offers" in response.text
@@ -737,6 +762,7 @@ class TestMarketRequest352Matching:
         mock_get_message: MagicMock,
         mock_get_import_log: MagicMock,
         mock_opportunity_bundle: MagicMock,
+        route_test_client: TestClient,
     ) -> None:
         import_id = "11111111-1111-4111-8111-111111111111"
         import_log = _market_request_log(import_id=import_id)
@@ -757,8 +783,7 @@ class TestMarketRequest352Matching:
             },
         )
 
-        client = TestClient(app)
-        response = client.get(f"/market-requests/{import_id}")
+        response = route_test_client.get(f"/market-requests/{import_id}")
 
         assert response.status_code == 200
         assert "No matching offers found." in response.text
