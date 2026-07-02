@@ -11,7 +11,6 @@ from activity_feed import message_preview
 from contact_classification import build_dealer_lookup_by_whatsapp, filter_business_import_logs, format_import_sender_label
 from database import (
     IMPORT_LOG_LIST_LIMIT_DASHBOARD_LIVE,
-    IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
     attach_import_log_summaries,
     DASHBOARD_MATCHED_REQUESTS_FETCH_LIMIT,
     DASHBOARD_MATCHED_REQUESTS_LIMIT,
@@ -27,31 +26,13 @@ from database import (
     list_requests,
     load_enriched_request_match_batch,
 )
-from dealer_intelligence import dealer_display_name, format_activity_timestamp
+from dealer_intelligence import format_activity_timestamp
 from import_status import filter_discarded_import_logs, format_import_status, import_status_class, normalize_import_status
-from market_request_matching import (
-    classify_market_request_match,
-    extract_market_request_criteria,
-    filter_matching_offers_for_user,
-)
-from market_requests import _primary_watch, filter_market_request_imports
+from market_requests import filter_market_request_imports
 from notifications import NOTIFICATION_TYPE_LABELS, get_unread_notification_count
-from opportunity_engine import (
-    build_profit_display,
-    calculate_potential_spread_usd,
-    market_request_budget_usd,
-)
-from opportunity_intelligence import (
-    URGENCY_NORMAL,
-    confidence_badge_class,
-    normalize_recommendation,
-    recommend_action,
-    recommendation_badge_class,
-)
 from parser_review import build_parser_review_row, filter_parser_review_imports, parser_review_counts
 from permissions import can_access_admin_tools, can_view_page, is_viewer
-from request_profit import attach_profit_to_matches, offer_price_usd
-from search import _nested_record
+from request_profit import attach_profit_to_matches
 from timezone_utils import DISPLAY_TIMEZONE, ensure_utc_datetime, parse_utc_timestamp
 from todays_best_deals import load_dashboard_todays_best_deals
 from user_visibility import can_view_import, filter_imports_for_user
@@ -62,9 +43,6 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_CLIENT_REQUEST_STATUSES = frozenset({"open", "active"})
 
-HIGH_OPPORTUNITY_MIN_SCORE = 75
-TOP_OPPORTUNITIES_LIMIT = 5
-TOP_OPPORTUNITIES_SCAN_LIMIT = 5
 AI_NEEDS_HELP_LIMIT = 5
 LIVE_MARKET_LIMIT = 10
 MATCHED_REQUESTS_LIMIT = DASHBOARD_MATCHED_REQUESTS_LIMIT
@@ -78,11 +56,6 @@ MATCH_STRENGTH_BADGE_CLASSES = {
     "strong": "success",
     "medium": "primary",
 }
-
-LIGHTWEIGHT_BASE_SCORE = 25
-LIGHTWEIGHT_EXACT_BOOST = 35
-LIGHTWEIGHT_ALIAS_BOOST = 20
-LIGHTWEIGHT_BUDGET_ABOVE_BOOST = 25
 
 
 def count_active_client_requests(requests: list[Record]) -> int:
@@ -188,200 +161,6 @@ def count_new_offers_today(import_logs: list[Record], *, now: datetime | None = 
         for import_log in import_logs
         if is_import_today(import_log, now=now)
     )
-
-
-def _score_label_for_points(score: int) -> str:
-    if score >= HIGH_OPPORTUNITY_MIN_SCORE:
-        return "Excellent"
-    if score >= 60:
-        return "Good"
-    if score >= 45:
-        return "Possible"
-    return "Low"
-
-
-def _lightweight_opportunity_score(
-    import_log: Record,
-    offer: Record,
-    *,
-    match_type: str,
-) -> int:
-    """Estimate opportunity score without full Opportunity Analysis."""
-    score = LIGHTWEIGHT_BASE_SCORE
-    if match_type == "exact_reference":
-        score += LIGHTWEIGHT_EXACT_BOOST
-    else:
-        score += LIGHTWEIGHT_ALIAS_BOOST
-
-    budget_usd = market_request_budget_usd(import_log)
-    offer_usd = offer_price_usd(offer)
-    spread_usd = calculate_potential_spread_usd(budget_usd, offer_usd)
-    if spread_usd is not None and spread_usd > 0:
-        score += LIGHTWEIGHT_BUDGET_ABOVE_BOOST
-    return max(score, 0)
-
-
-def _best_lightweight_match(
-    import_log: Record,
-    visible_offers: list[Record],
-) -> Record | None:
-    """Return the best lightweight match for one market request."""
-    criteria = extract_market_request_criteria(import_log)
-    best_offer: Record | None = None
-    best_score = 0
-    best_match_type = ""
-
-    for offer in visible_offers:
-        match_type = classify_market_request_match(criteria, offer)
-        if match_type is None:
-            continue
-        score = _lightweight_opportunity_score(
-            import_log,
-            offer,
-            match_type=match_type,
-        )
-        if score > best_score:
-            best_score = score
-            best_offer = offer
-            best_match_type = match_type
-
-    if best_offer is None or best_score < HIGH_OPPORTUNITY_MIN_SCORE:
-        return None
-
-    dealer = _nested_record(best_offer.get("dealers"))
-    budget_usd = market_request_budget_usd(import_log)
-    offer_usd = offer_price_usd(best_offer)
-    spread_usd = calculate_potential_spread_usd(budget_usd, offer_usd)
-    profit = build_profit_display(budget_usd, spread_usd)
-    score_label = _score_label_for_points(best_score)
-    recommendation = normalize_recommendation(
-        recommend_action(best_score, urgency=URGENCY_NORMAL)
-    )
-
-    return {
-        "score": best_score,
-        "score_label": score_label,
-        "score_badge_class": confidence_badge_class(score_label),
-        "watch_label": _watch_label(import_log),
-        "dealer": dealer_display_name(dealer),
-        "potential_profit": profit.get("potential_profit") or "—",
-        "recommendation": recommendation,
-        "recommendation_badge_class": recommendation_badge_class(recommendation),
-        "detail_url": f"/market-requests/{import_log['id']}",
-        "_sort_score": best_score,
-        "_sort_time": import_log.get("import_time") or "",
-        "_match_type": best_match_type,
-    }
-
-
-def _watch_label(import_log: Record) -> str:
-    watch = _primary_watch(import_log)
-    parts = [
-        str(watch.get("brand") or "").strip(),
-        str(watch.get("reference") or watch.get("model") or watch.get("nickname") or "").strip(),
-    ]
-    label = " ".join(part for part in parts if part)
-    return label or "Market request"
-
-
-def load_dashboard_top_opportunities(
-    user: Record | None,
-    market_request_logs: list[Record],
-    *,
-    limit: int = TOP_OPPORTUNITIES_LIMIT,
-    scan_limit: int = TOP_OPPORTUNITIES_SCAN_LIMIT,
-    now: datetime | None = None,
-) -> tuple[list[Record], int]:
-    """Return top dashboard opportunities using lightweight matching only."""
-    del now  # kept for API compatibility with earlier callers
-    sorted_logs = sorted(
-        market_request_logs,
-        key=lambda row: row.get("import_time") or "",
-        reverse=True,
-    )
-    candidate_logs = sorted_logs[:scan_limit]
-    if not candidate_logs:
-        return [], 0
-
-    from database import list_active_offers_for_market_matching
-
-    offers = list_active_offers_for_market_matching()
-    visible_offers = filter_matching_offers_for_user(offers, user)
-
-    ranked: list[Record] = []
-    high_count = 0
-    for import_log in candidate_logs:
-        match = _best_lightweight_match(import_log, visible_offers)
-        if match is None:
-            continue
-        high_count += 1
-        ranked.append(match)
-
-    ranked.sort(
-        key=lambda row: (row["_sort_score"], row["_sort_time"]),
-        reverse=True,
-    )
-    cleaned: list[Record] = []
-    for row in ranked[:limit]:
-        item = dict(row)
-        item.pop("_sort_score", None)
-        item.pop("_sort_time", None)
-        item.pop("_match_type", None)
-        cleaned.append(item)
-    return cleaned, high_count
-
-
-def load_top_opportunities(
-    user: Record | None,
-    *,
-    limit: int = TOP_OPPORTUNITIES_LIMIT,
-    now: datetime | None = None,
-) -> list[Record]:
-    """Legacy wrapper returning lightweight dashboard opportunities."""
-    import_logs = filter_market_request_imports(
-        filter_discarded_import_logs(
-            filter_imports_for_user(
-                list_dashboard_market_request_import_logs(
-                    limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
-                ),
-                user,
-            )
-        )
-    )
-    rows, _high_count = load_dashboard_top_opportunities(
-        user,
-        import_logs,
-        limit=limit,
-        now=now,
-    )
-    return rows
-
-
-def count_high_opportunities(
-    user: Record | None,
-    market_request_logs: list[Record] | None = None,
-    *,
-    now: datetime | None = None,
-) -> int:
-    """Return how many recent market requests score as high opportunities."""
-    if market_request_logs is None:
-        market_request_logs = filter_market_request_imports(
-            filter_discarded_import_logs(
-                filter_imports_for_user(
-                    list_dashboard_market_request_import_logs(
-                        limit=IMPORT_LOG_LIST_LIMIT_DASHBOARD_MARKET,
-                    ),
-                    user,
-                )
-            )
-        )
-    _rows, high_count = load_dashboard_top_opportunities(
-        user,
-        market_request_logs,
-        limit=TOP_OPPORTUNITIES_LIMIT,
-        now=now,
-    )
-    return high_count
 
 
 def load_ai_needs_help_items(
@@ -594,16 +373,13 @@ def load_dashboard_matched_requests(
 def build_trading_desk_kpis(
     *,
     new_offers_today: int,
-    todays_best_deals: int | None = None,
+    todays_best_deals: int,
     active_market_requests: int,
     active_client_requests: int,
     ai_needs_help: int,
     unread_notifications: int,
-    high_opportunities: int | None = None,
 ) -> list[Record]:
     """Build Today KPI cards for the trading desk."""
-    if todays_best_deals is None:
-        todays_best_deals = 0 if high_opportunities is None else high_opportunities
     return [
         {
             "key": "new_offers_today",

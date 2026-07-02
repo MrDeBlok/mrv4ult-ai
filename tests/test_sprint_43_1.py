@@ -11,10 +11,7 @@ import pytest
 from dashboard_data import (
     AI_NEEDS_HELP_LIMIT,
     LIVE_MARKET_LIMIT,
-    TOP_OPPORTUNITIES_LIMIT,
-    TOP_OPPORTUNITIES_SCAN_LIMIT,
     load_ai_needs_help_items,
-    load_dashboard_top_opportunities,
     load_live_market_rows,
     load_trading_desk,
 )
@@ -26,43 +23,6 @@ from tests.conftest import ADMIN_USER, TRADER_ONE
 
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 TODAY_NOON = datetime(2026, 6, 27, 12, 0, tzinfo=AMSTERDAM)
-
-
-def _market_request(import_id: str, *, brand: str = "Rolex", reference: str = "126610LN") -> dict:
-    return {
-        "id": import_id,
-        "status": "request_intent",
-        "import_time": "2026-06-27T10:00:00+00:00",
-        "summary": {
-            "parsed_watches": [
-                {
-                    "brand": brand,
-                    "reference": reference,
-                    "original_price": 15000,
-                    "original_currency": "USD",
-                }
-            ]
-        },
-    }
-
-
-def _matching_offer(*, reference: str = "126610LN", price: int = 12000) -> dict:
-    return {
-        "id": "offer-1",
-        "dealer_id": "dealer-1",
-        "watch_id": "watch-1",
-        "original_price": price,
-        "original_currency": "USD",
-        "usd_price": price,
-        "status": "active",
-        "watches": {"brand": "Rolex", "reference": reference},
-        "dealers": {
-            "id": "dealer-1",
-            "display_name": "Dealer A",
-            "contact_type": "dealer",
-        },
-        "messages": {"received_at": "2026-06-27T09:00:00+00:00", "groups": {"name": "HK"}},
-    }
 
 
 class TestDashboardSingleFetch:
@@ -103,50 +63,6 @@ class TestDashboardSingleFetch:
         assert "since_iso" in mock_today.call_args.kwargs
         mock_market.assert_called_once_with()
         mock_parser.assert_called_once_with()
-
-
-class TestDashboardLightweightOpportunities:
-    @patch("database.list_active_offers_for_market_matching")
-    @patch("dashboard_data.filter_matching_offers_for_user")
-    def test_top_opportunities_use_lightweight_matching_only(
-        self,
-        mock_filter_offers: MagicMock,
-        mock_list_offers: MagicMock,
-    ) -> None:
-        mock_list_offers.return_value = [_matching_offer()]
-        mock_filter_offers.return_value = [_matching_offer()]
-
-        with patch(
-            "opportunity_engine.build_market_request_opportunity_bundle",
-            side_effect=AssertionError("heavy opportunity analysis should not run"),
-        ):
-            rows, high_count = load_dashboard_top_opportunities(
-                ADMIN_USER,
-                [_market_request("req-1")],
-            )
-
-        assert high_count == 1
-        assert len(rows) == 1
-        assert rows[0]["watch_label"] == "Rolex 126610LN"
-        mock_list_offers.assert_called_once()
-
-    @patch("database.list_active_offers_for_market_matching")
-    @patch("dashboard_data.filter_matching_offers_for_user")
-    def test_top_opportunities_scan_limited_requests(
-        self,
-        mock_filter_offers: MagicMock,
-        mock_list_offers: MagicMock,
-    ) -> None:
-        mock_list_offers.return_value = [_matching_offer()]
-        mock_filter_offers.return_value = [_matching_offer()]
-        market_requests = [
-            _market_request(f"req-{index}", reference=f"126610L{index}")
-            for index in range(TOP_OPPORTUNITIES_SCAN_LIMIT + 3)
-        ]
-
-        rows, _high_count = load_dashboard_top_opportunities(ADMIN_USER, market_requests)
-
-        assert len(rows) <= TOP_OPPORTUNITIES_LIMIT
 
 
 class TestDashboardRowLimits:

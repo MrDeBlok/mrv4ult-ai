@@ -270,3 +270,64 @@ class TestTodaysBestDealsDashboardUi:
         assert response.status_code == 200
         assert "Today's Best Deals" in response.text
         assert "High opportunities" not in response.text
+
+
+LEGACY_HIGH_OPPORTUNITIES_LABELS = (
+    "High Opportunities",
+    "High opportunities",
+    "strong market request matches",
+    "Top opportunities",
+)
+
+
+def _dashboard_payload(**overrides) -> dict:
+    payload = {
+        "kpis": build_trading_desk_kpis(
+            new_offers_today=1,
+            todays_best_deals=2,
+            active_market_requests=3,
+            active_client_requests=4,
+            ai_needs_help=0,
+            unread_notifications=0,
+        ),
+        "quick_actions": [],
+        "matched_requests": [],
+        "todays_best_deals": [_best_deal_row()],
+        "ai_needs_help": [],
+        "live_market": [],
+        "show_ai_needs_help": False,
+        "show_write_actions": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestLegacyHighOpportunitiesRemoved:
+    @patch("app.load_trading_desk")
+    def test_dashboard_html_excludes_legacy_high_opportunities_copy(
+        self,
+        mock_load_desk: MagicMock,
+    ) -> None:
+        mock_load_desk.return_value = _dashboard_payload()
+
+        response = TestClient(app).get("/dashboard")
+
+        assert response.status_code == 200
+        html_lower = response.text.lower()
+        for label in LEGACY_HIGH_OPPORTUNITIES_LABELS:
+            assert label.lower() not in html_lower
+
+    @patch("app.load_trading_desk")
+    def test_todays_best_deals_kpi_links_to_section_anchor(
+        self,
+        mock_load_desk: MagicMock,
+    ) -> None:
+        mock_load_desk.return_value = _dashboard_payload()
+
+        response = TestClient(app).get("/dashboard")
+        best_deals_kpi = _kpi_snippet(response.text, "todays_best_deals", radius=600)
+
+        assert "Today&#39;s Best Deals" in best_deals_kpi
+        assert "Condition-safe offers worth reviewing today." in best_deals_kpi
+        assert 'href="#todays-best-deals"' in best_deals_kpi
+        assert "/market-requests" not in best_deals_kpi
