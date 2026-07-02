@@ -12,20 +12,21 @@ FULLSET_PATTERN = re.compile(r"\bfull\s*set\b", re.I)
 
 def clean_dealer_list_line(line: str) -> str:
     """Remove decorative emoji/checkmarks and normalize whitespace."""
-    from watch_parser import _normalize_glued_brand_prefixes
+    from watch_parser import _normalize_parser_text
 
     cleaned = DECORATION_PATTERN.sub(" ", line)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return _normalize_glued_brand_prefixes(cleaned)
+    return _normalize_parser_text(cleaned)
 
 
 def is_buy_side_list_message(message: str) -> bool:
     """Return True when the message is primarily a buyer request list."""
-    from watch_parser import OFFER_PATTERN, REQUEST_PATTERN
+    from watch_parser import OFFER_PATTERN, REQUEST_PATTERN, _normalize_parser_text
 
-    if OFFER_PATTERN.search(message):
+    normalized = _normalize_parser_text(message)
+    if OFFER_PATTERN.search(normalized):
         return False
-    return bool(REQUEST_PATTERN.search(message))
+    return bool(REQUEST_PATTERN.search(normalized))
 
 
 def is_dealer_list_offer_line(line: str) -> bool:

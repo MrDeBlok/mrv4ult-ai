@@ -87,6 +87,7 @@ WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bbnib\b", re.I), "bnib"),
     (re.compile(r"\bnos\b", re.I), "nos"),
     (re.compile(r"\blnib\b", re.I), "lnib"),
+    (re.compile(r"\bnew\b", re.I), "New"),
     (re.compile(r"\bunworn\b", re.I), "Unworn"),
     (re.compile(r"\bstickered\b", re.I), "stickered"),
     (re.compile(r"\bstickers?\b", re.I), "Sticker"),
@@ -94,7 +95,6 @@ WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bworn\b", re.I), "worn"),
     (re.compile(r"\bused\b", re.I), "Used"),
     (re.compile(r"\bbn\b", re.I), "BN"),
-    (re.compile(r"\bnew\b", re.I), "New"),
 ]
 
 ACCESSORY_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
@@ -121,9 +121,12 @@ ACCESSORY_LINE_PATTERN = re.compile(
 REQUEST_PATTERN = re.compile(
     r"\b("
     r"wtb|"
+    r"ltb|"
+    r"wanted|"
     r"looking\s+for|"
     r"lf\b|"
     r"iso\b|"
+    r"(?<!no\s)\bneed\b|"
     r"need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch)|"
     r"sold[\s_-]*order|"
     r"sold\s+for\s+client|"
@@ -132,7 +135,10 @@ REQUEST_PATTERN = re.compile(
     r")\b",
     re.I,
 )
-OFFER_PATTERN = re.compile(r"\b(fs|for\s+sale|asking|avail(?:able)?|stock)\b", re.I)
+OFFER_PATTERN = re.compile(
+    r"\b(wts|fs|for\s+sale|asking|avail(?:able)?|stock)\b",
+    re.I,
+)
 HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*$", re.I)
 
 NEW_CARD_DATE_PATTERN = re.compile(r"\bn(\d{1,2})/(\d{2})\b", re.I)
@@ -157,11 +163,28 @@ CURRENCY_CODE_PATTERN = r"usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy"
 
 DOTTED_WATCH_REFERENCE_PATTERN = re.compile(r"\b\d{3}\.\d{3}\b")
 
+_GLUED_INTENT_PREFIX_REPLACEMENTS = (
+    (re.compile(r"\b(WTB)(\d)", re.I), r"\1 \2"),
+    (re.compile(r"\b(LTB)(\d)", re.I), r"\1 \2"),
+    (re.compile(r"\b(LF)(\d)", re.I), r"\1 \2"),
+    (re.compile(r"\b(NEED)(\d)", re.I), r"\1 \2"),
+    (re.compile(r"\b(WTS)(\d)", re.I), r"\1 \2"),
+    (re.compile(r"\b(FS)(\d)", re.I), r"\1 \2"),
+)
+
 _GLUED_BRAND_PREFIX_REPLACEMENTS = (
     (re.compile(r"\bAP(\d{4,5}[A-Za-z]{0,4})\b", re.I), r"AP \1"),
     (re.compile(r"\bPP(\d{4}(?:/[0-9A-Z]+)?)\b", re.I), r"PP \1"),
     (re.compile(r"\bRLX(\d{5}[A-Za-z]{0,4})\b", re.I), r"RLX \1"),
 )
+
+
+def _normalize_glued_intent_prefixes(text: str) -> str:
+    """Split glued intent tokens like WTB126334 into WTB 126334."""
+    normalized = text
+    for pattern, replacement in _GLUED_INTENT_PREFIX_REPLACEMENTS:
+        normalized = pattern.sub(replacement, normalized)
+    return normalized
 
 
 def _normalize_glued_brand_prefixes(text: str) -> str:
@@ -170,6 +193,11 @@ def _normalize_glued_brand_prefixes(text: str) -> str:
     for pattern, replacement in _GLUED_BRAND_PREFIX_REPLACEMENTS:
         normalized = pattern.sub(replacement, normalized)
     return normalized
+
+
+def _normalize_parser_text(text: str) -> str:
+    """Apply intent and brand glue normalization before parsing."""
+    return _normalize_glued_brand_prefixes(_normalize_glued_intent_prefixes(text))
 
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{3}\.\d{3})\b"), "A. Lange & Söhne"),
@@ -415,7 +443,7 @@ def empty_watch() -> WatchDict:
 
 def parse_message(message: str) -> ParseResult:
     """Parse a raw WhatsApp message into structured JSON."""
-    text = message.strip()
+    text = _normalize_parser_text(message.strip())
     if not text:
         return {"message_type": "unknown", "watches": []}
 
@@ -638,7 +666,7 @@ def _looks_like_watch_line(line: str, *, brand_hint: str | None = None) -> bool:
 
 def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict | None:
     """Parse a single watch line into a structured watch dict."""
-    text = _normalize_glued_brand_prefixes(_strip_markdown(line.strip()))
+    text = _normalize_parser_text(_strip_markdown(line.strip()))
     if not text:
         return None
 

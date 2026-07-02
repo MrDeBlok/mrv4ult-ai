@@ -10,10 +10,13 @@ Record = dict[str, Any]
 BUYER_REQUEST_PATTERN = re.compile(
     r"\b("
     r"wtb|"
+    r"ltb|"
+    r"wanted|"
     r"want\s+to\s+buy|"
     r"looking\s+for|"
     r"lf\b|"
     r"iso\b|"
+    r"(?<!no\s)\bneed\b|"
     r"need\s+(?:a\s+)?(?:rolex|patek|ap|rm|watch)|"
     r"searching\s+for"
     r")\b",
@@ -31,9 +34,15 @@ SOLD_ORDER_PATTERN = re.compile(
 )
 
 OFFER_INTENT_PATTERN = re.compile(
-    r"\b(fs|for\s+sale|asking|avail(?:able)?|stock|sell(?:ing)?)\b",
+    r"\b(wts|fs|for\s+sale|asking|avail(?:able)?|stock|sell(?:ing)?)\b",
     re.I,
 )
+
+
+def _normalized_message_text(text: str) -> str:
+    from watch_parser import _normalize_parser_text
+
+    return _normalize_parser_text(text)
 
 
 def watch_has_price_signal(watch: Record) -> bool:
@@ -116,7 +125,7 @@ def is_noise_watch(watch: Record) -> bool:
 
 def is_sold_order_message(text: str) -> bool:
     """Return True when the message is an urgent sold-order sourcing request."""
-    return bool(SOLD_ORDER_PATTERN.search(text))
+    return bool(SOLD_ORDER_PATTERN.search(_normalized_message_text(text)))
 
 
 def sold_order_has_actionable_identity(watches: list[Record]) -> bool:
@@ -154,11 +163,12 @@ def enrich_sold_order_watches(watches: list[Record]) -> list[Record]:
 
 def is_buyer_request_message(text: str, parsed: Record) -> bool:
     """Return True when the message is a buyer request rather than a dealer offer."""
-    if OFFER_INTENT_PATTERN.search(text):
+    normalized_text = _normalized_message_text(text)
+    if OFFER_INTENT_PATTERN.search(normalized_text):
         return False
     if is_sold_order_message(text):
         return True
-    if BUYER_REQUEST_PATTERN.search(text):
+    if BUYER_REQUEST_PATTERN.search(normalized_text):
         return True
     if parsed.get("message_type") == "request":
         return True
