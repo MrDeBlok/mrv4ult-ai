@@ -164,8 +164,8 @@ class TestDealAnalysisDataFlow:
         )[0]
 
         assert analysis["condition_label"] == "New"
-        assert analysis["recommendation"] == "Needs Review"
-        assert analysis["market_price"] == "Unknown"
+        assert analysis["market_price"] == "$185,000"
+        assert analysis["recommendation"] == "Good Buy"
 
     def test_condition_mismatch_never_becomes_buy(self) -> None:
         analysis = build_deal_analysis_cards(

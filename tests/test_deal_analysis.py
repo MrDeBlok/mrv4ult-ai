@@ -8,6 +8,7 @@ from app import (
     build_deal_analysis_cards,
 )
 from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION
+from deal_market_lookup import INSUFFICIENT_MARKET_DATA
 
 
 class TestDealRecommendation:
@@ -127,8 +128,7 @@ class TestDealAnalysisCard:
         assert analysis["difference_pct"] is None
         assert analysis["market_rank_display"] is None
         assert analysis["potential_profit"] is None
-        assert analysis["recommendation"] == "Needs Review"
-        assert analysis["recommendation_class"] == "insufficient"
+        assert analysis["recommendation"] == INSUFFICIENT_MARKET_DATA
         assert analysis["market_price"] == "Unknown"
 
     def test_hides_market_metrics_when_market_price_is_zero(self) -> None:
@@ -151,7 +151,7 @@ class TestDealAnalysisCard:
         assert analysis["show_market_metrics"] is False
         assert analysis["difference_pct"] is None
         assert analysis["market_price"] == "Unknown"
-        assert analysis["recommendation"] == "Needs Review"
+        assert analysis["recommendation"] == INSUFFICIENT_MARKET_DATA
         assert analysis["recommendation_class"] == "insufficient"
 
 

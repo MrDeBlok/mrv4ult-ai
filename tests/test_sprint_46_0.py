@@ -9,6 +9,7 @@ from app import (
     build_deal_analysis_cards,
 )
 from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION
+from deal_market_lookup import INSUFFICIENT_MARKET_DATA
 from ingest import _build_price_intelligence, _comparable_usd_prices
 
 
@@ -206,7 +207,7 @@ class TestConditionAwareDealAnalysis:
             )
         )[0]
 
-        assert analysis["recommendation"] == "Needs Review"
+        assert analysis["recommendation"] == INSUFFICIENT_MARKET_DATA
         assert analysis["show_no_matching_market"] is True
         assert analysis["market_price"] == "Unknown"
 

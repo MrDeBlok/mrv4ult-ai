@@ -934,6 +934,8 @@ def _comparable_usd_prices(
         normalized_market = normalize_condition_value(condition)
         if normalized_market != normalized_offer:
             continue
+        if usd_price <= 0:
+            continue
         comparables.append(usd_price)
     return comparables, normalized_offer
 

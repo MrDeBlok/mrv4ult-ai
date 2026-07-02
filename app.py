@@ -1107,19 +1107,26 @@ def _parse_optional_int(value: str) -> int | None:
     return int(cleaned)
 
 
-def build_deal_analysis_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
+def build_deal_analysis_cards(
+    summary: dict[str, Any],
+    *,
+    include_debug: bool = False,
+) -> list[dict[str, Any]]:
     """Build deal analysis cards from watches stored during import."""
     rows = summary.get("rows") or []
     if not rows:
         watches = _deal_analysis_watch_sources(summary)
-        return [_build_deal_analysis({}, watch, index) for index, watch in enumerate(watches)]
+        return [
+            _build_deal_analysis({}, watch, index, include_debug=include_debug)
+            for index, watch in enumerate(watches)
+        ]
 
     parsed_watches = _import_parsed_watches(summary)
     offer_watches = summary.get("offer_watches") or []
     analyses: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         watch = _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
-        analyses.append(_build_deal_analysis(row, watch, index))
+        analyses.append(_build_deal_analysis(row, watch, index, include_debug=include_debug))
     return analyses
 
 
@@ -1309,7 +1316,13 @@ def _resolve_deal_recommendation(
     *,
     comparison_safe: bool,
     confidence: int,
+    insufficient_market_data: bool = False,
 ) -> tuple[str, str]:
+    from deal_market_lookup import INSUFFICIENT_MARKET_DATA
+
+    if insufficient_market_data:
+        return INSUFFICIENT_MARKET_DATA, "insufficient"
+
     if not comparison_safe or market_usd is None:
         return "Needs Review", "insufficient"
 
@@ -1440,16 +1453,25 @@ def _deal_comparison_is_safe(row: dict[str, Any], watch: dict[str, Any]) -> bool
     return True
 
 
-def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int) -> dict[str, Any]:
+def _build_deal_analysis(
+    row: dict[str, Any],
+    watch: dict[str, Any],
+    index: int,
+    *,
+    include_debug: bool = False,
+) -> dict[str, Any]:
+    from deal_market_lookup import resolve_deal_market_context
+
     offer_usd = row.get("usd_price")
     if offer_usd is None:
         offer_usd = watch.get("usd_price")
 
     condition = _deal_condition_display(row, watch)
-    comparison_safe = _deal_comparison_is_safe(row, watch)
-    stored_market_usd = _parse_usd_amount(row.get("previous_lowest_usd"))
-    market_usd = stored_market_usd if comparison_safe else None
-    price_label = row.get("price_label")
+    market_context = resolve_deal_market_context(row, watch, include_debug=include_debug)
+    effective_row = market_context.effective_row
+    comparison_safe = market_context.comparison_safe
+    market_usd = market_context.market_usd
+    price_label = effective_row.get("price_label")
     has_market = market_usd is not None
 
     difference_usd: int | None = None
@@ -1484,6 +1506,7 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
         market_usd,
         comparison_safe=comparison_safe,
         confidence=confidence,
+        insufficient_market_data=market_context.insufficient_market_data,
     )
     parser_confidence = watch.get("confidence")
     if recommendation == "Excellent Buy" and (
@@ -1492,28 +1515,32 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
     ):
         recommendation, recommendation_class = "Good Buy", "good"
 
-    show_condition_warning = not condition["is_known"]
-    show_no_matching_market = condition["is_known"] and not comparison_safe
+    show_condition_warning = market_context.needs_review and not condition["is_known"]
+    show_no_matching_market = (
+        market_context.insufficient_market_data
+        or (condition["is_known"] and not comparison_safe)
+    )
 
     if has_market:
         market_price_display = format_usd_price(market_usd)
     else:
         market_price_display = "Unknown"
 
-    return {
+    result = {
         "title": _deal_analysis_title(row, watch, index),
         "condition_label": condition["label"],
         "condition_icon": condition["icon"],
         "condition_is_known": condition["is_known"],
         "show_condition_warning": show_condition_warning,
         "show_no_matching_market": show_no_matching_market,
+        "market_status_message": market_context.market_status_message,
         "offer_price": format_usd_price(offer_usd) if offer_usd is not None else "N/A",
         "market_price": market_price_display,
         "show_market_metrics": has_market,
         "difference": _format_signed_usd(difference_usd) if has_market else None,
         "difference_pct": difference_pct,
         "market_rank_display": (
-            f"#{row.get('rank')}" if has_market and _has_display_value(row.get("rank")) else None
+            f"#{effective_row.get('rank')}" if has_market and _has_display_value(effective_row.get("rank")) else None
         ),
         "market_position_label": market_position_label,
         "market_position_amount": market_position_amount,
@@ -1523,6 +1550,9 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
         "potential_profit": format_usd_price(potential_profit) if has_market else None,
         "potential_profit_positive": has_market and potential_profit is not None and potential_profit > 0,
     }
+    if include_debug and market_context.debug:
+        result["debug"] = market_context.debug
+    return result
 
 
 def _parse_signed_usd(value: Any) -> int | None:
@@ -1559,6 +1589,8 @@ def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
 def build_activity_detail(
     import_log: dict[str, Any],
     message: dict[str, Any] | None,
+    *,
+    show_deal_debug: bool = False,
 ) -> dict[str, Any]:
     """Format one import log for the detail page."""
     summary = import_log.get("summary") or {}
@@ -1584,9 +1616,10 @@ def build_activity_detail(
         "status_class": import_status_class(status),
         "status_reason": import_status_reason(import_log),
         "raw_message": raw_message,
-        "deal_analyses": build_deal_analysis_cards(summary),
+        "deal_analyses": build_deal_analysis_cards(summary, include_debug=show_deal_debug),
         "watch_cards": build_watch_offer_cards(summary),
         "rows": rows,
+        "show_deal_debug": show_deal_debug,
         "match_notification": (
             f"{import_log.get('matched_requests', 0)} client request(s) matched this import."
             if import_log.get("matched_requests", 0)
@@ -2144,7 +2177,13 @@ async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "activity_detail.html",
-        {"detail": build_activity_detail(import_log, message)},
+        {
+            "detail": build_activity_detail(
+                import_log,
+                message,
+                show_deal_debug=can_access_admin_tools(user),
+            )
+        },
     )
 
 

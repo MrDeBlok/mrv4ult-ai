@@ -27,7 +27,9 @@ The handler:
 3. Maps group messages to `WhatsAppMessage`
 4. Calls `collect_message()` → existing ingest pipeline
 
-Only **WhatsApp group** messages are imported. Direct (1:1) chats are skipped.
+Only **WhatsApp group and private dealer** messages are imported. Direct chats are mapped to the synthetic group `Private Offers`.
+
+Private chats that arrive with WhatsApp `@lid` identifiers are supported when a phone or stable LID contact id can be resolved from the webhook payload.
 
 ---
 
@@ -204,7 +206,8 @@ Ignored payloads return HTTP 200 with `"status": "ignored"` (for example outgoin
 | No webhook logs | Webhook URL not reachable from Docker; try ngrok or `host.docker.internal`. |
 | `Group name not found` | Should no longer block imports (Sprint 18.2 fetches metadata or falls back to remoteJid). If imports still fail, check Evolution API connectivity and instance name in `.env`. |
 | `outgoing message` | Expected for messages you send from the linked WhatsApp account. |
-| `Only WhatsApp group messages` | Message was a direct chat, not a group. |
+| `Only WhatsApp group messages` | Legacy note — private dealer chats are imported as `Private Offers`. |
+| `Could not determine dealer WhatsApp number` | Participant arrived as `@lid` without phone fields; check `[WhatsApp webhook trace]` logs for skip reason. |
 | Import error in logs | Supabase credentials, schema, or parser issue — check uvicorn traceback. |
 
 ---

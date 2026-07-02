@@ -26,6 +26,7 @@ from whatsapp_ingest_config import (
 logger = logging.getLogger("mrv4ult.whatsapp.ingest")
 
 PRIVATE_OFFERS_GROUP_NAME = "Private Offers"
+WEBHOOK_TRACE_PREFIX = "[WhatsApp webhook trace]"
 
 _group_name_cache: dict[str, str] = {}
 
@@ -42,79 +43,186 @@ def log_webhook_payload(payload: dict[str, Any]) -> None:
     )
 
 
+def _text_preview(text: str | None, *, limit: int = 120) -> str:
+    if not text:
+        return ""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 3]}..."
+
+
+def build_webhook_trace(payload: dict[str, Any], data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build admin/debug trace fields for one Evolution webhook."""
+    message_data = data if isinstance(data, dict) else unwrap_message_data(payload.get("data"))
+    key = (message_data or {}).get("key") or {} if isinstance(message_data, dict) else {}
+    remote_jid = str(key.get("remoteJid") or "")
+    remote_jid_alt = str(key.get("remoteJidAlt") or "")
+    chat_id = remote_jid or remote_jid_alt or "—"
+    group_name = None
+    if isinstance(message_data, dict):
+        for candidate in (
+            _group_name_cache.get(remote_jid),
+            message_data.get("subject"),
+            message_data.get("groupSubject"),
+            message_data.get("name"),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                group_name = candidate.strip()
+                break
+    message_text = extract_message_text(message_data) if isinstance(message_data, dict) else None
+    sender_id = resolve_dealer_whatsapp(key, message_data or {}, payload) if isinstance(message_data, dict) else None
+    if sender_id is None and isinstance(message_data, dict) and is_private_chat(key):
+        sender_id = resolve_private_dealer_whatsapp(key, message_data or {}, payload)
+
+    return {
+        "event_type": normalize_event_name(payload.get("event")) or "—",
+        "instance_name": str(payload.get("instance") or "—"),
+        "chat_id": chat_id,
+        "group_name": group_name or ("Private Offers" if is_private_chat(key) else "—"),
+        "sender_id": sender_id or "—",
+        "sender_name": extract_dealer_alias(message_data or {}) or "—",
+        "message_id": extract_whatsapp_message_id(message_data or {}) or "—",
+        "message_text_preview": _text_preview(message_text) or "—",
+        "message_type": extract_message_type(message_data or {}) or "—",
+        "from_me": is_from_me(message_data or {}) if isinstance(message_data, dict) else False,
+        "is_group": is_group_jid(remote_jid),
+        "is_private": is_private_chat(key),
+        "filters": {
+            "ignored_private_chats": False,
+            "group_whitelist": False,
+            "group_blacklist": False,
+            "business_group_filter": False,
+            "from_me_filter": is_from_me(message_data or {}) if isinstance(message_data, dict) else False,
+            "message_type_filter": False,
+            "empty_text_filter": not bool(message_text),
+            "duplicate_message_filter": False,
+            "contact_visibility_filter": False,
+            "dealer_classification_filter": False,
+            "group_classification_filter": False,
+            "unsupported_event_filter": normalize_event_name(payload.get("event")) not in {"messages.upsert"},
+        },
+    }
+
+
+def log_webhook_trace(
+    trace: dict[str, Any],
+    *,
+    decision: str,
+    skip_reason: str | None = None,
+) -> None:
+    """Log one webhook decision with full trace context."""
+    filters = trace.get("filters") or {}
+    logger.info(
+        "%s decision=%s skip_reason=%s event_type=%s instance=%s chat_id=%s "
+        "group_name=%s sender_id=%s sender_name=%s message_id=%s text_preview=%s "
+        "message_type=%s from_me=%s is_group=%s is_private=%s "
+        "filters={ignored_private:%s group_whitelist:%s group_blacklist:%s business_group:%s "
+        "from_me:%s message_type:%s empty_text:%s duplicate:%s contact_visibility:%s "
+        "dealer_classification:%s group_classification:%s unsupported_event:%s}",
+        WEBHOOK_TRACE_PREFIX,
+        decision,
+        skip_reason or "—",
+        trace.get("event_type"),
+        trace.get("instance_name"),
+        trace.get("chat_id"),
+        trace.get("group_name"),
+        trace.get("sender_id"),
+        trace.get("sender_name"),
+        trace.get("message_id"),
+        trace.get("message_text_preview"),
+        trace.get("message_type"),
+        trace.get("from_me"),
+        trace.get("is_group"),
+        trace.get("is_private"),
+        filters.get("ignored_private_chats"),
+        filters.get("group_whitelist"),
+        filters.get("group_blacklist"),
+        filters.get("business_group_filter"),
+        filters.get("from_me_filter"),
+        filters.get("message_type_filter"),
+        filters.get("empty_text_filter"),
+        filters.get("duplicate_message_filter"),
+        filters.get("contact_visibility_filter"),
+        filters.get("dealer_classification_filter"),
+        filters.get("group_classification_filter"),
+        filters.get("unsupported_event_filter"),
+    )
+
+
 def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     """Process one Evolution API webhook payload."""
     log_webhook_payload(payload)
-    event = normalize_event_name(payload.get("event"))
-    instance_name = str(payload.get("instance") or "")
-    data = payload.get("data")
-    preview_message_id = None
-    if isinstance(data, dict):
-        preview_message_id = extract_whatsapp_message_id(data)
-    logger.info(
-        "[WhatsApp ingest] New webhook received: event=%s instance=%s whatsapp_message_id=%s "
-        "(listener does not replay history; each POST is a separate ingest attempt)",
-        event or "missing",
-        instance_name or "unknown",
-        preview_message_id or "missing",
-    )
+    trace = build_webhook_trace(payload)
+    log_webhook_trace(trace, decision="received")
+    event = trace["event_type"] if trace["event_type"] != "—" else ""
+    instance_name = trace["instance_name"] if trace["instance_name"] != "—" else ""
 
     if event in {"groups.upsert", "groups.update", "group.update"}:
         update_group_name_cache(payload.get("data"))
-        logger.info("[WhatsApp ingest] Message skipped: reason=group metadata event=%s", event)
-        return {"status": "ignored", "reason": "group metadata event"}
+        reason = "group metadata event"
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     if event in {"chats.upsert", "chats.update"}:
         update_group_name_cache(payload.get("data"))
-        logger.info("[WhatsApp ingest] Message skipped: reason=chat metadata event=%s", event)
-        return {"status": "ignored", "reason": "chat metadata event"}
+        reason = "chat metadata event"
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     if event not in {"messages.upsert"}:
-        logger.info(
-            "[WhatsApp ingest] Message skipped: reason=unsupported event=%s",
-            event or "missing",
-        )
-        return {"status": "ignored", "reason": f"unsupported event: {event or 'missing'}"}
+        reason = f"unsupported event: {event or 'missing'}"
+        trace["filters"]["unsupported_event_filter"] = True
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     if not is_whatsapp_webhook_ingest_enabled():
-        logger.info(
-            "[WhatsApp ingest] Message skipped: reason=webhook ingest disabled "
-            "(ENABLE_WHATSAPP_WEBHOOK_INGEST=false)"
-        )
-        return {"status": "ignored", "reason": "webhook ingest disabled"}
+        reason = "webhook ingest disabled"
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     data = unwrap_message_data(payload.get("data"))
     if not isinstance(data, dict):
-        logger.info("[WhatsApp ingest] Message skipped: reason=missing message data")
-        return {"status": "ignored", "reason": "missing message data"}
+        reason = "missing message data"
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
+
+    trace = build_webhook_trace(payload, data)
 
     if is_from_me(data):
-        logger.info("[WhatsApp ingest] Message skipped: reason=outgoing message")
-        return {"status": "ignored", "reason": "outgoing message"}
+        reason = "outgoing message"
+        trace["filters"]["from_me_filter"] = True
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     message_text = extract_message_text(data)
     if not message_text:
-        logger.info("[WhatsApp ingest] Message skipped: reason=no text content")
-        return {"status": "ignored", "reason": "no text content"}
+        reason = "no text content"
+        trace["filters"]["empty_text_filter"] = True
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
 
     whatsapp_message_id = extract_whatsapp_message_id(data)
     if whatsapp_message_id:
         from database import find_message_by_whatsapp_id
 
         if find_message_by_whatsapp_id(whatsapp_message_id):
-            logger.info(
-                "[WhatsApp ingest] Skipped already imported whatsapp_message_id=%s",
-                whatsapp_message_id,
-            )
+            reason = "duplicate whatsapp_message_id"
+            trace["filters"]["duplicate_message_filter"] = True
+            log_webhook_trace(trace, decision="skipped", skip_reason=reason)
             return {
                 "status": "already_imported",
                 "already_processed": True,
                 "whatsapp_message_id": whatsapp_message_id,
+                "reason": reason,
+                "trace": trace,
             }
 
     received_at = extract_received_at(data, payload)
     if should_skip_backlog_message(received_at):
+        reason = "backlog ingest disabled"
         started_at = get_app_started_at()
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
         logger.info(
             "Skipped backlog message: whatsapp_message_id=%s received_at=%s app_started_at=%s",
             whatsapp_message_id or "missing",
@@ -123,9 +231,10 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "status": "skipped_backlog",
-            "reason": "backlog ingest disabled",
+            "reason": reason,
             "whatsapp_message_id": whatsapp_message_id,
             "received_at": received_at.isoformat(),
+            "trace": trace,
         }
 
     key = data.get("key") or {}
@@ -138,12 +247,22 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         extract_dealer_alias(data) or "N/A",
     )
 
-    whatsapp_message = map_payload_to_whatsapp_message(
-        payload,
-        data,
-        message_text,
-        whatsapp_message_id=whatsapp_message_id,
-    )
+    try:
+        whatsapp_message = map_payload_to_whatsapp_message(
+            payload,
+            data,
+            message_text,
+            whatsapp_message_id=whatsapp_message_id,
+        )
+    except WebhookProcessingError as exc:
+        reason = str(exc)
+        log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+        return {"status": "ignored", "reason": reason, "trace": trace}
+
+    trace = build_webhook_trace(payload, data)
+    trace["sender_id"] = whatsapp_message.dealer_whatsapp
+    trace["group_name"] = whatsapp_message.group_name
+    log_webhook_trace(trace, decision="accepted")
     logger.info(
         "[WhatsApp ingest] Sending to ingest: whatsapp_message_id=%s group=%s dealer=%s alias=%s",
         whatsapp_message.whatsapp_message_id or "missing",
@@ -187,6 +306,7 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         "new_offers": summary.get("new_offers"),
         "duplicate_offers": summary.get("duplicate_offers"),
         "import_log_id": summary.get("import_log_id"),
+        "trace": trace,
     }
 
 
@@ -223,16 +343,44 @@ def is_from_me(data: dict[str, Any]) -> bool:
     return bool(key.get("fromMe"))
 
 
+def extract_message_type(data: dict[str, Any]) -> str | None:
+    message_type = data.get("messageType")
+    if isinstance(message_type, str) and message_type.strip():
+        return message_type.strip()
+    message = data.get("message")
+    if isinstance(message, dict):
+        for key in message:
+            if key.endswith("Message") or key == "conversation":
+                return key
+    return None
+
+
 def extract_message_text(data: dict[str, Any]) -> str | None:
     message = data.get("message")
     if not isinstance(message, dict):
         return None
 
+    for wrapper_key in (
+        "ephemeralMessage",
+        "viewOnceMessage",
+        "documentWithCaptionMessage",
+        "editedMessage",
+    ):
+        wrapper = message.get(wrapper_key)
+        if isinstance(wrapper, dict) and isinstance(wrapper.get("message"), dict):
+            nested = extract_message_text({"message": wrapper["message"]})
+            if nested:
+                return nested
+
     for value in (
         message.get("conversation"),
         (message.get("extendedTextMessage") or {}).get("text"),
         (message.get("imageMessage") or {}).get("caption"),
+        (message.get("videoMessage") or {}).get("caption"),
         (message.get("documentMessage") or {}).get("caption"),
+        (message.get("buttonsResponseMessage") or {}).get("selectedDisplayText"),
+        (message.get("listResponseMessage") or {}).get("title"),
+        (message.get("templateButtonReplyMessage") or {}).get("selectedDisplayText"),
     ):
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -255,7 +403,7 @@ def map_payload_to_whatsapp_message(
             "[Evolution webhook private] Private message detected: %s",
             remote_jid or key.get("remoteJidAlt") or payload.get("sender"),
         )
-        dealer_whatsapp = resolve_private_dealer_whatsapp(key, payload)
+        dealer_whatsapp = resolve_private_dealer_whatsapp(key, data, payload)
         if not dealer_whatsapp:
             raise WebhookProcessingError(
                 "Could not determine dealer WhatsApp number for private message."
@@ -356,31 +504,40 @@ def resolve_group_name(
     return group_jid
 
 
+def _participant_candidates(
+    key: dict[str, Any],
+    data: dict[str, Any],
+) -> list[Any]:
+    context_info = data.get("contextInfo") if isinstance(data.get("contextInfo"), dict) else {}
+    return [
+        key.get("participantAlt"),
+        key.get("participantPn"),
+        key.get("senderPn"),
+        key.get("participant"),
+        key.get("remoteJidAlt"),
+        data.get("participantAlt"),
+        data.get("participantPn"),
+        data.get("senderPn"),
+        data.get("participant"),
+        data.get("sender"),
+        context_info.get("participant"),
+    ]
+
+
 def resolve_dealer_whatsapp(
     key: dict[str, Any],
     data: dict[str, Any],
     payload: dict[str, Any],
 ) -> str | None:
-    candidates = [
-        key.get("participantAlt"),
-        key.get("participant"),
-        key.get("participantPn"),
-        key.get("senderPn"),
-        data.get("participant"),
-        data.get("participantAlt"),
-        data.get("participantPn"),
-        data.get("senderPn"),
-        payload.get("sender"),
-    ]
-
-    for candidate in candidates:
-        phone = jid_to_phone(str(candidate)) if candidate else None
+    del payload  # Instance-level sender must not be used as message participant.
+    for candidate in _participant_candidates(key, data):
+        phone = jid_to_contact_id(str(candidate)) if candidate else None
         if phone:
             return phone
 
     logger.warning(
         "[WhatsApp ingest] Could not resolve dealer phone from key=%s data_participant=%s",
-        {field: key.get(field) for field in ("participant", "participantAlt", "participantPn", "senderPn")},
+        {field: key.get(field) for field in ("participant", "participantAlt", "participantPn", "senderPn", "remoteJidAlt")},
         data.get("participant"),
     )
     return None
@@ -388,17 +545,20 @@ def resolve_dealer_whatsapp(
 
 def resolve_private_dealer_whatsapp(
     key: dict[str, Any],
+    data: dict[str, Any],
     payload: dict[str, Any],
 ) -> str | None:
+    del payload
     candidates = [
         key.get("remoteJidAlt"),
-        key.get("remoteJid"),
         key.get("senderPn"),
-        payload.get("sender"),
+        key.get("remoteJid"),
+        data.get("senderPn"),
+        data.get("sender"),
     ]
 
     for candidate in candidates:
-        phone = jid_to_phone(str(candidate)) if candidate else None
+        phone = jid_to_contact_id(str(candidate)) if candidate else None
         if phone:
             return phone
 
@@ -465,22 +625,42 @@ def is_private_jid(jid: str) -> bool:
 def is_private_chat(key: dict[str, Any]) -> bool:
     remote_jid = str(key.get("remoteJid") or "")
     remote_jid_alt = str(key.get("remoteJidAlt") or "")
-    return is_private_jid(remote_jid) or is_private_jid(remote_jid_alt)
+    if is_private_jid(remote_jid) or is_private_jid(remote_jid_alt):
+        return True
+    if remote_jid.endswith("@lid") and not is_group_jid(remote_jid):
+        return True
+    return False
 
 
-def jid_to_phone(jid: str) -> str | None:
-    cleaned = jid.strip()
+def jid_to_contact_id(value: str) -> str | None:
+    """Return a dealer contact id from a WhatsApp JID, LID, or plain phone."""
+    cleaned = value.strip()
     if not cleaned or "@g.us" in cleaned:
         return None
 
-    if "@lid" in cleaned:
-        return None
+    if "@" not in cleaned:
+        digits = re.sub(r"\D", "", cleaned)
+        if not digits:
+            return None
+        return cleaned if cleaned.startswith("+") else digits
 
-    user_part = cleaned.split("@", 1)[0]
+    user_part, suffix = cleaned.split("@", 1)
     digits = re.sub(r"\D", "", user_part)
     if not digits:
         return None
 
-    if cleaned.startswith("+"):
-        return f"+{digits}"
-    return digits
+    if suffix == "s.whatsapp.net":
+        return cleaned if cleaned.startswith("+") else digits
+
+    if suffix == "lid":
+        return f"lid:{digits}"
+
+    return None
+
+
+def jid_to_phone(jid: str) -> str | None:
+    """Backward-compatible alias for contact id extraction."""
+    contact_id = jid_to_contact_id(jid)
+    if contact_id and contact_id.startswith("lid:"):
+        return None
+    return contact_id

@@ -80,7 +80,7 @@ WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
     (re.compile(r"\bunworn\s+complete\b", re.I), "Unworn complete"),
     (re.compile(r"\bfull\s+stickers?\b", re.I), "Full stickers"),
-    (re.compile(r"\bpre\s*owned\b", re.I), "Pre-Owned"),
+    (re.compile(r"\bpre[-\s]?owned\b", re.I), "Pre-Owned"),
     (re.compile(r"\bpreowned\b", re.I), "Preowned"),
     (re.compile(r"\bpre\s+owned\b", re.I), "Pre owned"),
     (re.compile(r"\bsecond\s+hand\b", re.I), "Second hand"),

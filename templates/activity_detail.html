@@ -86,7 +86,7 @@
                     </div>
                     {% elif deal.show_no_matching_market %}
                     <div class="deal-analysis-alert deal-analysis-alert-info" role="alert">
-                        No matching market data available for this condition.
+                        {{ deal.market_status_message or "No matching market data available for this condition." }}
                     </div>
                     {% endif %}
 
@@ -133,6 +133,35 @@
                         <span class="deal-recommendation-label">Recommendation</span>
                         <span class="deal-recommendation-value">{{ deal.recommendation }}</span>
                     </div>
+                    {% if detail.show_deal_debug and deal.debug %}
+                    <div class="deal-analysis-debug mt-3">
+                        <div class="text-muted small fw-semibold mb-2">Admin debug</div>
+                        <dl class="row mb-0 small">
+                            <dt class="col-sm-5">watch_id</dt>
+                            <dd class="col-sm-7">{{ deal.debug.watch_id }}</dd>
+                            <dt class="col-sm-5">brand</dt>
+                            <dd class="col-sm-7">{{ deal.debug.brand }}</dd>
+                            <dt class="col-sm-5">reference</dt>
+                            <dd class="col-sm-7">{{ deal.debug.reference }}</dd>
+                            <dt class="col-sm-5">normalized condition</dt>
+                            <dd class="col-sm-7">{{ deal.debug.normalized_condition }}</dd>
+                            <dt class="col-sm-5">market_condition</dt>
+                            <dd class="col-sm-7">{{ deal.debug.market_condition }}</dd>
+                            <dt class="col-sm-5">active comparables (before filter)</dt>
+                            <dd class="col-sm-7">{{ deal.debug.active_comparables_before_condition_filter }}</dd>
+                            <dt class="col-sm-5">active comparables (after filter)</dt>
+                            <dd class="col-sm-7">{{ deal.debug.active_comparables_after_condition_filter }}</dd>
+                            <dt class="col-sm-5">comparable offer IDs</dt>
+                            <dd class="col-sm-7">{{ deal.debug.comparable_offer_ids | join(", ") if deal.debug.comparable_offer_ids else "—" }}</dd>
+                            <dt class="col-sm-5">comparable prices</dt>
+                            <dd class="col-sm-7">{{ deal.debug.comparable_prices | join(", ") if deal.debug.comparable_prices else "—" }}</dd>
+                            <dt class="col-sm-5">comparable conditions</dt>
+                            <dd class="col-sm-7">{{ deal.debug.comparable_conditions | join(", ") if deal.debug.comparable_conditions else "—" }}</dd>
+                            <dt class="col-sm-5">market price unknown reason</dt>
+                            <dd class="col-sm-7">{{ deal.debug.market_price_unknown_reason }}</dd>
+                        </dl>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
