@@ -202,6 +202,7 @@ def reprocess_import_log(
         "rows": list(old_summary.get("rows") or []),
         "bulk_import": bulk_mode,
         "parsed_watches": list(parsed_watches),
+        "offer_watches": list(offer_watches),
         "message_type": parsed.get("message_type") or "unknown",
     }
 
@@ -328,3 +329,23 @@ def apply_workbench_fix(
         )
 
     raise ValueError(f"Unsupported fix action: {fix_action}")
+
+
+def _finalize_workbench_fix(import_log_id: str, import_log: Record) -> Record:
+    """Mark resolved imports reviewed once reprocess succeeds."""
+    from database import mark_import_parser_reviewed
+    from import_status import normalize_import_status
+
+    if normalize_import_status(import_log) == "success":
+        return mark_import_parser_reviewed(import_log_id)
+    return import_log
+
+
+def apply_workbench_fix_and_finalize(
+    import_log_id: str,
+    fix_action: str,
+    **kwargs: Any,
+) -> Record:
+    """Apply a workbench fix and finalize the import queue state."""
+    import_log = apply_workbench_fix(import_log_id, fix_action, **kwargs)
+    return _finalize_workbench_fix(import_log_id, import_log)

@@ -39,6 +39,7 @@ NAV_GROUPS: tuple[Record, ...] = (
         "label": "AI",
         "admin_only": True,
         "links": (
+            {"label": "AI Health", "path": "/ai-health", "match": "prefix"},
             {"label": "AI Workbench", "path": "/parser-review", "match": "prefix"},
             {"label": "Unknown Brands", "path": "/knowledge/unknown-brands", "match": "prefix"},
             {"label": "Unknown Nicknames", "path": "/knowledge/unknown-nicknames", "match": "prefix"},

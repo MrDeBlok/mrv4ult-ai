@@ -250,7 +250,7 @@ class TestWorkbenchFixActions:
 
 class TestWorkbenchRoutes:
     @patch("app.get_current_user", return_value=ADMIN_USER)
-    @patch("app.apply_workbench_fix")
+    @patch("app.apply_workbench_fix_and_finalize")
     @patch("app.get_import_log")
     def test_fix_route_reprocesses_import(
         self,

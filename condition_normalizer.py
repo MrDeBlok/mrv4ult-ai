@@ -18,6 +18,10 @@ NEW_ALIASES: dict[str, str] = {
     "bnib": NEW_CONDITION,
     "nos": NEW_CONDITION,
     "unworn complete": NEW_CONDITION,
+    "sticker": NEW_CONDITION,
+    "stickers": NEW_CONDITION,
+    "full stickers": NEW_CONDITION,
+    "stickered": NEW_CONDITION,
 }
 
 PRE_OWNED_ALIASES: dict[str, str] = {
@@ -28,6 +32,7 @@ PRE_OWNED_ALIASES: dict[str, str] = {
     "preowned": PRE_OWNED_CONDITION,
     "used": PRE_OWNED_CONDITION,
     "lnib": PRE_OWNED_CONDITION,
+    "second hand": PRE_OWNED_CONDITION,
 }
 
 ACCESSORY_CONDITIONS = frozenset(
@@ -38,7 +43,6 @@ ACCESSORY_CONDITIONS = frozenset(
         "papers",
         "papers only",
         "complete",
-        "stickered",
     }
 )
 
@@ -174,6 +178,15 @@ def normalized_wear_condition_for_comparison(value: str | None) -> str | None:
     return None
 
 
+def resolve_offer_wear_condition(*values: str | None) -> str | None:
+    """Return the first canonical wear condition found across stored values."""
+    for value in values:
+        normalized = normalized_wear_condition_for_comparison(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
 def deal_condition_label(value: str | None) -> str:
     """Return New, Pre-Owned, or Unknown for deal analysis display."""
     normalized = normalized_wear_condition_for_comparison(value)
@@ -186,8 +199,8 @@ def deal_condition_label(value: str | None) -> str:
 
 def import_row_has_safe_price_comparison(row: Record) -> bool:
     """Return whether import price intelligence used a same-condition market."""
-    offer_condition = normalized_wear_condition_for_comparison(row.get("condition"))
-    market_condition = row.get("market_condition")
+    offer_condition = resolve_offer_wear_condition(row.get("condition"), row.get("raw_condition"))
+    market_condition = normalize_condition_value(row.get("market_condition"))
     if offer_condition is None:
         return False
     if market_condition not in {NEW_CONDITION, PRE_OWNED_CONDITION}:

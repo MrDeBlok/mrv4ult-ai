@@ -759,6 +759,7 @@ def ingest_message(
     )
     summary["status_reason"] = status_reason
     summary["parsed_watches"] = list(parsed_watches)
+    summary["offer_watches"] = list(offer_watches)
     summary["message_type"] = parsed["message_type"]
     if is_buyer_request_message(text, parsed):
         summary["message_type"] = "request"

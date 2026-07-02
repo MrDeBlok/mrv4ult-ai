@@ -23,10 +23,11 @@ from condition_normalizer import (
     REQUEST_CONDITION_FORM_OPTIONS,
     deal_condition_label,
     display_condition,
-    normalized_wear_condition_for_comparison,
+    normalize_condition_value,
     parse_request_condition_form,
     request_condition_display,
     request_condition_form_value,
+    resolve_offer_wear_condition,
 )
 from model_aliases import alias_display_fields, enrich_with_model_alias
 from watch_knowledge import enrich_parsed_watch, knowledge_display_fields, lookup_reference
@@ -40,7 +41,12 @@ from parser_review import (
     PARSER_REVIEW_FILTERS,
     load_parser_review_page_data,
 )
-from parser_workbench import CONDITION_FIX_OPTIONS, WORKBENCH_CURRENCIES, apply_workbench_fix
+from parser_accuracy import IMPORT_ACCURACY_SCAN_LIMIT, load_ai_health_dashboard, load_parser_accuracy_dashboard
+from parser_workbench import (
+    CONDITION_FIX_OPTIONS,
+    WORKBENCH_CURRENCIES,
+    apply_workbench_fix_and_finalize,
+)
 from import_status import (
     filter_discarded_import_logs,
     format_import_status,
@@ -81,6 +87,7 @@ from database import (
     list_dealers,
     list_dealer_import_activity_logs,
     list_dealer_offer_counts,
+    list_parser_accuracy_import_logs,
     list_parser_review_import_log_candidates,
     list_import_logs,
     list_notifications,
@@ -1107,24 +1114,32 @@ def _parse_optional_int(value: str) -> int | None:
 
 def build_deal_analysis_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Build deal analysis cards from watches stored during import."""
-    watches = _deal_analysis_watch_sources(summary)
     rows = summary.get("rows") or []
+    if not rows:
+        watches = _deal_analysis_watch_sources(summary)
+        return [_build_deal_analysis({}, watch, index) for index, watch in enumerate(watches)]
 
+    parsed_watches = _import_parsed_watches(summary)
+    offer_watches = summary.get("offer_watches") or []
     analyses: list[dict[str, Any]] = []
-    for index, watch in enumerate(watches):
-        row = rows[index] if index < len(rows) else {}
+    for index, row in enumerate(rows):
+        watch = _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
         analyses.append(_build_deal_analysis(row, watch, index))
     return analyses
 
 
 def build_watch_offer_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Build card view models from watches stored during import."""
-    watches = _deal_analysis_watch_sources(summary)
     rows = summary.get("rows") or []
+    if not rows:
+        watches = _deal_analysis_watch_sources(summary)
+        return [_build_watch_offer_card({}, watch, index) for index, watch in enumerate(watches)]
 
+    parsed_watches = _import_parsed_watches(summary)
+    offer_watches = summary.get("offer_watches") or []
     cards: list[dict[str, Any]] = []
-    for index, watch in enumerate(watches):
-        row = rows[index] if index < len(rows) else {}
+    for index, row in enumerate(rows):
+        watch = _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
         cards.append(_build_watch_offer_card(row, watch, index))
     return cards
 
@@ -1155,7 +1170,7 @@ def _import_parsed_watches(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _deal_analysis_watch_sources(summary: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one stored watch object per parsed import watch."""
+    """Return one stored watch object per import offer row."""
     if summary.get("status") == "insufficient_evidence":
         return []
     if summary.get("import_classification") == "insufficient_evidence":
@@ -1163,15 +1178,76 @@ def _deal_analysis_watch_sources(summary: dict[str, Any]) -> list[dict[str, Any]
     if summary.get("import_classification") == "request_intent":
         return []
 
+    rows = summary.get("rows") or []
+    if rows:
+        parsed_watches = _import_parsed_watches(summary)
+        offer_watches = summary.get("offer_watches") or []
+        return [
+            _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
+            for index, row in enumerate(rows)
+        ]
+
     parsed_watches = _import_parsed_watches(summary)
     if parsed_watches:
         return parsed_watches
 
-    rows = summary.get("rows") or []
-    if isinstance(rows, list) and rows:
-        return rows
+    return rows
 
-    return []
+
+def _normalize_watch_identity_token(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned or cleaned.upper() in {"N/A", "UNKNOWN"}:
+        return None
+    return cleaned.lower()
+
+
+def _watch_identity_matches(row: dict[str, Any], watch: dict[str, Any]) -> bool:
+    row_ref = _normalize_watch_identity_token(row.get("reference"))
+    watch_ref = _normalize_watch_identity_token(watch.get("reference"))
+    if row_ref and watch_ref and row_ref != watch_ref:
+        return False
+
+    row_brand = _normalize_watch_identity_token(row.get("brand"))
+    watch_brand = _normalize_watch_identity_token(watch.get("brand"))
+    if row_brand and watch_brand and row_brand != watch_brand:
+        return False
+
+    return bool(row_ref or watch_ref or row_brand or watch_brand)
+
+
+def _watch_context_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    watch: dict[str, Any] = {}
+    for key in ("brand", "reference", "model", "condition", "raw_condition", "usd_price", "confidence"):
+        value = row.get(key)
+        if value is not None:
+            watch[key] = value
+    return watch
+
+
+def _resolve_deal_analysis_watch(
+    row: dict[str, Any],
+    offer_watches: list[dict[str, Any]],
+    parsed_watches: list[dict[str, Any]],
+    index: int,
+) -> dict[str, Any]:
+    """Match a summary row to the parsed offer watch used during ingest."""
+    if index < len(offer_watches):
+        candidate = offer_watches[index]
+        if _watch_identity_matches(row, candidate):
+            return candidate
+
+    for candidates in (offer_watches, parsed_watches):
+        for candidate in candidates:
+            if _watch_identity_matches(row, candidate):
+                return candidate
+
+    if index < len(offer_watches):
+        return offer_watches[index]
+    if index < len(parsed_watches):
+        return parsed_watches[index]
+    return _watch_context_from_row(row)
 
 
 def _parse_usd_amount(value: Any) -> int | None:
@@ -1274,15 +1350,21 @@ def _deal_analysis_title(row: dict[str, Any], watch: dict[str, Any], index: int)
 
 
 def _deal_offer_condition(row: dict[str, Any], watch: dict[str, Any]) -> str | None:
-    for source in (row.get("condition"), watch.get("condition")):
-        normalized = normalized_wear_condition_for_comparison(source)
-        if normalized is not None:
-            return normalized
-    return None
+    return resolve_offer_wear_condition(
+        row.get("condition"),
+        watch.get("condition"),
+        row.get("raw_condition"),
+        watch.get("raw_condition"),
+    )
 
 
 def _deal_condition_display(row: dict[str, Any], watch: dict[str, Any]) -> dict[str, Any]:
-    for source in (row.get("condition"), watch.get("condition")):
+    for source in (
+        row.get("condition"),
+        watch.get("condition"),
+        row.get("raw_condition"),
+        watch.get("raw_condition"),
+    ):
         label = deal_condition_label(source)
         if label != "Unknown":
             return {
@@ -1301,7 +1383,7 @@ def _deal_comparison_is_safe(row: dict[str, Any], watch: dict[str, Any]) -> bool
     offer_condition = _deal_offer_condition(row, watch)
     if offer_condition is None:
         return False
-    market_condition = row.get("market_condition")
+    market_condition = normalize_condition_value(row.get("market_condition"))
     if market_condition not in {NEW_CONDITION, PRE_OWNED_CONDITION}:
         return False
     if offer_condition != market_condition:
@@ -1837,6 +1919,37 @@ async def activity_all(request: Request) -> HTMLResponse:
     return _render_activity_page(request, "all")
 
 
+def _parser_accuracy_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return filter_imports_for_user(
+        list_parser_accuracy_import_logs(limit=IMPORT_ACCURACY_SCAN_LIMIT),
+        user,
+    )
+
+
+@app.get("/ai-health", response_class=HTMLResponse, name="ai_health")
+async def ai_health_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    import_logs = _parser_accuracy_import_logs(user)
+    dashboard = load_ai_health_dashboard(import_logs)
+
+    return templates.TemplateResponse(
+        request,
+        "ai_health.html",
+        {
+            "dashboard": dashboard,
+        },
+    )
+
+
+@app.get("/parser-accuracy", response_class=HTMLResponse, name="parser_accuracy")
+async def parser_accuracy_page(request: Request) -> HTMLResponse:
+    """Backward-compatible redirect to the AI Health dashboard."""
+    return RedirectResponse(url="/ai-health", status_code=307)
+
+
 @app.get("/parser-review", response_class=HTMLResponse, name="parser_review")
 async def parser_review_page(request: Request, filter: str = "all") -> HTMLResponse:
     user = get_current_user(request)
@@ -1845,11 +1958,13 @@ async def parser_review_page(request: Request, filter: str = "all") -> HTMLRespo
 
     filter_key = filter if filter in PARSER_REVIEW_FILTERS else "all"
     import_logs = _parser_review_import_logs(user)
+    accuracy_logs = _parser_accuracy_import_logs(user)
     rows, counts = load_parser_review_page_data(
         import_logs,
         filter_key,
         format_timestamp=format_timestamp,
     )
+    accuracy = load_ai_health_dashboard(accuracy_logs)
 
     return templates.TemplateResponse(
         request,
@@ -1857,6 +1972,7 @@ async def parser_review_page(request: Request, filter: str = "all") -> HTMLRespo
         {
             "rows": rows,
             "counts": counts,
+            "accuracy": accuracy,
             "active_filter": filter_key,
             "canonical_brands": list_canonical_brands(),
             "knowledge_enabled": watch_knowledge_supported(),
@@ -1928,7 +2044,7 @@ async def parser_review_apply_fix(
         raise HTTPException(status_code=404, detail="Import not found")
 
     try:
-        apply_workbench_fix(
+        apply_workbench_fix_and_finalize(
             import_id,
             fix_action,
             brand_name=brand_name,

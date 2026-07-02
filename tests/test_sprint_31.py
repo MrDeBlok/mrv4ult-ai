@@ -337,7 +337,7 @@ class TestParserReviewPage:
 
         assert response.status_code == 200
         assert "<strong>Needs review:</strong> 1" in response.text
-        assert "<strong>Missing brand:</strong> 1" in response.text
+        assert "<strong>AI Health:</strong>" in response.text
         assert "<strong>Unknown brand:</strong> 1" in response.text
 
     @patch("app.mark_import_parser_reviewed")

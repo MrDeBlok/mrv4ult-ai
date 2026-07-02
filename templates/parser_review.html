@@ -12,13 +12,15 @@
                     Teach the parser from real failures: fix each issue, reprocess the import, and clear the review queue.
                 </p>
             </div>
-            <div class="activity-feed-stats">
-                <span class="activity-stat"><strong>Needs review:</strong> {{ counts.total }}</span>
-                <span class="activity-stat"><strong>Missing price:</strong> {{ counts.missing_price }}</span>
-                <span class="activity-stat"><strong>Missing brand:</strong> {{ counts.missing_brand }}</span>
-                <span class="activity-stat"><strong>Missing reference:</strong> {{ counts.missing_reference }}</span>
-                <span class="activity-stat"><strong>Missing condition:</strong> {{ counts.missing_condition }}</span>
-                <span class="activity-stat"><strong>Unknown brand:</strong> {{ counts.unknown_brand }}</span>
+            <div class="d-flex flex-wrap align-items-start gap-3">
+                <div class="activity-feed-stats">
+                    <span class="activity-stat"><strong>Needs review:</strong> {{ counts.total }}</span>
+                    <span class="activity-stat"><strong>AI Health:</strong> {{ accuracy.health_score }}%</span>
+                    <span class="activity-stat"><strong>Missing price:</strong> {{ counts.missing_price }}</span>
+                    <span class="activity-stat"><strong>Missing reference:</strong> {{ counts.missing_reference }}</span>
+                    <span class="activity-stat"><strong>Unknown brand:</strong> {{ counts.unknown_brand }}</span>
+                </div>
+                <a href="/ai-health" class="btn btn-sm btn-outline-dark">AI Health Dashboard</a>
             </div>
         </div>
     </div>
@@ -82,7 +84,7 @@
                     <th scope="col">Dealer</th>
                     <th scope="col">Group</th>
                     <th scope="col">Original message</th>
-                    <th scope="col">Issues</th>
+                    <th scope="col">Failure reason</th>
                     <th scope="col">Parsed fields</th>
                     <th scope="col">Fix action</th>
                 </tr>
@@ -95,13 +97,9 @@
                     <td>{{ row.group_name }}</td>
                     <td class="small text-muted" style="min-width: 14rem; max-width: 18rem;">{{ row.original_message or row.message_preview }}</td>
                     <td>
-                        <div class="d-flex flex-wrap gap-1 mb-1">
-                            {% for label in row.issue_labels %}
-                            <span class="badge text-bg-warning">{{ label }}</span>
-                            {% endfor %}
-                        </div>
-                        {% if row.missing_fields %}
-                        <div class="small text-muted">Missing: {{ row.missing_fields | join(", ") }}</div>
+                        <span class="badge text-bg-warning">{{ row.primary_failure_label }}</span>
+                        {% if row.issue_labels|length > 1 %}
+                        <div class="small text-muted mt-1">{{ row.issue_labels | join(", ") }}</div>
                         {% endif %}
                     </td>
                     <td class="small">

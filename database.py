@@ -56,6 +56,7 @@ DASHBOARD_MATCHED_REQUESTS_LIMIT = 10
 IMPORT_LOG_LIST_LIMIT_ACTIVITY = 1500
 IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS = 250
 IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW = 400
+IMPORT_LOG_LIST_LIMIT_PARSER_ACCURACY = 400
 
 REQUEST_STATUSES = frozenset({"open", "matched", "closed", "active"})
 OPEN_REQUEST_STATUSES = ("open", "active")
@@ -1409,6 +1410,14 @@ def list_parser_review_import_log_candidates(
 ) -> list[Record]:
     """Return recent needs-review import logs for parser review pages."""
     return _query_import_logs(limit=limit, status="warning")
+
+
+def list_parser_accuracy_import_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_PARSER_ACCURACY,
+) -> list[Record]:
+    """Return bounded recent import logs for parser accuracy metrics."""
+    return _query_import_logs(limit=limit)
 
 
 def _query_dashboard_import_logs(

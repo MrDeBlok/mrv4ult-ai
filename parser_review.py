@@ -6,23 +6,11 @@ from typing import Any
 
 from activity_feed import format_dealer_label, message_preview
 from import_classification import looks_like_parser_review_offer
-from import_status import import_status_reason, normalize_import_status
+from import_status import normalize_import_status
 from ingest import _watch_missing_fields, is_large_dealer_list_import_log
 from unknown_brand_intelligence import extract_unknown_brand_text
 
 Record = dict[str, Any]
-
-PARSER_REVIEW_FILTERS = frozenset(
-    {
-        "all",
-        "missing_price",
-        "missing_brand",
-        "missing_reference",
-        "missing_condition",
-        "unknown_brand",
-        "unknown_model",
-    }
-)
 
 ISSUE_LABELS: dict[str, str] = {
     "missing_price": "Missing price",
@@ -39,7 +27,49 @@ MISSING_FIELD_LABELS: dict[str, str] = {
     "brand": "Brand",
     "reference": "Reference",
     "condition": "Condition",
+    "currency": "Currency",
 }
+
+PARSER_CONFIDENCE_THRESHOLD = 60
+
+FAILURE_REASON_PRIORITY: tuple[str, ...] = (
+    "unknown_brand",
+    "unknown_nickname",
+    "unknown_reference",
+    "missing_brand",
+    "multiple_possible_references",
+    "missing_reference",
+    "missing_price",
+    "missing_currency",
+    "missing_condition",
+    "low_parser_confidence",
+)
+
+FAILURE_REASON_LABELS: dict[str, str] = {
+    "unknown_brand": "Unknown brand",
+    "unknown_nickname": "Unknown nickname",
+    "unknown_reference": "Unknown reference",
+    "missing_brand": "Missing brand",
+    "multiple_possible_references": "Multiple possible references",
+    "missing_reference": "Missing reference",
+    "missing_price": "Missing price",
+    "missing_currency": "Currency missing",
+    "missing_condition": "Missing condition",
+    "low_parser_confidence": "Parser confidence too low",
+}
+
+PARSER_REVIEW_FILTERS = frozenset(
+    {
+        "all",
+        "missing_price",
+        "missing_brand",
+        "missing_reference",
+        "missing_condition",
+        "missing_currency",
+        "unknown_brand",
+        "unknown_model",
+    }
+) | frozenset(FAILURE_REASON_PRIORITY)
 
 PARSED_FIELD_SPECS: list[tuple[str, str]] = [
     ("brand", "Brand"),
@@ -108,6 +138,9 @@ def detect_watch_issues(watch: Record) -> tuple[set[str], list[str]]:
     if not watch.get("condition"):
         missing.append("condition")
         issues.add("missing_condition")
+    if _has_price_amount(watch) and not _has_currency(watch):
+        missing.append("currency")
+        issues.add("missing_currency")
 
     if not watch.get("brand") and extract_unknown_brand_text(watch):
         issues.add("unknown_brand")
@@ -141,6 +174,132 @@ def detect_import_issues(import_log: Record) -> tuple[set[str], list[str], str |
             unknown_brand_text = extract_unknown_brand_text(watch)
 
     return all_issues, sorted(missing_fields), unknown_brand_text
+
+
+def _has_price_amount(watch: Record) -> bool:
+    if watch.get("original_price") is not None or watch.get("price") is not None:
+        return True
+    return watch.get("usd_price") is not None
+
+
+def _has_currency(watch: Record) -> bool:
+    if watch.get("usd_price") is not None:
+        return True
+    return bool(watch.get("original_currency") or watch.get("currency"))
+
+
+def _has_multiple_possible_references(watch: Record) -> bool:
+    if watch.get("reference"):
+        return False
+
+    identification = watch.get("watch_identification") or {}
+    likely = [
+        str(reference).strip().upper()
+        for reference in identification.get("likely_references") or []
+        if reference
+    ]
+    if len(set(likely)) > 1:
+        return True
+
+    model_alias = watch.get("model_alias") or {}
+    alias_refs = [
+        str(reference).strip().upper()
+        for reference in model_alias.get("likely_references") or []
+        if reference
+    ]
+    return len(set(alias_refs)) > 1
+
+
+def _has_unknown_reference(watch: Record) -> bool:
+    model_alias = watch.get("model_alias") or {}
+    if model_alias.get("reference_status") == "Unknown":
+        return True
+    identification = watch.get("watch_identification") or {}
+    return identification.get("reference_status") == "Unknown"
+
+
+def _has_unknown_nickname_failure(watch: Record) -> bool:
+    if watch.get("nickname") and not watch.get("reference"):
+        return True
+    model_alias = watch.get("model_alias") or {}
+    if model_alias.get("nickname") and not watch.get("reference"):
+        return True
+    identification = watch.get("watch_identification") or {}
+    if identification.get("nickname") and not watch.get("reference"):
+        return True
+    return False
+
+
+def _watch_parser_confidence(watch: Record) -> int:
+    confidence = watch.get("confidence")
+    if isinstance(confidence, int):
+        return confidence
+    if isinstance(confidence, float):
+        return int(confidence)
+    return 0
+
+
+def detect_watch_failure_reasons(watch: Record) -> set[str]:
+    """Return structured parser failure reasons for one parsed watch."""
+    issues, _ = detect_watch_issues(watch)
+    reasons: set[str] = set()
+
+    if "unknown_brand" in issues:
+        reasons.add("unknown_brand")
+    if _has_unknown_nickname_failure(watch):
+        reasons.add("unknown_nickname")
+    if _has_unknown_reference(watch):
+        reasons.add("unknown_reference")
+    if "missing_brand" in issues:
+        reasons.add("missing_brand")
+    if _has_multiple_possible_references(watch):
+        reasons.add("multiple_possible_references")
+    if "missing_reference" in issues:
+        reasons.add("missing_reference")
+    if "missing_price" in issues:
+        reasons.add("missing_price")
+    if "missing_currency" in issues:
+        reasons.add("missing_currency")
+    if "missing_condition" in issues:
+        reasons.add("missing_condition")
+
+    if (
+        not reasons
+        and _watch_parser_confidence(watch) < PARSER_CONFIDENCE_THRESHOLD
+        and (watch.get("brand") or watch.get("reference") or _has_price_amount(watch))
+    ):
+        reasons.add("low_parser_confidence")
+
+    return reasons
+
+
+def pick_primary_failure_reason(reasons: set[str]) -> str | None:
+    """Pick the highest-priority failure reason from a set."""
+    for reason in FAILURE_REASON_PRIORITY:
+        if reason in reasons:
+            return reason
+    return None
+
+
+def detect_primary_failure_reason(import_log: Record) -> str | None:
+    """Return one primary parser failure reason for a needs-review import."""
+    if not is_parser_review_pending(import_log):
+        return None
+
+    combined: set[str] = set()
+    for watch in _parsed_watches(import_log):
+        combined |= detect_watch_failure_reasons(watch)
+
+    reason = pick_primary_failure_reason(combined)
+    if reason is not None:
+        return reason
+    return "missing_reference"
+
+
+def primary_failure_label(reason: str | None) -> str:
+    if not reason:
+        return "Needs review"
+    return FAILURE_REASON_LABELS.get(reason, reason.replace("_", " ").title())
 
 
 def parser_review_counts(import_logs: list[Record]) -> dict[str, int]:
@@ -289,6 +448,7 @@ def build_parser_review_row(
         issues, missing_fields, unknown_brand_text = issue_data
     raw_message = (message or {}).get("raw_text") or ""
     issue_labels = [ISSUE_LABELS[key] for key in ISSUE_LABELS if key in issues]
+    failure_reason = detect_primary_failure_reason(import_log)
 
     return {
         "id": import_log["id"],
@@ -297,7 +457,7 @@ def build_parser_review_row(
         "group_name": import_log.get("group_name") or "N/A",
         "original_message": raw_message or message_preview(raw_message),
         "message_preview": message_preview(raw_message, max_length=160),
-        "status_reason": import_status_reason(import_log),
+        "status_reason": primary_failure_label(failure_reason),
         "missing_fields": [
             MISSING_FIELD_LABELS[field]
             for field in missing_fields
@@ -309,6 +469,8 @@ def build_parser_review_row(
         "detail_url": f"/activity/{import_log['id']}",
         "unknown_brand_text": unknown_brand_text,
         "has_unknown_brand": "unknown_brand" in issues,
+        "primary_failure_reason": failure_reason,
+        "primary_failure_label": primary_failure_label(failure_reason),
     }
 
 
@@ -333,7 +495,15 @@ def load_parser_review_page_data(
             import_log
             for import_log in pending
             if filter_key in issue_index[str(import_log["id"])][0]
+            or (
+                filter_key in FAILURE_REASON_PRIORITY
+                and detect_primary_failure_reason(import_log) == filter_key
+            )
         ]
+
+    from parser_accuracy import sort_parser_review_imports
+
+    filtered_logs = sort_parser_review_imports(filtered_logs)
 
     message_ids = [
         str(import_log["message_id"])
