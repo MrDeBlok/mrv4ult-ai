@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from database import contact_type_column_supported, get_client, is_business_dealer_relation
-from watch_identifier import expand_search_token
+from watch_identifier import expand_search_token, is_reference_like_token
 from condition_normalizer import (
     display_condition,
     offer_condition_display,
@@ -197,6 +197,22 @@ def _nested_record(value: Any) -> Record:
     return {}
 
 
+def _normalize_search_reference(value: str | None) -> str:
+    """Normalize a reference or token for strict substring matching."""
+    if not value or not isinstance(value, str):
+        return ""
+    return re.sub(r"[\s\-/.]", "", value.strip()).upper()
+
+
+def _reference_contains_token(reference: str | None, token: str) -> bool:
+    """Return True when the normalized reference contains the normalized token."""
+    normalized_reference = _normalize_search_reference(reference)
+    normalized_token = _normalize_search_reference(token)
+    if not normalized_reference or not normalized_token:
+        return False
+    return normalized_token in normalized_reference
+
+
 def _watch_matches_tokens(watch: Record, tokens: list[str]) -> bool:
     if not tokens:
         return True
@@ -204,6 +220,9 @@ def _watch_matches_tokens(watch: Record, tokens: list[str]) -> bool:
 
 
 def _token_matches_watch(token: str, watch: Record) -> bool:
+    if is_reference_like_token(token):
+        return _reference_contains_token(watch.get("reference"), token)
+
     expanded = expand_search_token(token)
     brand_alias = BRAND_ALIASES.get(token.lower())
     if brand_alias:

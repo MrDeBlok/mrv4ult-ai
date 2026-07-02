@@ -30,6 +30,15 @@ def normalize_reference(value: str | None) -> str | None:
     return cleaned or None
 
 
+def is_reference_like_token(token: str) -> bool:
+    """Return True when a search token looks like a watch reference fragment."""
+    cleaned = token.strip()
+    if not cleaned:
+        return False
+    compact = re.sub(r"[\s\-/]", "", cleaned)
+    return bool(re.search(r"\d", compact)) and bool(re.fullmatch(r"[A-Za-z0-9./\-]+", cleaned))
+
+
 def normalize_identifier_key(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
@@ -224,7 +233,7 @@ def _match_partial_reference(token: str, ref_entries: dict[str, Record]) -> Reco
     prefix_matches = [
         reference
         for reference in ref_entries
-        if reference.startswith(normalized) or normalized.startswith(reference[: min(len(reference), 6)])
+        if reference.startswith(normalized)
     ]
     if len(prefix_matches) == 1:
         return _build_result(ref_entries[prefix_matches[0]], match_type="partial_reference")
@@ -290,26 +299,29 @@ def nicknames_for_reference(reference: str) -> list[str]:
 
 def expand_search_token(token: str) -> set[str]:
     """Expand one search token with nicknames, references, and related terms."""
-    terms = {token.lower(), re.sub(r"[\s\-/]", "", token.lower())}
+    terms = {token.lower(), re.sub(r"[\s\-/.]", "", token.lower())}
+    if is_reference_like_token(token):
+        return terms
 
     identification = identify_text(token)
     if identification:
-        for field in ("brand", "collection", "model", "nickname"):
+        for field in ("collection", "model", "nickname"):
             value = identification.get(field)
             if isinstance(value, str) and value.strip():
                 terms.add(value.lower())
         for reference in identification.get("likely_references") or []:
             terms.add(reference.lower())
-            terms.add(re.sub(r"[\s\-/]", "", reference.lower()))
+            terms.add(re.sub(r"[\s\-/.]", "", reference.lower()))
 
     normalized = normalize_reference(token)
     if normalized:
+        _indexed, ref_entries, _ref_nicknames = _load_identifier_index()
         for nickname in nicknames_for_reference(token):
             terms.add(nickname.lower())
-        _indexed, ref_entries, _ref_nicknames = _load_identifier_index()
         for reference in ref_entries:
-            if reference.startswith(normalized) or normalized.startswith(reference[:6]):
+            if reference.startswith(normalized):
                 terms.add(reference.lower())
+                terms.add(re.sub(r"[\s\-/.]", "", reference.lower()))
                 for nickname in nicknames_for_reference(reference):
                     terms.add(nickname.lower())
 

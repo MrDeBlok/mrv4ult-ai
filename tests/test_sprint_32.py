@@ -158,10 +158,11 @@ class TestSearchIdentification:
 
         assert "126710blro" in terms or "126710BLRO".lower() in terms
 
-    def test_expand_search_token_includes_nickname_for_reference(self) -> None:
+    def test_expand_search_token_does_not_expand_reference_like_tokens(self) -> None:
         terms = expand_search_token("126710BLRO")
 
-        assert "pepsi" in terms
+        assert terms == {"126710blro"}
+        assert "pepsi" not in terms
 
     def test_token_matches_watch_for_nickname_against_reference(self) -> None:
         watch = {"brand": "Rolex", "reference": "126710BLRO", "model": "GMT-Master II"}
