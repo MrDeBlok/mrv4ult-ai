@@ -1434,7 +1434,8 @@ def _deal_comparison_is_safe(row: dict[str, Any], watch: dict[str, Any]) -> bool
         return False
     if not _has_display_value(row.get("previous_lowest_usd")):
         return False
-    if _parse_usd_amount(row.get("previous_lowest_usd")) is None:
+    market_usd = _parse_usd_amount(row.get("previous_lowest_usd"))
+    if market_usd is None or market_usd <= 0:
         return False
     return True
 
@@ -1456,7 +1457,7 @@ def _build_deal_analysis(row: dict[str, Any], watch: dict[str, Any], index: int)
     market_position_label: str | None = None
     market_position_amount: str | None = None
     potential_profit: int | None = None
-    if has_market and offer_usd is not None:
+    if has_market and offer_usd is not None and market_usd > 0:
         difference_usd = offer_usd - market_usd
         difference_pct = f"{((difference_usd / market_usd) * 100):+.1f}%"
         if difference_usd > 0:

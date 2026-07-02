@@ -131,6 +131,29 @@ class TestDealAnalysisCard:
         assert analysis["recommendation_class"] == "insufficient"
         assert analysis["market_price"] == "Unknown"
 
+    def test_hides_market_metrics_when_market_price_is_zero(self) -> None:
+        analysis = _build_deal_analysis(
+            {
+                "brand": "Patek Philippe",
+                "reference": "5711/1A",
+                "condition": NEW_CONDITION,
+                "usd_price": 85000,
+                "previous_lowest_usd": "$0",
+                "price_difference": "-$85,000",
+                "rank": "5",
+                "price_label": "New lowest price",
+                "market_condition": NEW_CONDITION,
+            },
+            {"confidence": 90},
+            0,
+        )
+
+        assert analysis["show_market_metrics"] is False
+        assert analysis["difference_pct"] is None
+        assert analysis["market_price"] == "Unknown"
+        assert analysis["recommendation"] == "Needs Review"
+        assert analysis["recommendation_class"] == "insufficient"
+
 
 class TestDealAnalysisSources:
     def test_renders_one_card_per_stored_parsed_watch(self) -> None:
