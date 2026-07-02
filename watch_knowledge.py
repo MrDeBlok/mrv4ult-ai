@@ -88,31 +88,77 @@ def resolve_reference_brand_identity(reference: str | None) -> tuple[str | None,
 
 def apply_reference_brand_identity(watch: dict[str, Any]) -> dict[str, Any]:
     """Override inherited brand context when reference identity is known."""
-    enriched = dict(watch)
-    resolved_brand, resolved_confident = resolve_reference_brand_identity(enriched.get("reference"))
-    if not resolved_confident or not resolved_brand:
-        return enriched
+    from brand_resolver import apply_brand_resolution_to_watch, resolve_watch_brand
 
-    existing_brand = enriched.get("brand")
-    if existing_brand and existing_brand != resolved_brand:
-        enriched["brand_context_conflict"] = {
-            "inherited_brand": existing_brand,
-            "resolved_brand": resolved_brand,
-        }
+    text = str(watch.get("source_line") or "")
+    identification_brand = None
+    identification = watch.get("watch_identification")
+    if isinstance(identification, dict):
+        identification_brand = identification.get("brand")
 
-    enriched["brand"] = resolved_brand
-    enriched["reference_high_confidence"] = True
-    return enriched
+    resolution = resolve_watch_brand(
+        reference=watch.get("reference"),
+        text=text,
+        model=watch.get("model"),
+        explicit_brand=watch.get("brand") if watch.get("brand_source") == "explicit" else None,
+        inherited_brand=watch.get("_inherited_brand"),
+        identification_brand=identification_brand,
+        brand_before_normalization=watch.get("brand"),
+    )
+    return apply_brand_resolution_to_watch(
+        watch,
+        resolution,
+        inherited_brand=watch.get("_inherited_brand"),
+    )
+
+
+def _watch_resolution_text(watch: dict[str, Any]) -> str:
+    parts = [
+        watch.get("source_line"),
+        watch.get("brand"),
+        watch.get("model"),
+        watch.get("nickname"),
+        watch.get("reference"),
+        watch.get("dial"),
+        watch.get("notes"),
+    ]
+    return " ".join(str(part) for part in parts if part)
 
 
 def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     """Attach model aliases, identification, and reference knowledge to a parsed watch."""
-    enriched = apply_reference_brand_identity(
-        apply_identification_to_watch(enrich_with_model_alias(dict(watch)))
+    enriched = enrich_with_model_alias(dict(watch))
+    enriched = apply_identification_to_watch(enriched)
+
+    from brand_resolver import apply_brand_resolution_to_watch, resolve_explicit_brand, resolve_watch_brand
+
+    text = _watch_resolution_text(enriched)
+    source_line = str(enriched.get("source_line") or text)
+    identification_brand = None
+    identification = enriched.get("watch_identification")
+    if isinstance(identification, dict):
+        identification_brand = identification.get("brand")
+
+    resolution = resolve_watch_brand(
+        reference=enriched.get("reference"),
+        text=text,
+        model=enriched.get("model"),
+        explicit_brand=resolve_explicit_brand(source_line),
+        inherited_brand=enriched.get("_inherited_brand"),
+        identification_brand=identification_brand,
+        brand_before_normalization=enriched.get("brand"),
     )
+    enriched = apply_brand_resolution_to_watch(
+        enriched,
+        resolution,
+        inherited_brand=enriched.get("_inherited_brand"),
+    )
+
     knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:
         enriched["knowledge"] = knowledge
+        if knowledge.get("model") and not enriched.get("model"):
+            enriched["model"] = knowledge["model"]
     return enriched
 
 

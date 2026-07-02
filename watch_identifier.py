@@ -358,8 +358,6 @@ def apply_identification_to_watch(watch: Record) -> Record:
         not watch_brand or not result_brand or watch_brand == result_brand
     )
 
-    if result.get("brand") and not enriched.get("brand"):
-        enriched["brand"] = result["brand"]
     if brands_compatible:
         if result.get("model") and not enriched.get("model"):
             enriched["model"] = result["model"]

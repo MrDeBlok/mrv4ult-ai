@@ -645,33 +645,44 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     watch = empty_watch()
 
     explicit_brand = _extract_brand(text)
-    brand = explicit_brand or current_brand
-    enforce_brand_context = current_brand is not None and explicit_brand is None
+    inherited_brand = current_brand if not explicit_brand else None
+    enforce_brand_context = inherited_brand is not None
     reference, ref_brand, from_brand_knowledge = _extract_reference(
         text,
-        brand_hint=brand,
+        brand_hint=explicit_brand or inherited_brand,
         enforce_brand_context=enforce_brand_context,
     )
-    if brand is None and ref_brand:
-        brand = ref_brand
-    if brand is None and reference and ref_brand is None:
-        brand = _infer_brand_from_reference(reference)
-    elif (
+    if (
         enforce_brand_context
-        and brand
+        and inherited_brand
         and reference
         and ref_brand
-        and ref_brand != brand
+        and ref_brand != inherited_brand
         and not from_brand_knowledge
     ):
         reference = None
-    watch["brand"] = brand
     watch["reference"] = reference
     watch["reference_high_confidence"] = from_brand_knowledge
+    watch["model"] = _extract_model(text)
+    if inherited_brand:
+        watch["_inherited_brand"] = inherited_brand
 
-    from watch_knowledge import apply_reference_brand_identity
+    from brand_resolver import apply_brand_resolution_to_watch, resolve_watch_brand
 
-    watch = apply_reference_brand_identity(watch)
+    brand_before_normalization = explicit_brand or inherited_brand or ref_brand
+    resolution = resolve_watch_brand(
+        reference=reference,
+        text=text,
+        model=watch.get("model"),
+        explicit_brand=explicit_brand,
+        inherited_brand=inherited_brand,
+        brand_before_normalization=brand_before_normalization,
+    )
+    watch = apply_brand_resolution_to_watch(
+        watch,
+        resolution,
+        inherited_brand=inherited_brand,
+    )
     brand = watch.get("brand")
     reference = watch.get("reference")
 
@@ -680,7 +691,6 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
         if fpj_match:
             watch["reference"] = fpj_match.group(1)
 
-    watch["model"] = _extract_model(text)
     watch["nickname"] = _extract_nickname(text, watch.get("reference"))
     watch["dial"] = _extract_dial(text)
     watch["bracelet"] = _extract_bracelet(text)
@@ -1241,30 +1251,9 @@ def _extract_als_brand(text: str) -> str | None:
 
 
 def _infer_brand_from_reference(reference: str) -> str | None:
-    from brand_knowledge import extract_reference_from_brand_knowledge
+    from brand_resolver import infer_brand_from_reference_heuristic
 
-    brand_match = extract_reference_from_brand_knowledge(reference)
-    if brand_match:
-        return brand_match[1]
-
-    normalized = reference.upper().replace(" ", "")
-    if re.fullmatch(r"\d{3}\.\d{3}", reference):
-        return "A. Lange & Söhne"
-    if normalized.startswith("RM"):
-        return "Richard Mille"
-    if "/" in normalized:
-        return "Patek Philippe"
-    if re.fullmatch(r"[12]\d{5}[A-Z]{0,4}", normalized):
-        return "Rolex"
-    if re.fullmatch(r"\d{5}[A-Z]{2,4}", normalized):
-        return "Audemars Piguet"
-    if re.fullmatch(r"\d{4}[A-Z]", normalized):
-        return "Audemars Piguet"
-    if re.fullmatch(r"[3456]\d{3}", normalized):
-        return "Patek Philippe"
-    if re.fullmatch(r"\d{5}", normalized):
-        return "Audemars Piguet"
-    return None
+    return infer_brand_from_reference_heuristic(reference)
 
 
 def _is_dotted_watch_reference_token(token: str) -> bool:

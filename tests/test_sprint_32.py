@@ -129,7 +129,7 @@ class TestWatchIdentifierIntegration:
             {"source_line": "Pepsi 2023 full set 18000", "original_price": 18000}
         )
 
-        assert watch["brand"] == "Rolex"
+        assert "brand" not in watch or watch.get("brand") is None
         assert watch["watch_identification"]["nickname"] == "Pepsi"
         assert "126710BLRO" in watch["watch_identification"]["likely_references"]
 

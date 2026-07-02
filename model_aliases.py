@@ -109,6 +109,12 @@ def _should_clear_inferred_reference(
     if not reference or not isinstance(reference, str):
         return False
 
+    from watch_knowledge import resolve_reference_brand_identity
+
+    known_brand, known_confident = resolve_reference_brand_identity(reference)
+    if known_confident and known_brand:
+        return False
+
     return _looks_like_price_reference(reference.strip(), watch)
 
 
@@ -120,17 +126,6 @@ def enrich_with_model_alias(watch: dict[str, Any]) -> dict[str, Any]:
         return enriched
 
     alias_key, alias_entry = match
-    alias_brand = alias_entry.get("brand")
-    watch_brand = enriched.get("brand")
-    if (
-        isinstance(alias_brand, str)
-        and alias_brand.strip()
-        and isinstance(watch_brand, str)
-        and watch_brand.strip()
-        and watch_brand != alias_brand
-    ):
-        return enriched
-
     alias_info: dict[str, Any] = {
         "alias": alias_key,
         "collection": alias_entry.get("collection"),
@@ -139,16 +134,8 @@ def enrich_with_model_alias(watch: dict[str, Any]) -> dict[str, Any]:
         "confidence_note": alias_entry.get("confidence_note"),
     }
 
-    brand = alias_entry.get("brand")
-    if isinstance(brand, str) and brand.strip():
-        from watch_knowledge import resolve_reference_brand_identity
-
-        known_brand, known_confident = resolve_reference_brand_identity(enriched.get("reference"))
-        if not (known_confident and known_brand and known_brand != brand):
-            enriched["brand"] = brand
-
     model = alias_entry.get("model")
-    if isinstance(model, str) and model.strip() and not enriched.get("model"):
+    if isinstance(model, str) and model.strip():
         enriched["model"] = model
 
     nickname = alias_entry.get("nickname")

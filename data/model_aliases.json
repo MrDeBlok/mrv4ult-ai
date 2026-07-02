@@ -40,6 +40,12 @@
     "nickname": "Panda",
     "confidence_note": "Identified by nickname alias: Panda"
   },
+  "daytona": {
+    "brand": "Rolex",
+    "collection": "Cosmograph Daytona",
+    "model": "Cosmograph Daytona",
+    "confidence_note": "Identified by model alias: Daytona"
+  },
   "john mayer": {
     "brand": "Rolex",
     "collection": "Cosmograph Daytona",

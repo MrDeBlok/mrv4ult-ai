@@ -29,6 +29,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
     "Rolex": BrandKnowledge(
         brand="Rolex",
         reference_patterns=(
+            r"\b([12]\d{4})\b",
             r"\b([12]\d{5}[A-Za-z]{0,4})\b",
         ),
         collection_aliases={
