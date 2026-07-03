@@ -1114,13 +1114,20 @@ def build_deal_analysis_cards(
     summary: dict[str, Any],
     *,
     include_debug: bool = False,
+    market_preload: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Build deal analysis cards from watches stored during import."""
     rows = summary.get("rows") or []
     if not rows:
         watches = _deal_analysis_watch_sources(summary)
         return [
-            _build_deal_analysis({}, watch, index, include_debug=include_debug)
+            _build_deal_analysis(
+                {},
+                watch,
+                index,
+                include_debug=include_debug,
+                market_preload=market_preload,
+            )
             for index, watch in enumerate(watches)
         ]
 
@@ -1129,7 +1136,15 @@ def build_deal_analysis_cards(
     analyses: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         watch = _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
-        analyses.append(_build_deal_analysis(row, watch, index, include_debug=include_debug))
+        analyses.append(
+            _build_deal_analysis(
+                row,
+                watch,
+                index,
+                include_debug=include_debug,
+                market_preload=market_preload,
+            )
+        )
     return analyses
 
 
@@ -1461,6 +1476,7 @@ def _build_deal_analysis(
     index: int,
     *,
     include_debug: bool = False,
+    market_preload: Any | None = None,
 ) -> dict[str, Any]:
     from deal_market_lookup import resolve_deal_market_context
 
@@ -1469,7 +1485,12 @@ def _build_deal_analysis(
         offer_usd = watch.get("usd_price")
 
     condition = _deal_condition_display(row, watch)
-    market_context = resolve_deal_market_context(row, watch, include_debug=include_debug)
+    market_context = resolve_deal_market_context(
+        row,
+        watch,
+        include_debug=include_debug,
+        market_preload=market_preload,
+    )
     effective_row = market_context.effective_row
     comparison_safe = market_context.comparison_safe
     market_usd = market_context.market_usd

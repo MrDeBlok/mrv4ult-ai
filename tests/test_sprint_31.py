@@ -192,6 +192,7 @@ class TestParserReviewFiltersAndCounts:
             "missing_reference": 2,
             "missing_condition": 1,
             "unknown_brand": 1,
+            "unknown_reference": 0,
         }
 
 

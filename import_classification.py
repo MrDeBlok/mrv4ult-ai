@@ -184,6 +184,9 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
         return [], None
 
     substantive_watches = [watch for watch in watches if watch_has_substantive_identity(watch)]
+    substantive_watches = [
+        watch for watch in substantive_watches if not watch.get("reference_needs_review")
+    ]
     brand_only_watches = [
         watch
         for watch in watches
@@ -203,6 +206,11 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
         return [], "noise"
 
     return [], None
+
+
+def reference_review_watches(watches: list[Record]) -> list[Record]:
+    """Return parsed watches waiting on admin reference-brand assignment."""
+    return [watch for watch in watches if watch.get("reference_needs_review")]
 
 
 def looks_like_parser_review_offer(import_log: Record) -> bool:

@@ -147,14 +147,26 @@ def load_dashboard_todays_best_deals(
         reverse=True,
     )[:scan_limit]
 
-    candidates: list[Record] = []
+    preload_rows: list[Record] = []
+    prepared_logs: list[tuple[Record, Record]] = []
     for import_log in sorted_logs:
         summary = import_log.get("summary") or {}
         if not isinstance(summary, dict):
             continue
+        rows = summary.get("rows") or []
+        if isinstance(rows, list):
+            preload_rows.extend(row for row in rows if isinstance(row, dict))
+        prepared_logs.append((import_log, summary))
+
+    from deal_market_lookup import build_deal_market_preload
+
+    market_preload = build_deal_market_preload(preload_rows)
+
+    candidates: list[Record] = []
+    for import_log, summary in prepared_logs:
         watches = _deal_analysis_watch_sources(summary)
         rows = summary.get("rows") or []
-        analyses = build_deal_analysis_cards(summary)
+        analyses = build_deal_analysis_cards(summary, market_preload=market_preload)
         for index, analysis in enumerate(analyses):
             if not _is_rankable_deal(analysis):
                 continue

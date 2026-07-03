@@ -170,7 +170,11 @@ class TestDealMarketLookup:
         resolve_deal_market_context(_row(), _watch(), include_debug=True)
 
         mock_get_offers.assert_called_once_with([CURRENT_OFFER_ID])
-        mock_pool.assert_called_once_with(WATCH_ID, exclude_offer_ids={CURRENT_OFFER_ID})
+        mock_pool.assert_called_once_with(
+            WATCH_ID,
+            exclude_offer_ids={CURRENT_OFFER_ID},
+            active_pools_by_watch_id=None,
+        )
 
     def test_comparable_lookup_normalizes_conditions(self) -> None:
         comparables, market_condition = _comparable_usd_prices(

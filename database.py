@@ -91,6 +91,7 @@ _users_table_supported: bool | None = None
 _user_ownership_columns_supported: bool | None = None
 _client_profiles_supported: bool | None = None
 _watch_knowledge_supported: bool | None = None
+_reference_brand_mappings_supported: bool | None = None
 _watch_identification_supported: bool | None = None
 
 
@@ -115,9 +116,10 @@ def reset_client_profiles_cache() -> None:
 
 def reset_watch_knowledge_cache() -> None:
     """Reset cached watch knowledge table detection (for tests)."""
-    global _watch_knowledge_supported, _watch_identification_supported
+    global _watch_knowledge_supported, _watch_identification_supported, _reference_brand_mappings_supported
     _watch_knowledge_supported = None
     _watch_identification_supported = None
+    _reference_brand_mappings_supported = None
 
 
 def contact_type_column_supported() -> bool:
@@ -225,6 +227,25 @@ def watch_knowledge_supported() -> bool:
         else:
             raise
     return _watch_knowledge_supported
+
+
+def reference_brand_mappings_supported() -> bool:
+    """Return True when reference_brand_mappings table exists."""
+    global _reference_brand_mappings_supported
+    if _reference_brand_mappings_supported is not None:
+        return _reference_brand_mappings_supported
+
+    try:
+        get_client().table("reference_brand_mappings").select("id").limit(1).execute()
+        _reference_brand_mappings_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42P01", "PGRST205"} or "reference_brand_mappings" in message:
+            _reference_brand_mappings_supported = False
+        else:
+            raise
+    return _reference_brand_mappings_supported
 
 
 def _legacy_contact_type(dealer: Record) -> str:
@@ -2324,6 +2345,71 @@ def create_brand_alias(
     else:
         response = get_client().table("brand_aliases").insert(payload).execute()
     return _first_row(response.data, "brand_aliases")
+
+
+def list_active_reference_brand_mappings() -> list[Record]:
+    """Return active reference-to-brand mappings from the database."""
+    if not reference_brand_mappings_supported():
+        return []
+
+    response = (
+        get_client()
+        .table("reference_brand_mappings")
+        .select("*")
+        .eq("status", "active")
+        .order("reference_key")
+        .execute()
+    )
+    return response.data or []
+
+
+def create_reference_brand_mapping(
+    *,
+    reference: str,
+    brand_name: str,
+    source: str = "manual",
+) -> Record:
+    """Create or reactivate a reference-to-brand mapping."""
+    if not reference_brand_mappings_supported():
+        raise RuntimeError(
+            "Reference brand mappings require reference_brand_mappings table. Apply "
+            "docs/migrations/sprint_48_3_reference_brand_mappings.sql in Supabase."
+        )
+
+    from watch_knowledge import normalize_reference
+
+    reference_key = normalize_reference(reference)
+    if not reference_key:
+        raise ValueError("Reference is required")
+    if not brand_name.strip():
+        raise ValueError("Brand name is required")
+
+    existing = (
+        get_client()
+        .table("reference_brand_mappings")
+        .select("*")
+        .eq("reference_key", reference_key)
+        .limit(1)
+        .execute()
+    )
+    payload = {
+        "reference_key": reference_key,
+        "brand_name": brand_name.strip(),
+        "status": "active",
+        "source": source,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if existing.data:
+        response = (
+            get_client()
+            .table("reference_brand_mappings")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        response = get_client().table("reference_brand_mappings").insert(payload).execute()
+    return _first_row(response.data, "reference_brand_mappings")
 
 
 def list_pending_unknown_brands() -> list[Record]:

@@ -72,6 +72,24 @@ def lookup_reference(reference: str | None) -> dict[str, Any] | None:
     return knowledge or None
 
 
+@lru_cache(maxsize=1)
+def _load_reference_brand_mapping_index() -> dict[str, str]:
+    from database import list_active_reference_brand_mappings
+
+    index: dict[str, str] = {}
+    for row in list_active_reference_brand_mappings():
+        reference_key = normalize_reference(row.get("reference_key"))
+        brand_name = row.get("brand_name")
+        if reference_key and isinstance(brand_name, str) and brand_name.strip():
+            index[reference_key] = brand_name.strip()
+    return index
+
+
+def invalidate_reference_brand_mapping_cache() -> None:
+    """Clear cached reference-to-brand mappings (for tests and admin updates)."""
+    _load_reference_brand_mapping_index.cache_clear()
+
+
 def resolve_reference_brand_identity(reference: str | None) -> tuple[str | None, bool]:
     """Return the canonical brand for a reference when confidently known."""
     if not reference or not isinstance(reference, str):
@@ -80,6 +98,12 @@ def resolve_reference_brand_identity(reference: str | None) -> tuple[str | None,
     knowledge = lookup_reference(reference)
     if knowledge and knowledge.get("brand"):
         return str(knowledge["brand"]).strip(), True
+
+    normalized = normalize_reference(reference)
+    if normalized:
+        mapped_brand = _load_reference_brand_mapping_index().get(normalized)
+        if mapped_brand:
+            return mapped_brand, True
 
     from brand_knowledge import resolve_unambiguous_reference_brand
 
@@ -130,7 +154,12 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     enriched = enrich_with_model_alias(dict(watch))
     enriched = apply_identification_to_watch(enriched)
 
-    from brand_resolver import apply_brand_resolution_to_watch, resolve_explicit_brand, resolve_watch_brand
+    from brand_resolver import (
+        apply_brand_resolution_to_watch,
+        apply_reference_brand_safety,
+        resolve_explicit_brand,
+        resolve_watch_brand,
+    )
 
     text = _watch_resolution_text(enriched)
     source_line = str(enriched.get("source_line") or text)
@@ -153,6 +182,7 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
         resolution,
         inherited_brand=enriched.get("_inherited_brand"),
     )
+    enriched = apply_reference_brand_safety(enriched)
 
     knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:

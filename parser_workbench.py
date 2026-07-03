@@ -13,6 +13,7 @@ Record = dict[str, Any]
 
 FIX_ACTION_PRIORITY: tuple[str, ...] = (
     "unknown_brand",
+    "unknown_reference",
     "unknown_model",
     "missing_brand",
     "missing_reference",
@@ -259,7 +260,14 @@ def apply_workbench_fix(
     currency: str = "",
 ) -> Record:
     """Apply a workbench correction, update knowledge when needed, and reprocess."""
-    from database import create_brand_alias, get_import_log, watch_knowledge_supported
+    from database import (
+        create_brand_alias,
+        create_reference_brand_mapping,
+        get_import_log,
+        reference_brand_mappings_supported,
+        watch_knowledge_supported,
+    )
+    from watch_knowledge import invalidate_reference_brand_mapping_cache
 
     import_log = get_import_log(import_log_id)
     if import_log is None:
@@ -277,6 +285,29 @@ def apply_workbench_fix(
             create_brand_alias(alias_key=alias, brand_name=brand, source="parser_workbench")
             invalidate_brand_registry_cache()
         return reprocess_import_log(import_log_id)
+
+    if action == "unknown_reference":
+        brand = brand_name.strip()
+        ref = reference.strip().upper()
+        if not brand:
+            raise ValueError("Brand is required")
+        if not ref:
+            watches = _parsed_watches(import_log)
+            watch = watches[0] if watches else {}
+            ref = str(watch.get("reference") or "").strip().upper()
+        if not ref:
+            raise ValueError("Reference is required")
+        if watch_knowledge_supported() and reference_brand_mappings_supported():
+            create_reference_brand_mapping(
+                reference=ref,
+                brand_name=brand,
+                source="parser_workbench",
+            )
+            invalidate_reference_brand_mapping_cache()
+        return reprocess_import_log(
+            import_log_id,
+            field_overrides={"brand": brand, "reference": ref},
+        )
 
     if action == "unknown_model":
         brand = brand_name.strip()

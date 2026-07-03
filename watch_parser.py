@@ -678,7 +678,7 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     reference, ref_brand, from_brand_knowledge = _extract_reference(
         text,
         brand_hint=explicit_brand or inherited_brand,
-        enforce_brand_context=enforce_brand_context,
+        enforce_brand_context=False,
     )
     if (
         enforce_brand_context
@@ -688,7 +688,10 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
         and ref_brand != inherited_brand
         and not from_brand_knowledge
     ):
-        reference = None
+        watch["reference_brand_conflict"] = {
+            "inherited_brand": inherited_brand,
+            "inferred_reference_brand": ref_brand,
+        }
     watch["reference"] = reference
     watch["reference_high_confidence"] = from_brand_knowledge
     watch["model"] = _extract_model(text)

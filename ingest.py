@@ -46,6 +46,7 @@ from import_classification import (
     enrich_sold_order_watches,
     is_buyer_request_message,
     is_sold_order_message,
+    reference_review_watches,
     sold_order_has_actionable_identity,
     split_offer_watches,
 )
@@ -518,6 +519,7 @@ def ingest_message(
     for watch in parsed_watches:
         mark_explicit_condition_metadata(watch)
     sold_order_message = is_sold_order_message(text)
+    reference_review_watches_list: list[dict[str, Any]] = []
     if sold_order_message:
         parsed_watches = enrich_sold_order_watches(parsed_watches)
         offer_watches, import_classification = [], "request_intent"
@@ -525,6 +527,7 @@ def ingest_message(
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
         if import_classification is None and offer_watches:
             offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
+        reference_review_watches_list = reference_review_watches(parsed_watches)
     insufficient_evidence_watches: list[dict[str, Any]] = []
     if import_classification is None and offer_watches:
         offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
@@ -540,14 +543,19 @@ def ingest_message(
         )
     has_valid_offers = has_valid_parsed_offers(len(offer_watches))
     parse_status = _parse_status(parsed)
+    status_watches = offer_watches or reference_review_watches_list
     preliminary_status, preliminary_reason = _import_status(
-        {"watches_parsed": len(offer_watches), "duplicate_offers": 0},
+        {"watches_parsed": len(status_watches), "duplicate_offers": 0},
         parse_status,
-        offer_watches,
+        status_watches,
         classification=import_classification,
         bulk_mode=bulk_mode,
     )
-    if preliminary_status == "no_watch_detected" and import_classification is None:
+    if (
+        preliminary_status == "no_watch_detected"
+        and import_classification is None
+        and not reference_review_watches_list
+    ):
         summary = _build_discarded_ingest_summary(
             started_at=started_at,
             group_name=group_name,
@@ -757,10 +765,13 @@ def ingest_message(
     offers_elapsed_ms = int((time.perf_counter() - offers_started_at) * 1000)
     matching_started_at = time.perf_counter()
 
+    if reference_review_watches_list and summary["watches_parsed"] == 0:
+        summary["watches_parsed"] = len(reference_review_watches_list)
+
     import_status, status_reason = _import_status(
         summary,
         parse_status,
-        offer_watches,
+        status_watches,
         classification=import_classification,
         bulk_mode=bulk_mode,
         sold_order_message=sold_order_message,
@@ -793,6 +804,7 @@ def ingest_message(
     preserve_sender = (
         has_valid_offers
         or import_classification in {"request_intent", "insufficient_evidence"}
+        or bool(reference_review_watches_list)
     )
     log_dealer_whatsapp = summary_whatsapp if preserve_sender else ""
     log_dealer_alias = summary_alias if preserve_sender else None

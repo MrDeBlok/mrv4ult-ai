@@ -68,7 +68,7 @@ PARSER_REVIEW_FILTERS = frozenset(
         "missing_condition",
         "missing_currency",
         "unknown_brand",
-        "unknown_model",
+        "unknown_reference",
     }
 ) | frozenset(FAILURE_REASON_PRIORITY)
 
@@ -152,6 +152,9 @@ def detect_watch_issues(watch: Record) -> tuple[set[str], list[str]]:
     if _has_unknown_model(watch):
         issues.add("unknown_model")
 
+    if _has_unknown_reference(watch):
+        issues.add("unknown_reference")
+
     basic_issues = {
         "missing_price",
         "missing_brand",
@@ -215,6 +218,10 @@ def _has_multiple_possible_references(watch: Record) -> bool:
 
 
 def _has_unknown_reference(watch: Record) -> bool:
+    if watch.get("reference_needs_review"):
+        return True
+    if watch.get("reference_status") == "Unknown" and watch.get("reference"):
+        return True
     model_alias = watch.get("model_alias") or {}
     if model_alias.get("reference_status") == "Unknown":
         return True
@@ -331,6 +338,7 @@ def _parser_review_counts_from_index(
         "missing_reference": 0,
         "missing_condition": 0,
         "unknown_brand": 0,
+        "unknown_reference": 0,
     }
     for import_log in pending:
         issues, _, _ = issue_index[str(import_log["id"])]
@@ -344,6 +352,8 @@ def _parser_review_counts_from_index(
             counts["missing_condition"] += 1
         if "unknown_brand" in issues:
             counts["unknown_brand"] += 1
+        if "unknown_reference" in issues:
+            counts["unknown_reference"] += 1
     return counts
 
 

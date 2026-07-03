@@ -19,6 +19,7 @@
                     <span class="activity-stat"><strong>Missing price:</strong> {{ counts.missing_price }}</span>
                     <span class="activity-stat"><strong>Missing reference:</strong> {{ counts.missing_reference }}</span>
                     <span class="activity-stat"><strong>Unknown brand:</strong> {{ counts.unknown_brand }}</span>
+                    <span class="activity-stat"><strong>Unknown reference:</strong> {{ counts.unknown_reference }}</span>
                 </div>
                 <a href="/ai-health" class="btn btn-sm btn-outline-dark">AI Health Dashboard</a>
             </div>
@@ -70,6 +71,10 @@
                 href="/parser-review?filter=unknown_model"
                 class="btn btn-sm {% if active_filter == 'unknown_model' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Unknown model</a>
+            <a
+                href="/parser-review?filter=unknown_reference"
+                class="btn btn-sm {% if active_filter == 'unknown_reference' %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            >Unknown reference</a>
         </div>
     </div>
 </section>
@@ -153,6 +158,23 @@
                                     <label class="form-label small mb-0" for="fix-unknown-brand-{{ row.id }}">Canonical brand</label>
                                     <input type="hidden" name="alias_text" value="{{ row.unknown_brand_text }}">
                                     <select class="form-select form-select-sm" id="fix-unknown-brand-{{ row.id }}" name="brand_name" required>
+                                        <option value="">Select brand…</option>
+                                        {% for brand in canonical_brands %}
+                                        <option value="{{ brand }}">{{ brand }}</option>
+                                        {% endfor %}
+                                    </select>
+
+                                    {% elif row.primary_fix_action == 'unknown_reference' and knowledge_enabled %}
+                                    <label class="form-label small mb-0" for="fix-unknown-reference-{{ row.id }}">Reference</label>
+                                    <input
+                                        class="form-control form-control-sm"
+                                        id="fix-unknown-reference-{{ row.id }}"
+                                        name="reference"
+                                        value="{{ row.fix_prefill.reference }}"
+                                        readonly
+                                    >
+                                    <label class="form-label small mb-0" for="fix-unknown-reference-brand-{{ row.id }}">Correct brand</label>
+                                    <select class="form-select form-select-sm" id="fix-unknown-reference-brand-{{ row.id }}" name="brand_name" required>
                                         <option value="">Select brand…</option>
                                         {% for brand in canonical_brands %}
                                         <option value="{{ brand }}">{{ brand }}</option>

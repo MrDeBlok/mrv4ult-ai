@@ -328,6 +328,87 @@ def resolve_watch_brand(
     )
 
 
+def reference_confidently_belongs_to_brand(reference: str, brand: str) -> bool:
+    """Return True when a reference clearly belongs to the supplied brand."""
+    from brand_knowledge import reference_matches_brand_pattern
+    from watch_knowledge import resolve_reference_brand_identity
+
+    known_brand, confident = resolve_reference_brand_identity(reference)
+    if confident and known_brand:
+        return known_brand == brand
+    return reference_matches_brand_pattern(reference, brand)
+
+
+def reference_confidently_conflicts_with_brand(
+    reference: str,
+    brand: str,
+    *,
+    conflict: dict[str, Any] | None = None,
+) -> bool:
+    """Return True when a reference clearly belongs to a different brand."""
+    from watch_knowledge import resolve_reference_brand_identity
+
+    known_brand, confident = resolve_reference_brand_identity(reference)
+    if confident and known_brand and known_brand != brand:
+        return True
+
+    heuristic_brand = infer_brand_from_reference_heuristic(reference)
+    if heuristic_brand and heuristic_brand != brand:
+        return True
+
+    if isinstance(conflict, dict):
+        inferred = conflict.get("inferred_reference_brand")
+        if (
+            inferred
+            and inferred != brand
+            and reference_confidently_belongs_to_brand(reference, inferred)
+        ):
+            return True
+
+    return False
+
+
+def apply_reference_brand_safety(watch: Record) -> Record:
+    """Block confident cross-brand conflicts; review bare unknown references only."""
+    enriched = dict(watch)
+    reference = enriched.get("reference")
+    brand = enriched.get("brand")
+    source = enriched.get("brand_source")
+    conflict = enriched.get("reference_brand_conflict")
+
+    if not reference or not isinstance(reference, str):
+        return enriched
+
+    if source == BRAND_SOURCE_REFERENCE and enriched.get("reference_high_confidence"):
+        return enriched
+
+    if brand:
+        if reference_confidently_belongs_to_brand(reference, brand):
+            return enriched
+        if reference_confidently_conflicts_with_brand(reference, brand, conflict=conflict):
+            enriched["reference_brand_mismatch"] = {
+                "reference": reference,
+                "rejected_brand": brand,
+                "brand_source": source,
+                **(conflict if isinstance(conflict, dict) else {}),
+            }
+            enriched["brand"] = None
+            enriched["brand_source"] = None
+            enriched["reference_status"] = "Unknown"
+            enriched["reference_needs_review"] = True
+            enriched["reference_high_confidence"] = False
+        return enriched
+
+    from watch_knowledge import resolve_reference_brand_identity
+
+    known_brand, confident = resolve_reference_brand_identity(reference)
+    heuristic_brand = infer_brand_from_reference_heuristic(reference)
+    if not confident and not known_brand and not heuristic_brand:
+        enriched["reference_status"] = "Unknown"
+        enriched["reference_needs_review"] = True
+    return enriched
+
+
 def apply_brand_resolution_to_watch(
     watch: Record,
     resolution: BrandResolution,

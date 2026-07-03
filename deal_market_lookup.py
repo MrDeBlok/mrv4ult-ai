@@ -19,6 +19,14 @@ Record = dict[str, Any]
 INSUFFICIENT_MARKET_DATA = "Insufficient Market Data"
 
 
+@dataclass(frozen=True)
+class DealMarketPreload:
+    """Preloaded offer watch_ids and active comparable pools for bulk deal analysis."""
+
+    offer_watch_ids: dict[str, str]
+    active_pools_by_watch_id: dict[str, list[tuple[str, int, str | None]]]
+
+
 @dataclass
 class DealMarketContext:
     effective_row: Record
@@ -56,12 +64,19 @@ def _has_display_value(value: Any) -> bool:
     return True
 
 
-def _resolve_watch_id(row: Record) -> str | None:
+def _resolve_watch_id(
+    row: Record,
+    *,
+    offer_watch_ids: dict[str, str] | None = None,
+) -> str | None:
     offer_id = row.get("offer_id")
     if not offer_id:
         return None
+    offer_id_str = str(offer_id)
+    if offer_watch_ids is not None:
+        return offer_watch_ids.get(offer_id_str)
     try:
-        offer = get_offers_by_ids([str(offer_id)]).get(str(offer_id))
+        offer = get_offers_by_ids([offer_id_str]).get(offer_id_str)
     except Exception:
         return None
     if not offer:
@@ -70,24 +85,95 @@ def _resolve_watch_id(row: Record) -> str | None:
     return str(watch_id) if watch_id else None
 
 
+def load_active_offer_pools_by_watch_ids(
+    watch_ids: list[str],
+) -> dict[str, list[tuple[str, int, str | None]]]:
+    """Batch-load active business-dealer offer pools keyed by watch_id."""
+    unique_watch_ids = sorted({watch_id for watch_id in watch_ids if watch_id})
+    if not unique_watch_ids:
+        return {}
+
+    from database import contact_type_column_supported, get_client, is_business_dealer_relation
+
+    dealer_fields = (
+        "dealers(contact_type)"
+        if contact_type_column_supported()
+        else "dealers(whatsapp_id)"
+    )
+    response = (
+        get_client()
+        .table("offers")
+        .select(f"id, watch_id, usd_price, condition, {dealer_fields}")
+        .in_("watch_id", unique_watch_ids)
+        .eq("status", "active")
+        .execute()
+    )
+
+    pools: dict[str, list[tuple[str, int, str | None]]] = {
+        watch_id: [] for watch_id in unique_watch_ids
+    }
+    for row in response.data or []:
+        if not is_business_dealer_relation(row.get("dealers")):
+            continue
+        watch_id = row.get("watch_id")
+        offer_id = row.get("id")
+        usd_price = row.get("usd_price")
+        if not watch_id or not offer_id or usd_price is None:
+            continue
+        pools.setdefault(str(watch_id), []).append(
+            (str(offer_id), int(usd_price), row.get("condition"))
+        )
+    return pools
+
+
+def build_deal_market_preload(rows: list[Record]) -> DealMarketPreload:
+    """Resolve watch_ids and active comparable pools for many deal rows at once."""
+    offer_ids = sorted(
+        {
+            str(row.get("offer_id"))
+            for row in rows
+            if row.get("offer_id")
+        }
+    )
+    offers_by_id = get_offers_by_ids(offer_ids)
+    offer_watch_ids = {
+        offer_id: str(offer["watch_id"])
+        for offer_id, offer in offers_by_id.items()
+        if offer.get("watch_id")
+    }
+    active_pools_by_watch_id = load_active_offer_pools_by_watch_ids(
+        list(offer_watch_ids.values())
+    )
+    return DealMarketPreload(
+        offer_watch_ids=offer_watch_ids,
+        active_pools_by_watch_id=active_pools_by_watch_id,
+    )
+
+
 def _load_active_offer_pool(
     watch_id: str | None,
     *,
     exclude_offer_ids: set[str],
+    active_pools_by_watch_id: dict[str, list[tuple[str, int, str | None]]] | None = None,
 ) -> list[tuple[str, int, str | None]]:
     if not watch_id:
         return []
 
-    from ingest import _get_active_offers
+    if active_pools_by_watch_id is not None:
+        pool = list(active_pools_by_watch_id.get(watch_id, []))
+    else:
+        from ingest import _get_active_offers
 
-    pool: list[tuple[str, int, str | None]] = []
-    for offer_id, usd_price, condition in _get_active_offers(watch_id):
+        pool = list(_get_active_offers(watch_id))
+
+    filtered: list[tuple[str, int, str | None]] = []
+    for offer_id, usd_price, condition in pool:
         if offer_id in exclude_offer_ids:
             continue
         if usd_price is None or usd_price <= 0:
             continue
-        pool.append((offer_id, int(usd_price), condition))
-    return pool
+        filtered.append((offer_id, int(usd_price), condition))
+    return filtered
 
 
 def _partition_comparables(
@@ -195,8 +281,13 @@ def resolve_deal_market_context(
     watch: Record,
     *,
     include_debug: bool = False,
+    market_preload: DealMarketPreload | None = None,
 ) -> DealMarketContext:
     """Resolve market comparables from live active offers with stored fallback."""
+    offer_watch_ids = market_preload.offer_watch_ids if market_preload else None
+    active_pools_by_watch_id = (
+        market_preload.active_pools_by_watch_id if market_preload else None
+    )
     effective_watch = resolve_effective_watch_condition(row, watch)
     effective_row = {**row}
     for key in ("condition", "raw_condition", "condition_source", "condition_confidence", "condition_explicit"):
@@ -211,8 +302,12 @@ def resolve_deal_market_context(
 
     offer_id = str(row.get("offer_id") or "")
     exclude_offer_ids = {offer_id} if offer_id else set()
-    watch_id = _resolve_watch_id(row)
-    pool = _load_active_offer_pool(watch_id, exclude_offer_ids=exclude_offer_ids)
+    watch_id = _resolve_watch_id(row, offer_watch_ids=offer_watch_ids)
+    pool = _load_active_offer_pool(
+        watch_id,
+        exclude_offer_ids=exclude_offer_ids,
+        active_pools_by_watch_id=active_pools_by_watch_id,
+    )
     before_count = len(pool)
 
     if offer_condition is None:
