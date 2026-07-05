@@ -183,9 +183,10 @@ class TestSearchIdentification:
         mock_contact_type_supported: MagicMock,
         _mock_business: MagicMock,
     ) -> None:
-        mock_client = MagicMock()
-        mock_execute = MagicMock()
-        mock_execute.data = [
+        from tests.search_mock_helpers import mock_search_offers_client
+
+        mock_get_client.return_value = mock_search_offers_client(
+            [
             {
                 "watch_id": "w-pepsi",
                 "original_price": 18000,
@@ -201,15 +202,8 @@ class TestSearchIdentification:
                 },
                 "dealers": {"display_name": "Dealer A", "whatsapp_id": "+85290000001"},
             }
-        ]
-        mock_eq = MagicMock()
-        mock_eq.execute.return_value = mock_execute
-        mock_select = MagicMock()
-        mock_select.eq.return_value = mock_eq
-        mock_table = MagicMock()
-        mock_table.select.return_value = mock_select
-        mock_client.table.return_value = mock_table
-        mock_get_client.return_value = mock_client
+            ]
+        )
 
         offers, _ = search_offers("Pepsi")
 

@@ -490,9 +490,10 @@ class TestRemovedContactBusinessExclusion:
         mock_contact_type_supported: MagicMock,
     ) -> None:
         from search import search_offers
+        from tests.search_mock_helpers import mock_search_offers_client
 
-        mock_execute = MagicMock()
-        mock_execute.data = [
+        mock_get_client.return_value = mock_search_offers_client(
+            [
             {
                 "watch_id": "watch-1",
                 "usd_price": 70000,
@@ -511,14 +512,8 @@ class TestRemovedContactBusinessExclusion:
                 "watches": {"brand": "Rolex", "reference": "126200"},
                 "dealers": {"display_name": "HK Dealer", "contact_type": CONTACT_TYPE_DEALER},
             },
-        ]
-        mock_eq = MagicMock()
-        mock_eq.execute.return_value = mock_execute
-        mock_select = MagicMock()
-        mock_select.eq.return_value = mock_eq
-        mock_table = MagicMock()
-        mock_table.select.return_value = mock_select
-        mock_get_client.return_value.table.return_value = mock_table
+            ]
+        )
 
         offers, _ = search_offers("126200")
 

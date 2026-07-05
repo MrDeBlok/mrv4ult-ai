@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from search import search_offers
+from tests.search_mock_helpers import mock_search_offers_client
 
 
 def _watch(
@@ -37,17 +38,7 @@ def _offer(*, watch_id: str, watch: dict) -> dict:
 
 
 def _mock_offers_response(offers: list[dict]) -> MagicMock:
-    mock_client = MagicMock()
-    mock_execute = MagicMock()
-    mock_execute.data = offers
-    mock_eq = MagicMock()
-    mock_eq.execute.return_value = mock_execute
-    mock_select = MagicMock()
-    mock_select.eq.return_value = mock_eq
-    mock_table = MagicMock()
-    mock_table.select.return_value = mock_select
-    mock_client.table.return_value = mock_table
-    return mock_client
+    return mock_search_offers_client(offers)
 
 
 REFERENCE_FIXTURE = [

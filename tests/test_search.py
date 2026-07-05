@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app import app, build_result_rows
 from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION
 from search import search_offers
+from tests.search_mock_helpers import mock_search_offers_client
 
 
 def _watch(brand: str = "Rolex", reference: str = "126200") -> dict:
@@ -40,17 +41,7 @@ def _offer(
 
 
 def _mock_offers_response(offers: list[dict]) -> MagicMock:
-    mock_client = MagicMock()
-    mock_execute = MagicMock()
-    mock_execute.data = offers
-    mock_eq = MagicMock()
-    mock_eq.execute.return_value = mock_execute
-    mock_select = MagicMock()
-    mock_select.eq.return_value = mock_eq
-    mock_table = MagicMock()
-    mock_table.select.return_value = mock_select
-    mock_client.table.return_value = mock_table
-    return mock_client
+    return mock_search_offers_client(offers)
 
 
 class TestSearchConditionFilter:

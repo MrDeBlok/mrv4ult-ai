@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 from timezone_utils import ensure_utc_datetime
@@ -16,6 +17,8 @@ from supabase import Client, create_client
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+OFFERS_BY_IDS_CHUNK_SIZE = 100
 
 from condition_normalizer import normalize_condition_value
 from contact_classification import (
@@ -258,8 +261,10 @@ def _legacy_contact_type(dealer: Record) -> str:
 
 def dealer_contact_type(dealer: Record | None, *, has_offers: bool = False) -> str:
     """Return the effective normalized contact type for one dealer row."""
-    if not dealer:
+    if dealer is None:
         return CONTACT_TYPE_REMOVED
+    if not dealer:
+        return CONTACT_TYPE_DEALER if has_offers else CONTACT_TYPE_REMOVED
     if contact_type_column_supported():
         return normalize_contact_type(
             str(dealer.get("contact_type") or ""),
@@ -542,6 +547,33 @@ def get_watch_by_id(watch_id: str) -> Record | None:
     return response.data[0]
 
 
+def find_watches_by_reference(reference_query: str) -> list[Record]:
+    """Return watches whose stored reference matches a search reference token."""
+    from search import _normalize_search_reference, _reference_contains_token
+
+    token = reference_query.strip()
+    if not token:
+        return []
+
+    normalized_token = _normalize_search_reference(token)
+    if not normalized_token:
+        return []
+
+    prefix = re.sub(r"[^A-Za-z0-9]", "", token)[:6]
+    query = get_client().table("watches").select("*")
+    if prefix:
+        query = query.ilike("reference", f"%{prefix}%")
+    else:
+        query = query.not_.is_("reference", "null")
+
+    response = query.execute()
+    return [
+        watch
+        for watch in response.data or []
+        if _reference_contains_token(watch.get("reference"), token)
+    ]
+
+
 def get_active_offers_for_watch(watch_id: str) -> list[Record]:
     """Return active offers for a watch with dealer, group, and message metadata."""
     dealer_fields = (
@@ -819,19 +851,57 @@ def get_requests_by_ids(request_ids: list[str]) -> dict[str, Record]:
     return {str(row["id"]): row for row in response.data or []}
 
 
+def _normalize_lookup_ids(raw_ids: list[str]) -> list[str]:
+    """Return deduplicated non-empty ids preserving first-seen order."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_ids:
+        if raw is None:
+            continue
+        cleaned = str(raw).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
 def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
-    """Return offers keyed by id."""
-    if not offer_ids:
+    """Return offers keyed by id, querying in bounded chunks."""
+    cleaned_ids = _normalize_lookup_ids(offer_ids)
+    if not cleaned_ids:
         return {}
 
-    response = (
-        get_client()
-        .table("offers")
-        .select("id, watch_id, original_price, original_currency, usd_price, condition, card_date, production_year")
-        .in_("id", offer_ids)
-        .execute()
+    select_fields = (
+        "id, watch_id, original_price, original_currency, usd_price, condition, card_date, production_year"
     )
-    return {str(row["id"]): row for row in response.data or []}
+    results: dict[str, Record] = {}
+
+    for offset in range(0, len(cleaned_ids), OFFERS_BY_IDS_CHUNK_SIZE):
+        chunk = cleaned_ids[offset : offset + OFFERS_BY_IDS_CHUNK_SIZE]
+        try:
+            response = (
+                get_client()
+                .table("offers")
+                .select(select_fields)
+                .in_("id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning(
+                "get_offers_by_ids chunk failed (offset=%s, size=%s): %s",
+                offset,
+                len(chunk),
+                exc,
+            )
+            continue
+
+        for row in response.data or []:
+            row_id = row.get("id")
+            if row_id:
+                results[str(row_id)] = row
+
+    return results
 
 
 def get_watches_by_ids(watch_ids: list[str]) -> dict[str, Record]:

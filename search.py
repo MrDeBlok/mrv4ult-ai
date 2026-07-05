@@ -16,6 +16,9 @@ from condition_normalizer import (
 
 Record = dict[str, Any]
 WatchGroup = dict[str, Any]
+SEARCH_OFFERS_PAGE_SIZE = 1000
+
+WATCH_SEARCH_FIELDS = ("brand", "reference", "model", "dial", "bracelet")
 
 BRAND_ALIASES: dict[str, str] = {
     "rolex": "Rolex",
@@ -57,42 +60,215 @@ def search_offers(
 ) -> tuple[list[Record], bool]:
     """Search active offers by watch fields matching all query tokens."""
     tokens, max_usd_price, cheapest_only = parse_query(query)
-    dealer_fields = (
+    offers, _total_count = _load_active_offers_for_search()
+    matches = _filter_search_offers(
+        offers,
+        tokens=tokens,
+        max_usd_price=max_usd_price,
+        condition=condition,
+    )
+    return matches, cheapest_only
+
+
+def _search_dealer_fields() -> str:
+    return (
         "dealers(display_name, contact_type)"
         if contact_type_column_supported()
         else "dealers(display_name, whatsapp_id)"
     )
-    response = (
-        get_client()
-        .table("offers")
-        .select(
-            "dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
-            "messages(id), "
-            "watches(brand, reference, model, dial, bracelet), "
-            f"{dealer_fields}"
-        )
-        .eq("status", "active")
-        .execute()
+
+
+def _load_active_offers_for_search() -> tuple[list[Record], int | None]:
+    """Load active offers for search, paginating past PostgREST row limits."""
+    watch_fields = ", ".join(WATCH_SEARCH_FIELDS)
+    select_fields = (
+        "id, dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
+        "messages(id), "
+        f"watches({watch_fields}), "
+        f"{_search_dealer_fields()}"
     )
 
+    loaded: list[Record] = []
+    total_count: int | None = None
+    offset = 0
+
+    while True:
+        request = (
+            get_client()
+            .table("offers")
+            .select(select_fields, count="exact" if offset == 0 else None)
+            .eq("status", "active")
+            .range(offset, offset + SEARCH_OFFERS_PAGE_SIZE - 1)
+        )
+        response = request.execute()
+        if offset == 0:
+            total_count = response.count
+        batch = response.data or []
+        loaded.extend(batch)
+        if len(batch) < SEARCH_OFFERS_PAGE_SIZE:
+            break
+        offset += SEARCH_OFFERS_PAGE_SIZE
+
+    return loaded, total_count
+
+
+def _resolve_search_watch(
+    offer: Record,
+    *,
+    cache: dict[str, Record],
+) -> Record:
+    raw = offer.get("watches")
+    if raw:
+        return _nested_record(raw)
+
+    watch_id = str(offer.get("watch_id") or "")
+    if not watch_id:
+        return {}
+
+    if watch_id in cache:
+        return cache[watch_id]
+
+    from database import get_watch_by_id
+
+    watch = get_watch_by_id(watch_id)
+    if watch:
+        cache[watch_id] = {field: watch.get(field) for field in WATCH_SEARCH_FIELDS}
+    else:
+        cache[watch_id] = {}
+    return cache[watch_id]
+
+
+def _resolve_search_dealer(
+    offer: Record,
+    *,
+    cache: dict[str, Record],
+) -> Record:
+    raw = offer.get("dealers")
+    if raw:
+        return _nested_record(raw)
+
+    dealer_id = str(offer.get("dealer_id") or "")
+    if not dealer_id:
+        return {}
+
+    if dealer_id in cache:
+        return cache[dealer_id]
+
+    from database import get_dealer_by_id
+
+    dealer = get_dealer_by_id(dealer_id)
+    if dealer:
+        cache[dealer_id] = {
+            "display_name": dealer.get("display_name"),
+            "contact_type": dealer.get("contact_type"),
+            "whatsapp_id": dealer.get("whatsapp_id"),
+        }
+    else:
+        cache[dealer_id] = {}
+    return cache[dealer_id]
+
+
+def _filter_search_offers(
+    offers: list[Record],
+    *,
+    tokens: list[str],
+    max_usd_price: int | None,
+    condition: str | None,
+) -> list[Record]:
     matches: list[Record] = []
-    for offer in response.data or []:
-        if not is_business_dealer_relation(offer.get("dealers"), has_offers=True):
+    watch_cache: dict[str, Record] = {}
+    dealer_cache: dict[str, Record] = {}
+
+    for offer in offers:
+        dealer = _resolve_search_dealer(offer, cache=dealer_cache)
+        if not is_business_dealer_relation(dealer, has_offers=True):
             continue
-        watch = _nested_record(offer.get("watches"))
+
+        watch = _resolve_search_watch(offer, cache=watch_cache)
         if not _watch_matches_tokens(watch, tokens):
             continue
         if not _offer_within_max_usd_price(offer, max_usd_price):
             continue
         if not offer_matches_condition_filter(offer.get("condition"), condition):
             continue
+
         message = _nested_record(offer.get("messages"))
         offer["message_id"] = message.get("id")
         offer["watch"] = watch
-        offer["dealer"] = _nested_record(offer.get("dealers"))
+        offer["dealer"] = dealer
         matches.append(offer)
 
-    return matches, cheapest_only
+    return matches
+
+
+def trace_search_query(
+    query: str,
+    *,
+    condition: str | None = None,
+    offers: list[Record] | None = None,
+    total_count: int | None = None,
+) -> Record:
+    """Return staged search filter counts and metadata for one query."""
+    tokens, max_usd_price, cheapest_only = parse_query(query)
+    if offers is None:
+        offers, total_count = _load_active_offers_for_search()
+
+    watch_cache: dict[str, Record] = {}
+    dealer_cache: dict[str, Record] = {}
+    after_dealer: list[Record] = []
+    after_reference: list[Record] = []
+    after_price: list[Record] = []
+    after_condition: list[Record] = []
+
+    for offer in offers:
+        dealer = _resolve_search_dealer(offer, cache=dealer_cache)
+        if not is_business_dealer_relation(dealer, has_offers=True):
+            continue
+        after_dealer.append(offer)
+
+        watch = _resolve_search_watch(offer, cache=watch_cache)
+        if not _watch_matches_tokens(watch, tokens):
+            continue
+        after_reference.append(offer)
+
+        if not _offer_within_max_usd_price(offer, max_usd_price):
+            continue
+        after_price.append(offer)
+
+        if not offer_matches_condition_filter(offer.get("condition"), condition):
+            continue
+        after_condition.append(offer)
+
+    normalized_tokens = [
+        {
+            "token": token,
+            "reference_like": is_reference_like_token(token),
+            "normalized": _normalize_search_reference(token),
+        }
+        for token in tokens
+    ]
+
+    return {
+        "query": query,
+        "tokens": tokens,
+        "normalized_tokens": normalized_tokens,
+        "condition_filter": condition,
+        "max_usd_price": max_usd_price,
+        "cheapest_only_requested": cheapest_only,
+        "active_offers_loaded": len(offers),
+        "active_offers_total": total_count,
+        "search_row_limit_truncated": (
+            total_count is not None and len(offers) < int(total_count)
+        ),
+        "counts": {
+            "loaded": len(offers),
+            "after_dealer_visibility": len(after_dealer),
+            "after_reference_matching": len(after_reference),
+            "after_max_price": len(after_price),
+            "after_condition_filter": len(after_condition),
+            "final": len(after_condition),
+        },
+    }
 
 
 def parse_query(query: str) -> tuple[list[str], int | None, bool]:

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from contact_classification import format_import_sender_label
 from dealer_intelligence import clean_whatsapp_number_for_link
 
 Record = dict[str, Any]
+
+logger = logging.getLogger(__name__)
 
 TODAYS_BEST_DEALS_LIMIT = 5
 TODAYS_BEST_DEALS_SCAN_LIMIT = 20
@@ -158,9 +161,16 @@ def load_dashboard_todays_best_deals(
             preload_rows.extend(row for row in rows if isinstance(row, dict))
         prepared_logs.append((import_log, summary))
 
-    from deal_market_lookup import build_deal_market_preload
+    from deal_market_lookup import DealMarketPreload, build_deal_market_preload
 
-    market_preload = build_deal_market_preload(preload_rows)
+    try:
+        market_preload = build_deal_market_preload(preload_rows)
+    except Exception as exc:
+        logger.warning(
+            "Today's Best Deals preload failed; continuing with empty preload: %s",
+            exc,
+        )
+        market_preload = DealMarketPreload({}, {})
 
     candidates: list[Record] = []
     for import_log, summary in prepared_logs:
