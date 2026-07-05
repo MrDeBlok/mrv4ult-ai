@@ -90,7 +90,7 @@ def normalize_contact_type(
     if normalized == CONTACT_TYPE_DEALER:
         return CONTACT_TYPE_DEALER
     if not normalized:
-        return CONTACT_TYPE_REMOVED
+        return CONTACT_TYPE_DEALER if has_offers else CONTACT_TYPE_REMOVED
     return CONTACT_TYPE_REMOVED
 
 

@@ -273,9 +273,9 @@ def dealer_is_business_visible(dealer: Record | None, *, has_offers: bool = Fals
     return is_business_contact(dealer_contact_type(dealer, has_offers=has_offers))
 
 
-def is_business_dealer_relation(dealer_data: Any) -> bool:
+def is_business_dealer_relation(dealer_data: Any, *, has_offers: bool = False) -> bool:
     """Return True when nested Supabase dealer data belongs in business views."""
-    return dealer_is_business_visible(_nested_dealer_record(dealer_data))
+    return dealer_is_business_visible(_nested_dealer_record(dealer_data), has_offers=has_offers)
 
 
 def _nested_dealer_record(dealer: Any) -> Record:

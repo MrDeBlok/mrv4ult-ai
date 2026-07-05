@@ -9,11 +9,13 @@ import pytest
 
 from evolution_client import EvolutionAPIError
 from evolution_webhook import (
+    WEBHOOK_DECISION_PREFIX,
     WEBHOOK_TRACE_PREFIX,
     _group_name_cache,
     build_webhook_trace,
     handle_evolution_webhook,
     jid_to_contact_id,
+    log_webhook_decision,
     log_webhook_trace,
     reset_group_name_cache,
     resolve_group_name,
@@ -225,6 +227,55 @@ class TestWebhookPipelineSkips:
 
         assert any(
             WEBHOOK_TRACE_PREFIX in record.message and "skip_reason=unsupported event" in record.message
+            for record in caplog.records
+        )
+
+    def test_decision_logging_includes_remote_jid_participant_and_import_log_id(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level("INFO", logger="mrv4ult.whatsapp.ingest")
+        trace = build_webhook_trace(_working_group_payload())
+        log_webhook_decision(
+            trace,
+            {
+                "status": "imported",
+                "import_log_id": "log-123",
+                "already_processed": False,
+            },
+        )
+
+        message = next(record.message for record in caplog.records if WEBHOOK_DECISION_PREFIX in record.message)
+        assert "decision=accepted" in message
+        assert "remote_jid=120363000000000000@g.us" in message
+        assert "participant_alt=+85291234567" in message
+        assert "import_log_id=log-123" in message
+        assert "already_processed=False" in message
+
+    @patch("evolution_webhook.collect_message")
+    @patch.dict("os.environ", {"ENABLE_BACKLOG_INGEST": "false"}, clear=False)
+    def test_backlog_skip_emits_decision_log_with_reason(
+        self,
+        mock_collect: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level("INFO", logger="mrv4ult.whatsapp.ingest")
+        from datetime import datetime, timezone
+
+        old_message_at = datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+        payload = _working_group_payload()
+        payload["data"]["messageTimestamp"] = int(old_message_at.timestamp())
+        payload["data"]["key"]["id"] = "WA-BACKLOG-SKIP"
+
+        result = handle_evolution_webhook(payload)
+
+        assert result["status"] == "skipped_backlog"
+        assert result["reason"] == "backlog ingest disabled"
+        mock_collect.assert_not_called()
+        assert any(
+            WEBHOOK_DECISION_PREFIX in record.message
+            and "decision=skipped" in record.message
+            and "skip_reason=backlog ingest disabled" in record.message
             for record in caplog.records
         )
 

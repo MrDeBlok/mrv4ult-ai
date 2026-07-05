@@ -113,7 +113,7 @@ def load_active_offer_pools_by_watch_ids(
         watch_id: [] for watch_id in unique_watch_ids
     }
     for row in response.data or []:
-        if not is_business_dealer_relation(row.get("dealers")):
+        if not is_business_dealer_relation(row.get("dealers"), has_offers=True):
             continue
         watch_id = row.get("watch_id")
         offer_id = row.get("id")

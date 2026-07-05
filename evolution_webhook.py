@@ -104,6 +104,8 @@ def build_webhook_trace(payload: dict[str, Any], data: dict[str, Any] | None = N
     key = (message_data or {}).get("key") or {} if isinstance(message_data, dict) else {}
     remote_jid = str(key.get("remoteJid") or "")
     remote_jid_alt = str(key.get("remoteJidAlt") or "")
+    participant = str(key.get("participant") or "")
+    participant_alt = str(key.get("participantAlt") or key.get("participantPn") or key.get("senderPn") or "")
     chat_id = remote_jid or remote_jid_alt or "—"
     group_name = None
     if isinstance(message_data, dict):
@@ -117,6 +119,10 @@ def build_webhook_trace(payload: dict[str, Any], data: dict[str, Any] | None = N
         "event_type": normalize_event_name(payload.get("event")) or "—",
         "instance_name": str(payload.get("instance") or "—"),
         "chat_id": chat_id,
+        "remote_jid": remote_jid or "—",
+        "remote_jid_alt": remote_jid_alt or "—",
+        "participant": participant or "—",
+        "participant_alt": participant_alt or "—",
         "group_name": group_name or ("Private Offers" if is_private_chat(key) else "—"),
         "sender_id": sender_id or "—",
         "sender_name": extract_dealer_alias(message_data or {}) or "—",
@@ -143,6 +149,50 @@ def build_webhook_trace(payload: dict[str, Any], data: dict[str, Any] | None = N
     }
 
 
+WEBHOOK_DECISION_PREFIX = "[WhatsApp webhook decision]"
+
+
+def log_webhook_decision(trace: dict[str, Any], result: dict[str, Any]) -> None:
+    """Log one canonical accepted/skipped decision line for every webhook."""
+    status = str(result.get("status") or "unknown")
+    reason = result.get("reason") or result.get("status_reason")
+    if status in {"imported", "success"}:
+        decision = "accepted"
+        skip_reason = "—"
+    elif status in {"already_imported"}:
+        decision = "skipped"
+        skip_reason = reason or "duplicate whatsapp_message_id"
+    elif status in {"ignored", "skipped_backlog", "error"}:
+        decision = "skipped"
+        skip_reason = reason or status
+    else:
+        decision = "skipped" if result.get("already_processed") else "accepted"
+        skip_reason = reason or ("duplicate ingest" if result.get("already_processed") else "—")
+
+    ingest_status = result.get("ingest_status")
+    duplicate_reason = skip_reason if result.get("already_processed") or status == "already_imported" else "—"
+
+    logger.info(
+        "%s decision=%s skip_reason=%s event_type=%s message_id=%s remote_jid=%s "
+        "participant=%s participant_alt=%s text_preview=%s webhook_status=%s "
+        "ingest_status=%s import_log_id=%s already_processed=%s duplicate_reason=%s",
+        WEBHOOK_DECISION_PREFIX,
+        decision,
+        skip_reason,
+        trace.get("event_type"),
+        trace.get("message_id") or result.get("whatsapp_message_id") or "—",
+        trace.get("remote_jid"),
+        trace.get("participant"),
+        trace.get("participant_alt"),
+        trace.get("message_text_preview"),
+        status,
+        ingest_status or "—",
+        result.get("import_log_id") or "—",
+        bool(result.get("already_processed", False)),
+        duplicate_reason,
+    )
+
+
 def log_webhook_trace(
     trace: dict[str, Any],
     *,
@@ -153,7 +203,7 @@ def log_webhook_trace(
     filters = trace.get("filters") or {}
     logger.info(
         "%s decision=%s skip_reason=%s event_type=%s instance=%s chat_id=%s "
-        "group_name=%s sender_id=%s sender_name=%s message_id=%s text_preview=%s "
+        "remote_jid=%s participant=%s group_name=%s sender_id=%s sender_name=%s message_id=%s text_preview=%s "
         "message_type=%s from_me=%s is_group=%s is_private=%s "
         "filters={ignored_private:%s group_whitelist:%s group_blacklist:%s business_group:%s "
         "from_me:%s message_type:%s empty_text:%s duplicate:%s contact_visibility:%s "
@@ -164,6 +214,8 @@ def log_webhook_trace(
         trace.get("event_type"),
         trace.get("instance_name"),
         trace.get("chat_id"),
+        trace.get("remote_jid"),
+        trace.get("participant"),
         trace.get("group_name"),
         trace.get("sender_id"),
         trace.get("sender_name"),
@@ -188,6 +240,13 @@ def log_webhook_trace(
     )
 
 
+def _return_webhook_result(trace: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Attach trace and emit the canonical decision log before returning."""
+    payload = {**result, "trace": trace}
+    log_webhook_decision(trace, payload)
+    return payload
+
+
 def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     """Process one Evolution API webhook payload."""
     log_webhook_payload(payload)
@@ -200,30 +259,30 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         update_group_name_cache(payload.get("data"))
         reason = "group metadata event"
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     if event in {"chats.upsert", "chats.update"}:
         update_group_name_cache(payload.get("data"))
         reason = "chat metadata event"
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     if event not in {"messages.upsert"}:
         reason = f"unsupported event: {event or 'missing'}"
         trace["filters"]["unsupported_event_filter"] = True
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     if not is_whatsapp_webhook_ingest_enabled():
         reason = "webhook ingest disabled"
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     data = unwrap_message_data(payload.get("data"))
     if not isinstance(data, dict):
         reason = "missing message data"
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     trace = build_webhook_trace(payload, data)
 
@@ -231,14 +290,14 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         reason = "outgoing message"
         trace["filters"]["from_me_filter"] = True
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     message_text = extract_message_text(data)
     if not message_text:
         reason = "no text content"
         trace["filters"]["empty_text_filter"] = True
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     whatsapp_message_id = extract_whatsapp_message_id(data)
     if whatsapp_message_id:
@@ -248,13 +307,15 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
             reason = "duplicate whatsapp_message_id"
             trace["filters"]["duplicate_message_filter"] = True
             log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-            return {
-                "status": "already_imported",
-                "already_processed": True,
-                "whatsapp_message_id": whatsapp_message_id,
-                "reason": reason,
-                "trace": trace,
-            }
+            return _return_webhook_result(
+                trace,
+                {
+                    "status": "already_imported",
+                    "already_processed": True,
+                    "whatsapp_message_id": whatsapp_message_id,
+                    "reason": reason,
+                },
+            )
 
     received_at = extract_received_at(data, payload)
     if should_skip_backlog_message(received_at):
@@ -267,13 +328,15 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
             received_at.isoformat(),
             started_at.isoformat() if started_at else "unknown",
         )
-        return {
-            "status": "skipped_backlog",
-            "reason": reason,
-            "whatsapp_message_id": whatsapp_message_id,
-            "received_at": received_at.isoformat(),
-            "trace": trace,
-        }
+        return _return_webhook_result(
+            trace,
+            {
+                "status": "skipped_backlog",
+                "reason": reason,
+                "whatsapp_message_id": whatsapp_message_id,
+                "received_at": received_at.isoformat(),
+            },
+        )
 
     key = data.get("key") or {}
     remote_jid = str(key.get("remoteJid") or "")
@@ -295,7 +358,7 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     except WebhookProcessingError as exc:
         reason = str(exc)
         log_webhook_trace(trace, decision="skipped", skip_reason=reason)
-        return {"status": "ignored", "reason": reason, "trace": trace}
+        return _return_webhook_result(trace, {"status": "ignored", "reason": reason})
 
     trace = build_webhook_trace(payload, data)
     trace["sender_id"] = whatsapp_message.dealer_whatsapp
@@ -332,20 +395,30 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
             summary.get("new_offers"),
         )
 
-    return {
-        "status": "imported" if summary.get("status") != "already_imported" else "already_imported",
-        "ingest_status": summary.get("status"),
-        "whatsapp_message_id": whatsapp_message.whatsapp_message_id,
-        "message_id": summary.get("message_id"),
-        "already_processed": summary.get("already_processed", False),
-        "group": summary.get("group"),
-        "dealer_whatsapp": summary.get("dealer_whatsapp"),
-        "watches_parsed": summary.get("watches_parsed"),
-        "new_offers": summary.get("new_offers"),
-        "duplicate_offers": summary.get("duplicate_offers"),
-        "import_log_id": summary.get("import_log_id"),
-        "trace": trace,
-    }
+    ingest_status = summary.get("status")
+    already_processed = bool(summary.get("already_processed", False))
+    webhook_status = "already_imported" if ingest_status == "already_imported" else "imported"
+    duplicate_reason = None
+    if already_processed or webhook_status == "already_imported":
+        duplicate_reason = summary.get("status_reason") or "duplicate whatsapp_message_id"
+
+    return _return_webhook_result(
+        trace,
+        {
+            "status": webhook_status,
+            "ingest_status": ingest_status,
+            "reason": duplicate_reason,
+            "whatsapp_message_id": whatsapp_message.whatsapp_message_id,
+            "message_id": summary.get("message_id"),
+            "already_processed": already_processed,
+            "group": summary.get("group"),
+            "dealer_whatsapp": summary.get("dealer_whatsapp"),
+            "watches_parsed": summary.get("watches_parsed"),
+            "new_offers": summary.get("new_offers"),
+            "duplicate_offers": summary.get("duplicate_offers"),
+            "import_log_id": summary.get("import_log_id"),
+        },
+    )
 
 
 def extract_whatsapp_message_id(data: dict[str, Any]) -> str | None:
@@ -611,8 +684,11 @@ def extract_received_at(data: dict[str, Any], payload: dict[str, Any]) -> dateti
     timestamp = data.get("messageTimestamp")
     if timestamp is not None:
         try:
+            seconds = int(timestamp)
+            if seconds > 10_000_000_000:
+                seconds //= 1000
             return ensure_utc_datetime(
-                datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
+                datetime.fromtimestamp(seconds, tz=timezone.utc)
             )
         except (TypeError, ValueError, OSError):
             pass

@@ -927,7 +927,7 @@ def _get_active_offers(watch_id: str) -> list[tuple[str, int, str | None]]:
     )
     offers: list[tuple[str, int, str | None]] = []
     for row in response.data or []:
-        if not is_business_dealer_relation(row.get("dealers")):
+        if not is_business_dealer_relation(row.get("dealers"), has_offers=True):
             continue
         offer_id = row.get("id")
         usd_price = row.get("usd_price")

@@ -77,7 +77,7 @@ def search_offers(
 
     matches: list[Record] = []
     for offer in response.data or []:
-        if not is_business_dealer_relation(offer.get("dealers")):
+        if not is_business_dealer_relation(offer.get("dealers"), has_offers=True):
             continue
         watch = _nested_record(offer.get("watches"))
         if not _watch_matches_tokens(watch, tokens):

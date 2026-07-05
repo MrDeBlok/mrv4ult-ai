@@ -1717,18 +1717,27 @@ async def whatsapp_status() -> JSONResponse:
 
 @app.post("/webhook/evolution")
 async def evolution_webhook(request: Request) -> JSONResponse:
-    logger.info("[WhatsApp ingest] Webhook HTTP POST received")
+    webhook_logger = logging.getLogger("mrv4ult.whatsapp.ingest")
+    webhook_logger.info("[WhatsApp ingest] Webhook HTTP POST received")
     try:
         payload = await request.json()
     except Exception:
-        logger.warning("[WhatsApp ingest] Message skipped: reason=invalid JSON body")
+        webhook_logger.warning(
+            "[WhatsApp webhook decision] decision=skipped skip_reason=invalid JSON body "
+            "event_type=— message_id=— remote_jid=— participant=— text_preview=— "
+            "webhook_status=error ingest_status=— import_log_id=— already_processed=False duplicate_reason=—"
+        )
         return JSONResponse(
             {"status": "error", "reason": "invalid JSON"},
             status_code=400,
         )
 
     if not isinstance(payload, dict):
-        logger.warning("[WhatsApp ingest] Message skipped: reason=payload must be a JSON object")
+        webhook_logger.warning(
+            "[WhatsApp webhook decision] decision=skipped skip_reason=payload must be a JSON object "
+            "event_type=— message_id=— remote_jid=— participant=— text_preview=— "
+            "webhook_status=error ingest_status=— import_log_id=— already_processed=False duplicate_reason=—"
+        )
         return JSONResponse(
             {"status": "error", "reason": "payload must be a JSON object"},
             status_code=400,
@@ -1737,18 +1746,32 @@ async def evolution_webhook(request: Request) -> JSONResponse:
     try:
         result = handle_evolution_webhook(payload)
     except WebhookProcessingError as exc:
-        logger.warning("[WhatsApp ingest] Message skipped: reason=%s", exc)
+        webhook_logger.warning(
+            "[WhatsApp webhook decision] decision=skipped skip_reason=%s "
+            "event_type=— message_id=— remote_jid=— participant=— text_preview=— "
+            "webhook_status=ignored ingest_status=— import_log_id=— already_processed=False duplicate_reason=—",
+            exc,
+        )
         return JSONResponse({"status": "ignored", "reason": str(exc)}, status_code=200)
     except Exception as exc:
-        logger.exception("[WhatsApp ingest] Ingest failed with unexpected error")
+        webhook_logger.exception(
+            "[WhatsApp webhook decision] decision=skipped skip_reason=unexpected error: %s",
+            exc,
+        )
         return JSONResponse({"status": "error", "reason": str(exc)}, status_code=200)
 
-    logger.info(
-        "[WhatsApp ingest] Webhook handled: status=%s watches_parsed=%s new_offers=%s import_log_id=%s",
+    trace = result.get("trace") or {}
+    webhook_logger.info(
+        "[WhatsApp ingest] Webhook HTTP handled: webhook_status=%s skip_reason=%s "
+        "event_type=%s message_id=%s remote_jid=%s participant=%s import_log_id=%s already_processed=%s",
         result.get("status"),
-        result.get("watches_parsed"),
-        result.get("new_offers"),
-        result.get("import_log_id"),
+        result.get("reason") or "—",
+        trace.get("event_type"),
+        trace.get("message_id") or result.get("whatsapp_message_id"),
+        trace.get("remote_jid"),
+        trace.get("participant"),
+        result.get("import_log_id") or "—",
+        bool(result.get("already_processed", False)),
     )
     return JSONResponse(result, status_code=200)
 
