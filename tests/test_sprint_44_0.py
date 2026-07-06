@@ -29,7 +29,7 @@ class TestNavigationGroups:
         admin_group = next(group for group in groups if group["label"] == "Admin")
         labels = [link["label"] for link in admin_group["links"]]
 
-        assert labels == ["Team", "WhatsApp", "Performance Profile", "Import"]
+        assert labels == ["Team", "WhatsApp", "Performance Profile", "Import", "Reset Market Data"]
 
     def test_viewer_nav_is_read_only(self) -> None:
         groups = visible_nav_groups(VIEWER_USER)
