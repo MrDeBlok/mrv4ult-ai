@@ -14,11 +14,11 @@ from deal_market_lookup import (
 )
 from todays_best_deals import load_dashboard_todays_best_deals
 
-WATCH_A = "watch-a"
-WATCH_B = "watch-b"
-OFFER_A = "offer-a"
-OFFER_B = "offer-b"
-OFFER_C = "offer-c"
+WATCH_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+WATCH_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+OFFER_A = "11111111-1111-1111-1111-111111111111"
+OFFER_B = "22222222-2222-2222-2222-222222222222"
+OFFER_C = "33333333-3333-3333-3333-333333333333"
 
 
 def _summary_row(

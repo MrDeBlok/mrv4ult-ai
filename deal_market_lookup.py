@@ -89,30 +89,20 @@ def load_active_offer_pools_by_watch_ids(
     watch_ids: list[str],
 ) -> dict[str, list[tuple[str, int, str | None]]]:
     """Batch-load active business-dealer offer pools keyed by watch_id."""
+    from database import (
+        contact_type_column_supported,
+        is_business_dealer_relation,
+        query_active_offers_for_watch_ids,
+    )
+
     unique_watch_ids = sorted({watch_id for watch_id in watch_ids if watch_id})
     if not unique_watch_ids:
         return {}
 
-    from database import contact_type_column_supported, get_client, is_business_dealer_relation
-
-    dealer_fields = (
-        "dealers(contact_type)"
-        if contact_type_column_supported()
-        else "dealers(whatsapp_id)"
-    )
-    response = (
-        get_client()
-        .table("offers")
-        .select(f"id, watch_id, usd_price, condition, {dealer_fields}")
-        .in_("watch_id", unique_watch_ids)
-        .eq("status", "active")
-        .execute()
-    )
-
     pools: dict[str, list[tuple[str, int, str | None]]] = {
         watch_id: [] for watch_id in unique_watch_ids
     }
-    for row in response.data or []:
+    for row in query_active_offers_for_watch_ids(unique_watch_ids):
         if not is_business_dealer_relation(row.get("dealers"), has_offers=True):
             continue
         watch_id = row.get("watch_id")

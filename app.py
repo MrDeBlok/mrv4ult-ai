@@ -472,6 +472,296 @@ async def performance_profile_page(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/admin/reset-market-data/status", response_class=HTMLResponse, name="reset_market_data_status")
+async def reset_market_data_status_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import DB_HEALTH_KEYS, collect_db_health_status
+
+    health = collect_db_health_status()
+    return templates.TemplateResponse(
+        request,
+        "reset_market_data_status.html",
+        {
+            "health_counts": health.as_dict(),
+            "health_errors": list(health.errors),
+            "health_rows": DB_HEALTH_KEYS,
+        },
+    )
+
+
+@app.get("/admin/reset-market-data/emergency", response_class=HTMLResponse, name="reset_market_data_emergency")
+async def reset_market_data_emergency_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import RESET_CONFIRMATION_TEXT, VERIFICATION_KEYS
+
+    status = request.query_params.get("status", "")
+    error_message = request.query_params.get("error", "")
+    deleted_summary = request.query_params.get("deleted", "")
+    result_errors = [
+        item.strip()
+        for item in request.query_params.get("errors", "").split("|")
+        if item.strip()
+    ]
+    verification = None
+    verification_clean = False
+    if request.query_params.get("verify") == "1":
+        verification = {
+            key: int(request.query_params.get(key) or 0)
+            for key, _label in VERIFICATION_KEYS
+        }
+        verification_clean = all(value == 0 for value in verification.values())
+
+    return templates.TemplateResponse(
+        request,
+        "reset_market_data_emergency.html",
+        {
+            "confirmation_text": RESET_CONFIRMATION_TEXT,
+            "status": status,
+            "error_message": error_message,
+            "deleted_summary": deleted_summary,
+            "result_errors": result_errors,
+            "verification": verification,
+            "verification_clean": verification_clean,
+            "verification_rows": VERIFICATION_KEYS,
+        },
+    )
+
+
+@app.post("/admin/reset-market-data/emergency")
+async def reset_market_data_emergency_action(
+    request: Request,
+    confirm: str = Form(...),
+    confirm_text: str = Form(""),
+) -> RedirectResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+
+    from market_data_reset import RESET_CONFIRMATION_TEXT, create_batched_reset_job
+
+    if confirm_text.strip() != RESET_CONFIRMATION_TEXT:
+        return RedirectResponse(
+            url=(
+                "/admin/reset-market-data/emergency?status=error&error="
+                + quote("Confirmation text must exactly match RESET MARKET DATA.")
+            ),
+            status_code=303,
+        )
+
+    owner_user_id = str((user or {}).get("id") or (user or {}).get("email") or "unknown")
+    job_id = create_batched_reset_job(owner_user_id=owner_user_id)
+    return RedirectResponse(
+        url=f"/admin/reset-market-data/emergency/run?job_id={quote(job_id)}",
+        status_code=303,
+    )
+
+
+@app.get("/admin/reset-market-data/emergency/run", response_class=HTMLResponse, name="reset_market_data_emergency_run")
+async def reset_market_data_emergency_run_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import RESET_BATCH_SIZE, RESET_CONFIRMATION_TEXT, VERIFICATION_KEYS
+
+    job_id = request.query_params.get("job_id", "").strip()
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Missing reset job id.")
+
+    return templates.TemplateResponse(
+        request,
+        "reset_market_data_emergency_run.html",
+        {
+            "job_id": job_id,
+            "batch_size": RESET_BATCH_SIZE,
+            "confirmation_text": RESET_CONFIRMATION_TEXT,
+            "verification_rows": VERIFICATION_KEYS,
+        },
+    )
+
+
+def _batched_reset_progress_payload(progress: Any) -> dict[str, Any]:
+    verification = None
+    if progress.verification is not None:
+        verification = progress.verification.as_dict()
+    return {
+        "job_id": progress.job_id,
+        "status": progress.status,
+        "current_step": progress.current_step,
+        "step_index": progress.step_index,
+        "total_steps": progress.total_steps,
+        "deleted": progress.deleted,
+        "batches_run": progress.batches_run,
+        "batch_size": progress.batch_size,
+        "errors": list(progress.errors),
+        "warnings": list(progress.warnings),
+        "chunk_failures": list(progress.chunk_failures),
+        "verification": verification,
+        "success": progress.success,
+        "last_batch_table": progress.last_batch_table,
+        "last_batch_selected": progress.last_batch_selected,
+        "last_batch_deleted": progress.last_batch_deleted,
+    }
+
+
+@app.post("/admin/reset-market-data/emergency/batch")
+async def reset_market_data_emergency_batch(request: Request) -> JSONResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import get_batched_reset_progress, run_batched_reset_batch
+
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    job_id = str(payload.get("job_id") or request.query_params.get("job_id") or "").strip()
+    if not job_id:
+        return JSONResponse(status_code=400, content={"detail": "Missing job_id."})
+
+    owner_user_id = str((user or {}).get("id") or (user or {}).get("email") or "unknown")
+    try:
+        progress = run_batched_reset_batch(job_id, owner_user_id=owner_user_id)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"detail": "Reset job not found or expired."})
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"detail": "Reset job belongs to another user."})
+
+    return JSONResponse(_batched_reset_progress_payload(progress))
+
+
+@app.get("/admin/reset-market-data/emergency/progress")
+async def reset_market_data_emergency_progress(request: Request) -> JSONResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import get_batched_reset_progress
+
+    job_id = request.query_params.get("job_id", "").strip()
+    if not job_id:
+        return JSONResponse(status_code=400, content={"detail": "Missing job_id."})
+
+    owner_user_id = str((user or {}).get("id") or (user or {}).get("email") or "unknown")
+    try:
+        progress = get_batched_reset_progress(job_id, owner_user_id=owner_user_id)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"detail": "Reset job not found or expired."})
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"detail": "Reset job belongs to another user."})
+
+    return JSONResponse(_batched_reset_progress_payload(progress))
+
+
+@app.get("/admin/reset-market-data", response_class=HTMLResponse, name="reset_market_data")
+async def reset_market_data_page(request: Request) -> HTMLResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from market_data_reset import (
+        RESET_CONFIRMATION_TEXT,
+        VERIFICATION_KEYS,
+        preview_market_data_reset,
+    )
+
+    load_preview = request.query_params.get("preview") == "1"
+    preview = preview_market_data_reset(load_counts=load_preview)
+    status = request.query_params.get("status", "")
+    error_message = request.query_params.get("error", "")
+    deleted_summary = request.query_params.get("deleted", "")
+    reset_method = request.query_params.get("method", "")
+    result_errors = [
+        item.strip()
+        for item in request.query_params.get("errors", "").split("|")
+        if item.strip()
+    ]
+    chunk_failures = [
+        item.strip()
+        for item in request.query_params.get("chunk_failures", "").split("|")
+        if item.strip()
+    ]
+    verification = None
+    verification_clean = False
+    if request.query_params.get("verify") == "1":
+        verification = {
+            key: int(request.query_params.get(key) or 0)
+            for key, _label in VERIFICATION_KEYS
+        }
+        verification_clean = all(value == 0 for value in verification.values())
+    return templates.TemplateResponse(
+        request,
+        "reset_market_data.html",
+        {
+            "preview": preview,
+            "confirmation_text": RESET_CONFIRMATION_TEXT,
+            "status": status,
+            "error_message": error_message,
+            "deleted_summary": deleted_summary,
+            "reset_method": reset_method,
+            "result_errors": result_errors,
+            "chunk_failures": chunk_failures,
+            "verification": verification,
+            "verification_clean": verification_clean,
+            "verification_rows": VERIFICATION_KEYS,
+        },
+    )
+
+
+@app.post("/admin/reset-market-data")
+async def reset_market_data_action(
+    request: Request,
+    confirm: str = Form(...),
+    confirm_text: str = Form(""),
+    dry_run: str = Form(""),
+) -> RedirectResponse:
+    user = get_current_user(request)
+    if not can_access_admin_tools(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if confirm != "1":
+        raise HTTPException(status_code=400, detail="Confirmation required")
+
+    from market_data_reset import RESET_CONFIRMATION_TEXT, run_market_data_reset
+
+    if dry_run == "1":
+        run_market_data_reset(dry_run=True)
+        return RedirectResponse(
+            url="/admin/reset-market-data?status=dry_run",
+            status_code=303,
+        )
+
+    if confirm_text.strip() != RESET_CONFIRMATION_TEXT:
+        return RedirectResponse(
+            url=(
+                "/admin/reset-market-data?status=error&error="
+                + quote("Confirmation text must exactly match RESET MARKET DATA.")
+            ),
+            status_code=303,
+        )
+
+    result = run_market_data_reset(dry_run=False)
+    deleted_summary = ", ".join(
+        f"{key}={value}" for key, value in sorted(result.deleted.items()) if value
+    )
+    status = result.status_label
+    params = f"status={status}&method={quote(result.method)}&deleted={quote(deleted_summary)}&verify=1"
+    if result.verification is not None:
+        for key, value in result.verification.as_dict().items():
+            params += f"&{key}={value}"
+    combined_errors = list(result.errors)
+    if result.chunk_failures:
+        params += f"&chunk_failures={quote('|'.join(result.chunk_failures))}"
+    if combined_errors:
+        params += f"&errors={quote('|'.join(combined_errors))}"
+    return RedirectResponse(url=f"/admin/reset-market-data?{params}", status_code=303)
+
+
 @app.get("/dashboard", response_class=HTMLResponse, name="dashboard")
 async def dashboard_page(request: Request) -> HTMLResponse:
     user = get_current_user(request)

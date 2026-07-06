@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Emergency Reset Running · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1 text-danger">Emergency reset in progress</h1>
+        <p class="text-muted mb-0">
+            Deleting market data in batches of {{ batch_size }} rows. Each batch commits separately.
+        </p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="/admin/reset-market-data/status">DB health</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/admin/reset-market-data/emergency">Back</a>
+    </div>
+</div>
+
+<div id="reset-alert" class="alert alert-info" role="alert">
+    Starting batched reset…
+</div>
+
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <h2 class="h5 mb-3">Progress</h2>
+        <dl class="row mb-0 small">
+            <dt class="col-sm-3">Status</dt>
+            <dd class="col-sm-9" id="reset-status">running</dd>
+            <dt class="col-sm-3">Current step</dt>
+            <dd class="col-sm-9" id="reset-step">—</dd>
+            <dt class="col-sm-3">Batches run</dt>
+            <dd class="col-sm-9" id="reset-batches">0</dd>
+            <dt class="col-sm-3">Deleted</dt>
+            <dd class="col-sm-9" id="reset-deleted">—</dd>
+            <dt class="col-sm-3">Last batch</dt>
+            <dd class="col-sm-9" id="reset-last-batch">—</dd>
+        </dl>
+        <div class="progress mt-3" role="progressbar" aria-label="Reset progress">
+            <div id="reset-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+        </div>
+    </div>
+</section>
+
+<section id="reset-verification" class="card shadow-sm mb-4 d-none">
+    <div class="card-body p-3 p-md-4">
+        <h2 class="h5 mb-3">Verification</h2>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Check</th>
+                        <th class="text-end">Count</th>
+                        <th class="text-end">Expected</th>
+                    </tr>
+                </thead>
+                <tbody id="reset-verification-body">
+                    {% for key, label in verification_rows %}
+                    <tr data-key="{{ key }}">
+                        <td>{{ label }}</td>
+                        <td class="text-end verification-count">—</td>
+                        <td class="text-end">0</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<script>
+(() => {
+    const jobId = {{ job_id | tojson }};
+    const alertEl = document.getElementById("reset-alert");
+    const statusEl = document.getElementById("reset-status");
+    const stepEl = document.getElementById("reset-step");
+    const batchesEl = document.getElementById("reset-batches");
+    const deletedEl = document.getElementById("reset-deleted");
+    const lastBatchEl = document.getElementById("reset-last-batch");
+    const progressBar = document.getElementById("reset-progress-bar");
+    const verificationSection = document.getElementById("reset-verification");
+    let polling = true;
+
+    function formatDeleted(deleted) {
+        return Object.entries(deleted || {})
+            .filter(([, value]) => Number(value) > 0)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(", ") || "—";
+    }
+
+    function updateVerification(verification) {
+        if (!verification) {
+            return;
+        }
+        verificationSection.classList.remove("d-none");
+        document.querySelectorAll("#reset-verification-body tr[data-key]").forEach((row) => {
+            const key = row.getAttribute("data-key");
+            const count = Number(verification[key] || 0);
+            const cell = row.querySelector(".verification-count");
+            cell.textContent = String(count);
+            row.classList.toggle("table-danger", count !== 0);
+            row.classList.toggle("table-success", count === 0);
+        });
+    }
+
+    function renderProgress(data) {
+        statusEl.textContent = data.status || "unknown";
+        stepEl.textContent = data.current_step || "done";
+        batchesEl.textContent = String(data.batches_run || 0);
+        deletedEl.textContent = formatDeleted(data.deleted);
+        if (data.last_batch_table) {
+            lastBatchEl.textContent =
+                `${data.last_batch_table}: selected=${data.last_batch_selected ?? 0}, deleted=${data.last_batch_deleted ?? 0}`;
+        }
+        const stepIndex = Number(data.step_index || 0);
+        const totalSteps = Number(data.total_steps || 1);
+        const pct = data.status === "complete"
+            ? 100
+            : Math.min(99, Math.round((stepIndex / totalSteps) * 100));
+        progressBar.style.width = `${pct}%`;
+        updateVerification(data.verification);
+
+        if (data.status === "complete" && data.success) {
+            alertEl.className = "alert alert-success";
+            const warnings = data.warnings || [];
+            alertEl.textContent = warnings.length
+                ? `Emergency reset succeeded. Warnings: ${warnings.join("; ")}`
+                : "Emergency reset succeeded. Core market tables are empty.";
+            progressBar.classList.remove("progress-bar-animated");
+            polling = false;
+            return;
+        }
+        if (data.status === "complete" && !data.success) {
+            alertEl.className = "alert alert-warning";
+            alertEl.textContent = "Reset finished but verification is not clean.";
+            polling = false;
+            return;
+        }
+        if (data.status === "failed") {
+            alertEl.className = "alert alert-danger";
+            const errors = (data.errors || []).concat(data.chunk_failures || []);
+            alertEl.textContent = errors.length
+                ? `Reset failed: ${errors.join("; ")}`
+                : "Reset failed.";
+            polling = false;
+            return;
+        }
+
+        const warnings = data.warnings || [];
+        alertEl.className = warnings.length ? "alert alert-warning" : "alert alert-info";
+        alertEl.textContent = warnings.length
+            ? `Deleting ${data.current_step || "market data"}… ${warnings[warnings.length - 1]}`
+            : `Deleting ${data.current_step || "market data"}… batch size ${data.batch_size || 100}.`;
+    }
+
+    async function runBatch() {
+        const response = await fetch("/admin/reset-market-data/emergency/batch", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({job_id: jobId}),
+        });
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.detail || `Batch request failed (${response.status})`);
+        }
+        return response.json();
+    }
+
+    async function poll() {
+        while (polling) {
+            try {
+                const data = await runBatch();
+                renderProgress(data);
+                if (!polling) {
+                    break;
+                }
+            } catch (error) {
+                alertEl.className = "alert alert-danger";
+                alertEl.textContent = String(error.message || error);
+                polling = false;
+                break;
+            }
+        }
+    }
+
+    poll();
+})();
+</script>
+{% endblock %}

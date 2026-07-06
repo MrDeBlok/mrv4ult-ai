@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}Reset Market Data · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Reset market data</h1>
+        <p class="text-muted mb-0">
+            Admin-only cleanup for bad historical offers, imports, matches, and notifications.
+            Search reads directly from the <code>offers</code> table — offers must reach zero.
+        </p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/dashboard">Back to Trading Desk</a>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+    <a class="btn btn-outline-danger btn-sm" href="/admin/reset-market-data/emergency">Emergency reset</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/admin/reset-market-data/status">DB health</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/admin/reset-market-data?preview=1">Load full preview</a>
+</div>
+
+{% if preview.preview_method == "skipped" %}
+<div class="alert alert-info" role="alert">
+    Preview counts skipped for speed on this page load.
+    Use <a href="/admin/reset-market-data/status">DB health</a> for lightweight counts or
+    <a href="/admin/reset-market-data/emergency">Emergency reset</a> if the database is too large for preview.
+</div>
+{% endif %}
+
+{% if status == "dry_run" %}
+<div class="alert alert-info" role="alert">
+    Dry run complete. No rows were deleted.
+</div>
+{% elif status == "success" %}
+<div class="alert alert-success" role="alert">
+    Reset succeeded. Search should now be empty.
+    {% if reset_method %}Method: {{ reset_method }}.{% endif %}
+    {% if deleted_summary %}Deleted: {{ deleted_summary }}.{% endif %}
+</div>
+{% elif status == "failed" %}
+<div class="alert alert-danger" role="alert">
+    <strong>Reset FAILED.</strong> Market data remains and Search may still return historical offers.
+    {% if reset_method %}Method: {{ reset_method }}.{% endif %}
+    {% if deleted_summary %}Deleted: {{ deleted_summary }}.{% endif %}
+    {% if result_errors %}
+    <div class="mt-2">{{ result_errors | join("; ") }}</div>
+    {% endif %}
+    {% if chunk_failures %}
+    <div class="mt-2"><strong>Chunk failures:</strong> {{ chunk_failures | join("; ") }}</div>
+    {% endif %}
+</div>
+{% elif status == "error" %}
+<div class="alert alert-danger" role="alert">{{ error_message }}</div>
+{% elif preview.has_preview_error %}
+<div class="alert alert-danger" role="alert">
+    Preview counts failed: {{ preview.preview_error }}
+</div>
+{% endif %}
+
+{% if not preview.rpc_available %}
+<div class="alert alert-warning" role="alert">
+    RPC not installed. Apply migration
+    <code>docs/migrations/sprint_48_4_reset_market_data_rpc.sql</code>
+    in Supabase for reliable reset. Preview uses lightweight count queries; execute falls back to Python deletes.
+</div>
+{% elif preview.preview_method == "rpc" %}
+<div class="alert alert-info py-2" role="alert">
+    Preview counts loaded via <code>reset_market_data_admin(dry_run=true)</code>.
+</div>
+{% endif %}
+
+{% if verification %}
+<section class="card shadow-sm mb-4{% if verification_clean %} border-success{% else %} border-danger{% endif %}">
+    <div class="card-body p-3 p-md-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">Post-reset verification</h2>
+            {% if verification_clean %}
+            <span class="badge text-bg-success">All zero</span>
+            {% else %}
+            <span class="badge text-bg-danger">Not clean</span>
+            {% endif %}
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Check</th>
+                        <th class="text-end">Count</th>
+                        <th class="text-end">Expected</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for key, label in verification_rows %}
+                    <tr{% if verification.get(key, 0) != 0 %} class="table-danger"{% endif %}>
+                        <td>{{ label }}</td>
+                        <td class="text-end">{{ verification.get(key, 0) }}</td>
+                        <td class="text-end">0</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <section class="card shadow-sm mb-4">
+            <div class="card-body p-3 p-md-4">
+                <h2 class="h5 mb-3">Will be deleted</h2>
+                <p class="text-muted small">
+                    Reset mode: <strong>{{ preview.delete_mode | replace("_", " ") }}</strong>.
+                    RPC is used when migration <code>sprint_48_4_reset_market_data_rpc.sql</code> is applied.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Scope</th>
+                                <th class="text-end">Rows</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for action in preview.reset_actions %}
+                            <tr>
+                                <td>
+                                    <div class="fw-semibold">
+                                        {{ action.label }}
+                                        {% if action.critical %}<span class="badge text-bg-danger ms-1">critical</span>{% endif %}
+                                    </div>
+                                    <div class="text-muted small">{{ action.description }}</div>
+                                </td>
+                                <td class="text-end">
+                                    {% if preview.has_preview_error and action.key not in preview.counts %}
+                                    —
+                                    {% else %}
+                                    {{ preview.counts.get(action.key, 0) }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            <tr>
+                                <td>
+                                    <div class="fw-semibold">Active offers now</div>
+                                    <div class="text-muted small">Current Search source count before reset.</div>
+                                </td>
+                                <td class="text-end">
+                                    {% if preview.has_preview_error %}—{% else %}{{ preview.counts.get("offers_active", 0) }}{% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <div class="fw-semibold">Parser review imports</div>
+                                    <div class="text-muted small">Subset of import logs in AI Workbench.</div>
+                                </td>
+                                <td class="text-end">
+                                    {% if preview.has_preview_error %}—{% else %}{{ preview.counts.get("parser_review_imports", 0) }}{% endif %}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="card shadow-sm">
+            <div class="card-body p-3 p-md-4">
+                <h2 class="h5 mb-3">Tables feeding Search</h2>
+                <ul class="mb-0 ps-3">
+                    {% for source in preview.search_data_sources %}
+                    <li>{{ source }}</li>
+                    {% endfor %}
+                </ul>
+                <p class="text-muted small mb-0 mt-3">No offer cache, materialized view, or price-intelligence table is used by Search.</p>
+            </div>
+        </section>
+    </div>
+
+    <div class="col-lg-5">
+        <section class="card shadow-sm mb-4">
+            <div class="card-body p-3 p-md-4">
+                <h2 class="h5 mb-3">Preserved</h2>
+                <ul class="mb-0 ps-3">
+                    {% for item in preview.preserved_items %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </section>
+
+        <section class="card shadow-sm border-warning">
+            <div class="card-body p-3 p-md-4">
+                <h2 class="h5 mb-3">Dry run</h2>
+                <p class="text-muted small mb-3">Refresh counts without deleting anything.</p>
+                <form method="post" action="/admin/reset-market-data">
+                    <input type="hidden" name="confirm" value="1">
+                    <input type="hidden" name="dry_run" value="1">
+                    <button type="submit" class="btn btn-outline-secondary w-100">Run dry run</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="card shadow-sm border-danger mt-4">
+            <div class="card-body p-3 p-md-4">
+                <h2 class="h5 mb-3 text-danger">Execute reset</h2>
+                <p class="text-muted small mb-3">
+                    Type <code>{{ confirmation_text }}</code> exactly to confirm permanent deletion.
+                </p>
+                <form
+                    method="post"
+                    action="/admin/reset-market-data"
+                    onsubmit="return confirm('Permanently delete the market data listed above? This cannot be undone.');"
+                >
+                    <input type="hidden" name="confirm" value="1">
+                    <div class="mb-3">
+                        <label for="confirm_text" class="form-label">Confirmation text</label>
+                        <input
+                            id="confirm_text"
+                            name="confirm_text"
+                            type="text"
+                            class="form-control"
+                            autocomplete="off"
+                            placeholder="{{ confirmation_text }}"
+                            required
+                        >
+                    </div>
+                    <button type="submit" class="btn btn-danger w-100">Reset market data</button>
+                </form>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

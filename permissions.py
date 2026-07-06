@@ -37,6 +37,7 @@ ADMIN_ONLY_PATH_PREFIXES = (
     "/knowledge",
     "/whatsapp",
     "/performance-profile",
+    "/admin/reset-market-data",
 )
 TEAM_MANAGEMENT_PREFIX = "/settings/team"
 WRITE_EXEMPT_POST_PATHS = frozenset({"/logout"})

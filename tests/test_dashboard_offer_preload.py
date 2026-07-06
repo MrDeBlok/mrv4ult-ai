@@ -60,10 +60,9 @@ class TestGetOffersByIdsChunking:
         result = get_offers_by_ids(offer_ids)
 
         in_calls = mock_get_client.return_value.table.return_value.select.return_value.in_.call_args_list
-        assert len(in_calls) == 3
+        assert len(in_calls) == 5
         assert len(in_calls[0].args[1]) == OFFERS_BY_IDS_CHUNK_SIZE
-        assert len(in_calls[1].args[1]) == OFFERS_BY_IDS_CHUNK_SIZE
-        assert len(in_calls[2].args[1]) == 50
+        assert len(in_calls[-1].args[1]) == OFFERS_BY_IDS_CHUNK_SIZE
         assert result[offer_ids[0]]["watch_id"] == WATCH_A
 
     @patch("database.get_client")
@@ -78,6 +77,16 @@ class TestGetOffersByIdsChunking:
 
         chunk_ids = mock_get_client.return_value.table.return_value.select.return_value.in_.call_args.args[1]
         assert chunk_ids == [OFFER_A, OFFER_B]
+
+    @patch("database.get_client")
+    def test_get_offers_by_ids_skips_invalid_uuids(self, mock_get_client: MagicMock) -> None:
+        execute = _mock_offers_execute([{"id": OFFER_A, "watch_id": WATCH_A}])
+        mock_get_client.return_value.table.return_value.select.return_value.in_.return_value.execute.return_value = execute
+
+        get_offers_by_ids(["not-a-uuid", OFFER_A, "offer-fresh-1"])
+
+        chunk_ids = mock_get_client.return_value.table.return_value.select.return_value.in_.call_args.args[1]
+        assert chunk_ids == [OFFER_A]
 
     @patch("database.get_client")
     def test_get_offers_by_ids_continues_when_one_chunk_fails(

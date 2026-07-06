@@ -18,7 +18,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-OFFERS_BY_IDS_CHUNK_SIZE = 100
+LOOKUP_IDS_CHUNK_SIZE = 50
+OFFERS_BY_IDS_CHUNK_SIZE = LOOKUP_IDS_CHUNK_SIZE
+
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 from condition_normalizer import normalize_condition_value
 from contact_classification import (
@@ -851,72 +857,110 @@ def get_requests_by_ids(request_ids: list[str]) -> dict[str, Record]:
     return {str(row["id"]): row for row in response.data or []}
 
 
-def _normalize_lookup_ids(raw_ids: list[str]) -> list[str]:
+def _is_valid_uuid(value: str) -> bool:
+    return bool(_UUID_PATTERN.match(value))
+
+
+def _normalize_lookup_ids(raw_ids: list[str], *, require_uuid: bool = False) -> list[str]:
     """Return deduplicated non-empty ids preserving first-seen order."""
     normalized: list[str] = []
     seen: set[str] = set()
+    skipped_invalid = 0
     for raw in raw_ids:
         if raw is None:
             continue
         cleaned = str(raw).strip()
         if not cleaned or cleaned in seen:
             continue
+        if require_uuid and not _is_valid_uuid(cleaned):
+            skipped_invalid += 1
+            continue
         seen.add(cleaned)
         normalized.append(cleaned)
+    if skipped_invalid:
+        logger.warning(
+            "Skipped %s invalid lookup id(s) for PostgREST in.(...) query",
+            skipped_invalid,
+        )
     return normalized
 
 
-def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
-    """Return offers keyed by id, querying in bounded chunks."""
-    cleaned_ids = _normalize_lookup_ids(offer_ids)
+def _query_table_in_id_chunks(
+    table_name: str,
+    select_fields: str,
+    ids: list[str],
+    *,
+    id_column: str = "id",
+    require_uuid: bool = True,
+    apply_filters: Any | None = None,
+) -> list[Record]:
+    """Load rows for many ids using bounded PostgREST in.(...) batches."""
+    cleaned_ids = _normalize_lookup_ids(ids, require_uuid=require_uuid)
     if not cleaned_ids:
-        return {}
+        return []
 
-    select_fields = (
-        "id, watch_id, original_price, original_currency, usd_price, condition, card_date, production_year"
-    )
-    results: dict[str, Record] = {}
-
-    for offset in range(0, len(cleaned_ids), OFFERS_BY_IDS_CHUNK_SIZE):
-        chunk = cleaned_ids[offset : offset + OFFERS_BY_IDS_CHUNK_SIZE]
+    rows: list[Record] = []
+    for offset in range(0, len(cleaned_ids), LOOKUP_IDS_CHUNK_SIZE):
+        chunk = cleaned_ids[offset : offset + LOOKUP_IDS_CHUNK_SIZE]
         try:
-            response = (
+            request = (
                 get_client()
-                .table("offers")
+                .table(table_name)
                 .select(select_fields)
-                .in_("id", chunk)
-                .execute()
+                .in_(id_column, chunk)
             )
+            if apply_filters is not None:
+                request = apply_filters(request)
+            response = request.execute()
         except Exception as exc:
             logger.warning(
-                "get_offers_by_ids chunk failed (offset=%s, size=%s): %s",
+                "%s chunk lookup failed on %s (offset=%s, size=%s): %s",
+                table_name,
+                id_column,
                 offset,
                 len(chunk),
                 exc,
             )
             continue
+        rows.extend(response.data or [])
+    return rows
 
-        for row in response.data or []:
-            row_id = row.get("id")
-            if row_id:
-                results[str(row_id)] = row
 
-    return results
+def get_offers_by_ids(offer_ids: list[str]) -> dict[str, Record]:
+    """Return offers keyed by id, querying in bounded chunks."""
+    select_fields = (
+        "id, watch_id, original_price, original_currency, usd_price, condition, card_date, production_year"
+    )
+    rows = _query_table_in_id_chunks("offers", select_fields, offer_ids, id_column="id")
+    return {str(row["id"]): row for row in rows if row.get("id")}
+
+
+def query_active_offers_for_watch_ids(watch_ids: list[str]) -> list[Record]:
+    """Return active offer rows for many watch ids using bounded PostgREST batches."""
+    dealer_fields = (
+        "dealers(contact_type)"
+        if contact_type_column_supported()
+        else "dealers(whatsapp_id)"
+    )
+    select_fields = f"id, watch_id, usd_price, condition, {dealer_fields}"
+    return _query_table_in_id_chunks(
+        "offers",
+        select_fields,
+        watch_ids,
+        id_column="watch_id",
+        apply_filters=lambda request: request.eq("status", "active"),
+    )
 
 
 def get_watches_by_ids(watch_ids: list[str]) -> dict[str, Record]:
     """Return watches keyed by id."""
-    if not watch_ids:
-        return {}
-
-    response = (
-        get_client()
-        .table("watches")
-        .select("id, brand, reference, model, dial")
-        .in_("id", watch_ids)
-        .execute()
+    rows = _query_table_in_id_chunks(
+        "watches",
+        "id, brand, reference, model, dial",
+        watch_ids,
+        id_column="id",
     )
-    return {str(row["id"]): row for row in response.data or []}
+    return {str(row["id"]): row for row in rows if row.get("id")}
 
 
 def get_import_logs_by_ids(import_log_ids: list[str]) -> dict[str, Record]:

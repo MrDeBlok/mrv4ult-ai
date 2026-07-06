@@ -64,6 +64,7 @@ NAV_GROUPS: tuple[Record, ...] = (
             {"label": "WhatsApp", "path": "/whatsapp", "match": "prefix"},
             {"label": "Performance Profile", "path": "/performance-profile", "match": "exact"},
             {"label": "Import", "path": "/import", "match": "prefix", "admin_only": True},
+            {"label": "Reset Market Data", "path": "/admin/reset-market-data", "match": "prefix"},
         ),
     },
 )
