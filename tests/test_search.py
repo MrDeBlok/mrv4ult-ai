@@ -107,13 +107,16 @@ class TestSearchConditionFilter:
 
 
 class TestSearchResultDisplay:
-    def test_build_result_rows_displays_condition_and_card_date(self) -> None:
+    def test_build_result_rows_displays_reference_index_fields(self) -> None:
         rows = build_result_rows(
             [
                 {
                     "watch_id": "w-new",
                     "watch": _watch(),
                     "lowest_usd": 74000,
+                    "offer_count": 2,
+                    "unique_dealers": 1,
+                    "conditions_available": [NEW_CONDITION, PRE_OWNED_CONDITION],
                     "offers": [
                         {
                             "usd_price": 74000,
@@ -126,18 +129,26 @@ class TestSearchResultDisplay:
             ]
         )
 
-        assert rows[0]["condition"] == NEW_CONDITION
-        assert rows[0]["raw_condition"] == "Unworn"
-        assert rows[0]["card_date"] == "06/2026"
-        assert rows[0]["source_url"] is None
+        assert rows[0]["brand"] == "Rolex"
+        assert rows[0]["reference"] == "126200"
+        assert rows[0]["lowest_price"] == "$74,000"
+        assert rows[0]["offer_count"] == 2
+        assert rows[0]["unique_dealers"] == 1
+        assert rows[0]["conditions_label"] == "New / Pre-Owned"
         assert rows[0]["watch_url"] == "/watch/w-new"
 
+    @patch("app.get_import_logs_by_message_ids", return_value={})
     @patch("app.search_offers")
-    def test_search_page_renders_condition_fields(self, mock_search_offers: MagicMock) -> None:
+    def test_search_page_renders_grouped_reference_index(
+        self,
+        mock_search_offers: MagicMock,
+        _mock_import_logs: MagicMock,
+    ) -> None:
         mock_search_offers.return_value = (
             [
                 {
                     "watch_id": "w-new",
+                    "dealer_id": "dealer-1",
                     "usd_price": 74000,
                     "condition": "Used",
                     "card_date": "06/2026",
@@ -152,8 +163,9 @@ class TestSearchResultDisplay:
         response = client.get("/?q=126200&condition=pre-owned")
 
         assert response.status_code == 200
-        assert "Pre-Owned" in response.text
-        assert "Used" in response.text
-        assert "06/2026" in response.text
+        assert "Rolex" in response.text
+        assert "126200" in response.text
+        assert "Active offers" in response.text
+        assert "Dealer A" not in response.text
         mock_search_offers.assert_called_once()
         assert mock_search_offers.call_args.kwargs["condition"] == PRE_OWNED_CONDITION

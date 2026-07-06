@@ -9,8 +9,11 @@ from typing import Any
 from database import contact_type_column_supported, get_client, is_business_dealer_relation
 from watch_identifier import expand_search_token, is_reference_like_token
 from condition_normalizer import (
+    NEW_CONDITION,
+    PRE_OWNED_CONDITION,
+    UNKNOWN_CONDITION,
     display_condition,
-    offer_condition_display,
+    offer_condition_category,
     offer_matches_condition_filter,
 )
 
@@ -324,8 +327,93 @@ def group_offers_by_watch(
         watch_id = offer.get("watch_id")
         if not watch_id:
             continue
-        grouped.setdefault(watch_id, []).append(offer)
+        grouped.setdefault(str(watch_id), []).append(offer)
 
+    return _build_watch_groups(grouped, cheapest_only=cheapest_only)
+
+
+def brand_reference_group_key(watch: Record) -> tuple[str, str]:
+    """Return a stable grouping key for brand + reference (never merges across either)."""
+    brand = (watch.get("brand") or "").strip().casefold()
+    reference = _normalize_search_reference(watch.get("reference"))
+    return brand, reference
+
+
+def summarize_conditions_available(offers: list[Record]) -> list[str]:
+    """Return sorted condition categories present in a group of offers."""
+    categories = {offer_condition_category(offer.get("condition")) for offer in offers}
+    order = (NEW_CONDITION, PRE_OWNED_CONDITION, UNKNOWN_CONDITION)
+    return [category for category in order if category in categories]
+
+
+def group_offers_by_brand_reference(
+    offers: list[Record],
+    *,
+    cheapest_only: bool = False,
+) -> list[WatchGroup]:
+    """Group matching offers by brand + reference for the search reference index."""
+    grouped: dict[tuple[str, str], list[Record]] = {}
+    watch_by_key: dict[tuple[str, str], Record] = {}
+
+    for offer in offers:
+        watch = offer.get("watch") or {}
+        key = brand_reference_group_key(watch)
+        if not key[0] or not key[1]:
+            continue
+        grouped.setdefault(key, []).append(offer)
+        if key not in watch_by_key:
+            watch_by_key[key] = watch
+
+    group_lists: dict[str, list[Record]] = {}
+    watch_ids: dict[str, Record] = {}
+    for key, key_offers in grouped.items():
+        group_id = f"{key[0]}::{key[1]}"
+        group_lists[group_id] = key_offers
+        watch_ids[group_id] = watch_by_key[key]
+
+    built: list[WatchGroup] = []
+    for group_id, key_offers in group_lists.items():
+        watch = watch_ids[group_id]
+        key_offers.sort(key=_sort_key_usd_price)
+        if cheapest_only:
+            cheapest_offer = _pick_cheapest_offer(key_offers)
+            key_offers = [cheapest_offer] if cheapest_offer else []
+
+        usd_prices = [
+            price for price in (offer.get("usd_price") for offer in key_offers) if price is not None
+        ]
+        if not key_offers:
+            continue
+
+        representative = _pick_cheapest_offer(key_offers) or key_offers[0]
+        dealer_ids = {
+            str(offer.get("dealer_id"))
+            for offer in key_offers
+            if offer.get("dealer_id")
+        }
+        built.append(
+            {
+                "watch_id": representative.get("watch_id"),
+                "watch": watch,
+                "offers": key_offers,
+                "lowest_usd": min(usd_prices) if usd_prices else None,
+                "average_usd": round(sum(usd_prices) / len(usd_prices)) if usd_prices else None,
+                "highest_usd": max(usd_prices) if usd_prices else None,
+                "offer_count": len(key_offers),
+                "unique_dealers": len(dealer_ids),
+                "conditions_available": summarize_conditions_available(key_offers),
+            }
+        )
+
+    built.sort(key=lambda group: (group["lowest_usd"] is None, group["lowest_usd"] or 0))
+    return built
+
+
+def _build_watch_groups(
+    grouped: dict[str, list[Record]],
+    *,
+    cheapest_only: bool,
+) -> list[WatchGroup]:
     groups: list[WatchGroup] = []
     for watch_id, watch_offers in grouped.items():
         watch_offers.sort(key=_sort_key_usd_price)
@@ -340,6 +428,11 @@ def group_offers_by_watch(
             continue
 
         watch = watch_offers[0].get("watch") or {}
+        dealer_ids = {
+            str(offer.get("dealer_id"))
+            for offer in watch_offers
+            if offer.get("dealer_id")
+        }
         groups.append(
             {
                 "watch_id": watch_id,
@@ -349,6 +442,8 @@ def group_offers_by_watch(
                 "average_usd": round(sum(usd_prices) / len(usd_prices)) if usd_prices else None,
                 "highest_usd": max(usd_prices) if usd_prices else None,
                 "offer_count": len(watch_offers),
+                "unique_dealers": len(dealer_ids),
+                "conditions_available": summarize_conditions_available(watch_offers),
             }
         )
 
@@ -498,7 +593,7 @@ def main() -> None:
     try:
         query = read_query()
         offers, cheapest_only = search_offers(query)
-        groups = group_offers_by_watch(offers, cheapest_only=cheapest_only)
+        groups = group_offers_by_brand_reference(offers, cheapest_only=cheapest_only)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

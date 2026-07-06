@@ -5,9 +5,9 @@
 {% block content %}
 <section class="search-panel card shadow-sm mb-4">
     <div class="card-body p-3 p-md-4">
-        <h1 class="h3 mb-1">Watch offer search</h1>
+        <h1 class="h3 mb-1">Watch reference search</h1>
         <p class="text-muted mb-4">
-            Search active offers by brand, reference, dial, or bracelet.
+            Search active market references by brand or reference. Results are grouped by brand + reference.
         </p>
 
         <form method="get" action="/" class="row g-3">
@@ -18,7 +18,7 @@
                     id="search-query"
                     name="q"
                     class="form-control form-control-lg"
-                    placeholder="Rolex 126200"
+                    placeholder="5711/1R or 5711"
                     value="{{ search_text }}"
                     autofocus
                 >
@@ -78,11 +78,11 @@
 {% if error %}
 <div class="alert alert-danger" role="alert">{{ error }}</div>
 {% elif searched and not results %}
-<div class="alert alert-secondary" role="alert">No matching offers found.</div>
+<div class="alert alert-secondary" role="alert">No matching references found.</div>
 {% elif results %}
 <div class="card shadow-sm">
     <div class="card-header bg-white py-3">
-        <h2 class="h5 mb-0">{{ results|length }} result{{ '' if results|length == 1 else 's' }}</h2>
+        <h2 class="h5 mb-0">{{ results|length }} reference result{{ '' if results|length == 1 else 's' }}</h2>
     </div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -90,13 +90,10 @@
                 <tr>
                     <th scope="col">Brand</th>
                     <th scope="col">Reference</th>
-                    <th scope="col">Dial</th>
-                    <th scope="col">Bracelet</th>
-                    <th scope="col">Condition</th>
-                    <th scope="col">Card date</th>
                     <th scope="col">Lowest price</th>
-                    <th scope="col">Dealer / WhatsApp</th>
-                    <th scope="col">Source</th>
+                    <th scope="col">Active offers</th>
+                    <th scope="col">Dealers</th>
+                    <th scope="col">Conditions</th>
                 </tr>
             </thead>
             <tbody>
@@ -107,47 +104,12 @@
                     role="link"
                     data-href="{{ row.watch_url or '' }}"
                 >
-                    <td>
-                        {% if row.watch_url %}
-                        <a href="{{ row.watch_url }}" class="text-decoration-none">{{ row.brand }}</a>
-                        {% else %}
-                        {{ row.brand }}
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if row.source_url %}
-                        <a href="{{ row.source_url }}" class="text-decoration-none fw-semibold">{{ row.reference }}</a>
-                        {% else %}
-                        {{ row.reference }}
-                        {% endif %}
-                    </td>
-                    <td>{{ row.dial }}</td>
-                    <td>{{ row.bracelet }}</td>
-                    <td>
-                        <div>{{ row.condition }}</div>
-                        {% if row.raw_condition %}
-                        <div class="text-muted small">{{ row.raw_condition }}</div>
-                        {% endif %}
-                    </td>
-                    <td>{{ row.card_date }}</td>
+                    <td>{{ row.brand }}</td>
+                    <td class="fw-semibold">{{ row.reference }}</td>
                     <td class="fw-semibold">{{ row.lowest_price }}</td>
-                    <td>
-                        {% if row.dealer_url %}
-                        <a href="{{ row.dealer_url }}" class="text-decoration-none">{{ row.dealer_primary }}</a>
-                        {% else %}
-                        <div>{{ row.dealer_primary }}</div>
-                        {% endif %}
-                        {% if row.dealer_secondary %}
-                        <div class="text-muted small">{{ row.dealer_secondary }}</div>
-                        {% endif %}
-                    </td>
-                    <td class="text-nowrap">
-                        {% if row.source_url %}
-                        <a href="{{ row.source_url }}" class="small">View original</a>
-                        {% else %}
-                        <span class="text-muted">—</span>
-                        {% endif %}
-                    </td>
+                    <td>{{ row.offer_count }}</td>
+                    <td>{{ row.unique_dealers }}</td>
+                    <td>{{ row.conditions_label }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

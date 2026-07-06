@@ -37,6 +37,9 @@ def _watch_group(
             "bracelet": "Jubilee",
         },
         "lowest_usd": 74000,
+        "offer_count": 1,
+        "unique_dealers": 1,
+        "conditions_available": ["New"],
         "offers": [offer],
     }
 
@@ -60,17 +63,14 @@ def _import_log(
 
 
 class TestSearchResultSourceLinks:
-    def test_build_result_rows_includes_source_and_dealer_urls(self) -> None:
+    def test_build_result_rows_links_to_watch_detail(self) -> None:
         rows = build_result_rows([_watch_group(source_url="/activity/log-1")])
 
-        assert rows[0]["source_url"] == "/activity/log-1"
-        assert rows[0]["dealer_url"] == "/dealers/dealer-1"
+        assert rows[0]["brand"] == "Rolex"
+        assert rows[0]["reference"] == "126200"
         assert rows[0]["watch_url"] == "/watch/watch-1"
-
-    def test_build_result_rows_without_source_url(self) -> None:
-        rows = build_result_rows([_watch_group(source_url=None)])
-
-        assert rows[0]["source_url"] is None
+        assert "source_url" not in rows[0]
+        assert "dealer_url" not in rows[0]
 
     @patch("app.get_import_logs_by_message_ids")
     @patch("app.search_offers")
@@ -108,10 +108,10 @@ class TestSearchResultSourceLinks:
         response = client.get("/?q=126200")
 
         assert response.status_code == 200
-        assert 'href="/activity/log-offer-1"' in response.text
-        assert "View original" in response.text
-        assert 'href="/dealers/dealer-1"' in response.text
-        assert 'href="/watch/watch-1"' in response.text
+        assert 'data-href="/watch/watch-1"' in response.text
+        assert "126200" in response.text
+        assert 'href="/activity/log-offer-1"' not in response.text
+        assert "View original" not in response.text
 
     @patch("app.get_import_logs_by_message_ids", return_value={})
     @patch("app.search_offers")
@@ -259,7 +259,7 @@ class TestSearchFiltersUnchanged:
 
     @patch("app.get_import_logs_by_message_ids", return_value={})
     @patch("app.search_offers")
-    def test_search_page_still_renders_dealer_contact(
+    def test_search_page_renders_reference_index_not_dealer_rows(
         self,
         mock_search_offers: MagicMock,
         _mock_get_import_logs: MagicMock,
@@ -292,6 +292,8 @@ class TestSearchFiltersUnchanged:
         response = client.get("/?q=126200&condition=pre-owned")
 
         assert response.status_code == 200
-        assert "Dealer A" in response.text
-        assert "+85291234567" in response.text
-        assert "Pre-Owned" in response.text
+        assert "Rolex" in response.text
+        assert "126200" in response.text
+        assert "Active offers" in response.text
+        assert "Dealer A" not in response.text
+        assert "+85291234567" not in response.text

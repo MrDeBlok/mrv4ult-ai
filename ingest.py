@@ -834,6 +834,9 @@ def ingest_message(
         summary=summary,
         imported_by_user_id=imported_by_user_id,
     )
+    from database import link_import_log_to_summary_offers
+
+    link_import_log_to_summary_offers(import_log["id"], message["id"], summary)
 
     matched_request_count = 0
     if business_import and not bulk_mode:

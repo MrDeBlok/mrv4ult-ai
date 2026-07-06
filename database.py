@@ -96,6 +96,7 @@ def get_client() -> Client:
 
 
 _contact_type_column_supported: bool | None = None
+_source_import_log_id_column_supported: bool | None = None
 _users_table_supported: bool | None = None
 _user_ownership_columns_supported: bool | None = None
 _client_profiles_supported: bool | None = None
@@ -106,8 +107,9 @@ _watch_identification_supported: bool | None = None
 
 def reset_contact_type_column_cache() -> None:
     """Reset cached contact_type column detection (for tests)."""
-    global _contact_type_column_supported
+    global _contact_type_column_supported, _source_import_log_id_column_supported
     _contact_type_column_supported = None
+    _source_import_log_id_column_supported = None
 
 
 def reset_user_columns_cache() -> None:
@@ -152,6 +154,29 @@ def contact_type_column_supported() -> bool:
         else:
             raise
     return _contact_type_column_supported
+
+
+def source_import_log_id_column_supported() -> bool:
+    """Return True when offers.source_import_log_id exists in the connected database."""
+    global _source_import_log_id_column_supported
+    if _source_import_log_id_column_supported is not None:
+        return _source_import_log_id_column_supported
+
+    try:
+        get_client().table("offers").select("source_import_log_id").limit(1).execute()
+        _source_import_log_id_column_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "source_import_log_id" in message:
+            _source_import_log_id_column_supported = False
+            logger.warning(
+                "offers.source_import_log_id column missing; apply "
+                "docs/migrations/sprint_48_5_2_offer_source_import_log_id.sql"
+            )
+        else:
+            raise
+    return _source_import_log_id_column_supported
 
 
 def users_table_supported() -> bool:
@@ -409,10 +434,198 @@ def get_import_logs_by_message_ids(message_ids: list[str]) -> dict[str, Record]:
     )
     by_message_id: dict[str, Record] = {}
     for row in response.data or []:
-        message_id = str(row.get("message_id") or "")
+        message_id = _normalize_uuid_key(row.get("message_id"))
         if message_id and message_id not in by_message_id:
             by_message_id[message_id] = row
     return by_message_id
+
+
+def _normalize_uuid_key(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def find_import_logs_by_summary_offer_ids(offer_ids: list[str]) -> dict[str, Record]:
+    """Return the newest import log per offer id referenced in summary.rows."""
+    if not offer_ids:
+        return {}
+
+    unique_offer_ids = list(dict.fromkeys(_normalize_uuid_key(offer_id) for offer_id in offer_ids if offer_id))
+    if not unique_offer_ids:
+        return {}
+
+    by_offer_id: dict[str, Record] = {}
+    for offer_id in unique_offer_ids:
+        response = (
+            get_client()
+            .table("import_logs")
+            .select(_import_log_source_select_columns())
+            .contains("summary", {"rows": [{"offer_id": offer_id}]})
+            .order("import_time", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            by_offer_id[offer_id] = response.data[0]
+    return by_offer_id
+
+
+def get_offer_by_id(offer_id: str) -> Record | None:
+    """Return one offer row with source-link fields for debugging."""
+    cleaned_id = offer_id.strip()
+    if not cleaned_id:
+        return None
+
+    columns = (
+        "id, message_id, dealer_id, watch_id, status, original_price, original_currency, "
+        "condition, card_date, created_at, duplicate_of_id, is_duplicate"
+    )
+    if source_import_log_id_column_supported():
+        columns += ", source_import_log_id"
+
+    response = (
+        get_client()
+        .table("offers")
+        .select(columns)
+        .eq("id", cleaned_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def link_offer_to_import_source(
+    offer_id: str,
+    *,
+    message_id: str,
+    source_import_log_id: str,
+) -> None:
+    """Persist the WhatsApp import source on an offer after import_log creation."""
+    cleaned_offer_id = offer_id.strip()
+    cleaned_message_id = message_id.strip()
+    cleaned_import_log_id = source_import_log_id.strip()
+    if not cleaned_offer_id or not cleaned_message_id or not cleaned_import_log_id:
+        return
+    if not (
+        _is_valid_uuid(cleaned_offer_id)
+        and _is_valid_uuid(cleaned_message_id)
+        and _is_valid_uuid(cleaned_import_log_id)
+    ):
+        return
+
+    payload: Record = {"message_id": cleaned_message_id}
+    if source_import_log_id_column_supported():
+        payload["source_import_log_id"] = cleaned_import_log_id
+
+    get_client().table("offers").update(payload).eq("id", cleaned_offer_id).execute()
+
+
+def link_import_log_to_summary_offers(
+    import_log_id: str,
+    message_id: str,
+    summary: Record,
+) -> None:
+    """Link every offer listed in an import summary to its import log source."""
+    for row in summary.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        offer_id = row.get("offer_id")
+        if not offer_id:
+            continue
+        link_offer_to_import_source(
+            str(offer_id),
+            message_id=str(message_id),
+            source_import_log_id=str(import_log_id),
+        )
+
+
+def get_request_matches_for_offer_ids(offer_ids: list[str]) -> list[Record]:
+    """Return request_matches rows for the given offer ids."""
+    if not offer_ids:
+        return []
+
+    unique_offer_ids = list(dict.fromkeys(_normalize_uuid_key(offer_id) for offer_id in offer_ids if offer_id))
+    if not unique_offer_ids:
+        return []
+
+    response = (
+        get_client()
+        .table("request_matches")
+        .select("id, request_id, offer_id, import_log_id, match_strength, match_reason, created_at")
+        .in_("offer_id", unique_offer_ids)
+        .execute()
+    )
+    return response.data or []
+
+
+def _import_log_source_select_columns() -> str:
+    columns = "id, message_id, watches_parsed, status, summary"
+    if user_ownership_columns_supported():
+        columns += ", imported_by_user_id"
+    return columns
+
+
+def get_import_logs_for_source_resolution(import_log_ids: list[str]) -> dict[str, Record]:
+    """Return import logs with fields required for source URL visibility checks."""
+    if not import_log_ids:
+        return {}
+
+    unique_ids = list(dict.fromkeys(str(import_log_id) for import_log_id in import_log_ids if import_log_id))
+    if not unique_ids:
+        return {}
+
+    response = (
+        get_client()
+        .table("import_logs")
+        .select(_import_log_source_select_columns())
+        .in_("id", unique_ids)
+        .execute()
+    )
+    return {str(row["id"]): row for row in response.data or [] if row.get("id")}
+
+
+def get_import_logs_by_offer_ids(offer_ids: list[str]) -> dict[str, Record]:
+    """Return import logs keyed by offer id via request_matches and summary rows."""
+    if not offer_ids:
+        return {}
+
+    unique_offer_ids = list(dict.fromkeys(_normalize_uuid_key(offer_id) for offer_id in offer_ids if offer_id))
+    if not unique_offer_ids:
+        return {}
+
+    by_offer_id: dict[str, Record] = {}
+    response = (
+        get_client()
+        .table("request_matches")
+        .select("offer_id, import_log_id")
+        .in_("offer_id", unique_offer_ids)
+        .execute()
+    )
+    import_log_ids = list(
+        dict.fromkeys(
+            str(row["import_log_id"])
+            for row in response.data or []
+            if row.get("import_log_id")
+        )
+    )
+    import_logs_by_id = get_import_logs_for_source_resolution(import_log_ids)
+    for row in response.data or []:
+        offer_id = _normalize_uuid_key(row.get("offer_id"))
+        import_log_id = str(row.get("import_log_id") or "")
+        if not offer_id or not import_log_id:
+            continue
+        import_log = import_logs_by_id.get(import_log_id)
+        if import_log and offer_id not in by_offer_id:
+            by_offer_id[offer_id] = import_log
+
+    unresolved_offer_ids = [offer_id for offer_id in unique_offer_ids if offer_id not in by_offer_id]
+    for offer_id, import_log in find_import_logs_by_summary_offer_ids(unresolved_offer_ids).items():
+        by_offer_id.setdefault(offer_id, import_log)
+
+    return by_offer_id
 
 
 def find_or_create_watch(
@@ -578,6 +791,66 @@ def find_watches_by_reference(reference_query: str) -> list[Record]:
         for watch in response.data or []
         if _reference_contains_token(watch.get("reference"), token)
     ]
+
+
+def find_watch_ids_for_brand_reference(brand: str | None, reference: str | None) -> list[str]:
+    """Return watch ids that share the same brand + reference group key."""
+    from search import brand_reference_group_key
+
+    target_key = brand_reference_group_key({"brand": brand, "reference": reference})
+    if not target_key[0] or not target_key[1]:
+        return []
+
+    prefix = re.sub(r"[^A-Za-z0-9]", "", reference or "")[:6]
+    query = get_client().table("watches").select("id, brand, reference")
+    if prefix:
+        query = query.ilike("reference", f"%{prefix}%")
+    else:
+        query = query.not_.is_("reference", "null")
+
+    response = query.execute()
+    return [
+        str(watch["id"])
+        for watch in response.data or []
+        if watch.get("id") and brand_reference_group_key(watch) == target_key
+    ]
+
+
+def get_active_offers_for_brand_reference(
+    brand: str | None,
+    reference: str | None,
+) -> list[Record]:
+    """Return active offers for every watch row matching brand + reference."""
+    watch_ids = find_watch_ids_for_brand_reference(brand, reference)
+    if not watch_ids:
+        return []
+
+    dealer_fields = (
+        "dealers(display_name, phone_number, whatsapp_id, contact_type)"
+        if contact_type_column_supported()
+        else "dealers(display_name, phone_number, whatsapp_id)"
+    )
+    select_fields = (
+        "id, message_id, source_import_log_id, dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
+        f"watches(dial), "
+        f"{dealer_fields}, "
+        "messages(id, received_at, group_id, groups(name))"
+    )
+    if not source_import_log_id_column_supported():
+        select_fields = (
+            "id, message_id, dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
+            f"watches(dial), "
+            f"{dealer_fields}, "
+            "messages(id, received_at, group_id, groups(name))"
+        )
+    rows = _query_table_in_id_chunks(
+        "offers",
+        select_fields,
+        watch_ids,
+        id_column="watch_id",
+        apply_filters=lambda request: request.eq("status", "active"),
+    )
+    return [offer for offer in rows if _offer_from_business_dealer(offer)]
 
 
 def get_active_offers_for_watch(watch_id: str) -> list[Record]:

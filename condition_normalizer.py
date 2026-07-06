@@ -9,6 +9,7 @@ Record = dict[str, Any]
 
 NEW_CONDITION = "New"
 PRE_OWNED_CONDITION = "Pre-Owned"
+UNKNOWN_CONDITION = "Unknown"
 
 CONDITION_SOURCE_EXPLICIT = "explicit"
 CONDITION_SOURCE_INFERRED_DEFAULT = "inferred_default"
@@ -194,6 +195,50 @@ def offer_matches_condition_filter(
         return True
     normalized, _ = normalize_wear_condition(stored_condition)
     return normalized == condition_filter
+
+
+def parse_watch_detail_condition_filter(value: str | None) -> str | None:
+    """Parse watch detail condition filter: All, New, Pre-Owned, or Unknown."""
+    if value is None:
+        return None
+
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() == "all":
+        return None
+
+    lowered = cleaned.lower()
+    if lowered == "new":
+        return NEW_CONDITION
+    if lowered in {"pre-owned", "preowned", "pre owned"}:
+        return PRE_OWNED_CONDITION
+    if lowered == "unknown":
+        return UNKNOWN_CONDITION
+
+    raise ValueError("Invalid condition filter. Use All, New, Pre-Owned, or Unknown.")
+
+
+def offer_matches_watch_detail_condition(
+    stored_condition: str | None,
+    condition_filter: str | None,
+) -> bool:
+    """Return whether an offer matches a watch detail condition filter."""
+    if condition_filter is None:
+        return True
+
+    normalized, _ = normalize_wear_condition(stored_condition)
+    if condition_filter == UNKNOWN_CONDITION:
+        return normalized not in {NEW_CONDITION, PRE_OWNED_CONDITION}
+    return normalized == condition_filter
+
+
+def offer_condition_category(stored_condition: str | None) -> str:
+    """Return New, Pre-Owned, or Unknown for grouped search summaries."""
+    normalized, _ = normalize_wear_condition(stored_condition)
+    if normalized == NEW_CONDITION:
+        return NEW_CONDITION
+    if normalized == PRE_OWNED_CONDITION:
+        return PRE_OWNED_CONDITION
+    return UNKNOWN_CONDITION
 
 
 def offer_condition_display(stored_condition: str | None) -> tuple[str, str | None]:

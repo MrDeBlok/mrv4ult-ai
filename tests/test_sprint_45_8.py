@@ -94,12 +94,12 @@ class TestDealerDetailOfferLinks:
     @patch("app.list_offer_intelligence_rows", return_value=[])
     @patch("app.dealer_has_offers", return_value=True)
     @patch("app.get_dealer_by_id")
-    @patch("app.get_import_logs_by_message_ids")
+    @patch("app.load_offer_source_import_log_lookups")
     @patch("app.get_active_offers_for_dealer")
     def test_active_offer_reference_links_to_activity_detail(
         self,
         mock_get_active_offers: MagicMock,
-        mock_get_import_logs: MagicMock,
+        mock_load_lookups: MagicMock,
         mock_get_dealer: MagicMock,
         _mock_has_offers: MagicMock,
         _mock_list_offers: MagicMock,
@@ -117,7 +117,12 @@ class TestDealerDetailOfferLinks:
             "updated_at": "2026-06-27T12:00:00+00:00",
         }
         mock_get_active_offers.return_value = [_raw_dealer_offer()]
-        mock_get_import_logs.return_value = {"msg-1": _import_log("log-offer-1")}
+        import_log = _import_log("log-offer-1")
+        mock_load_lookups.return_value = (
+            {"msg-1": import_log},
+            {"log-offer-1": import_log},
+            {},
+        )
 
         client = TestClient(app)
         response = client.get("/dealers/dealer-1")
@@ -132,12 +137,12 @@ class TestDealerDetailOfferLinks:
     @patch("app.list_offer_intelligence_rows", return_value=[])
     @patch("app.dealer_has_offers", return_value=True)
     @patch("app.get_dealer_by_id")
-    @patch("app.get_import_logs_by_message_ids", return_value={})
+    @patch("app.load_offer_source_import_log_lookups", return_value=({}, {}, {}))
     @patch("app.get_active_offers_for_dealer")
     def test_active_offer_without_source_renders_plain_reference(
         self,
         mock_get_active_offers: MagicMock,
-        _mock_get_import_logs: MagicMock,
+        _mock_load_lookups: MagicMock,
         mock_get_dealer: MagicMock,
         _mock_has_offers: MagicMock,
         _mock_list_offers: MagicMock,

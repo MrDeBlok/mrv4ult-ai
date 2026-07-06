@@ -64,6 +64,7 @@ from database import (
     create_request,
     delete_client_permanently,
     delete_request,
+    get_active_offers_for_brand_reference,
     get_active_offers_for_watch,
     get_active_offers_for_dealer,
     get_client,
@@ -164,6 +165,7 @@ from dealer_intelligence import (
     dealers_page_url,
     flatten_offer_intelligence_rows,
     format_dealer_stats,
+    load_offer_source_import_log_lookups,
     paginate_dealer_list_rows,
 )
 from dashboard_data import load_trading_desk
@@ -243,7 +245,12 @@ from request_profit import (
     build_request_profit_summary,
     build_requests_dashboard_summary,
 )
-from condition_normalizer import offer_condition_display, parse_condition_filter
+from condition_normalizer import (
+    offer_condition_display,
+    offer_matches_watch_detail_condition,
+    parse_condition_filter,
+    parse_watch_detail_condition_filter,
+)
 from search import (
     _display_value,
     _nested_record,
@@ -251,7 +258,7 @@ from search import (
     _sort_key_usd_price,
     format_price,
     format_usd_price,
-    group_offers_by_watch,
+    group_offers_by_brand_reference,
     search_offers,
 )
 
@@ -913,47 +920,25 @@ def enrich_offers_dealer_contacts(offers: list[dict[str, Any]]) -> None:
 
 
 def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Turn grouped search results into read-only dashboard rows."""
+    """Turn grouped reference search results into read-only index rows."""
     rows: list[dict[str, Any]] = []
 
     for group in groups:
         watch = group.get("watch") or {}
-        offers = group.get("offers") or []
-        if not offers:
-            continue
-
-        cheapest_offer = min(
-            offers,
-            key=lambda offer: (
-                offer.get("usd_price") is None,
-                offer.get("usd_price") if offer.get("usd_price") is not None else 0,
-            ),
-        )
-        dealer = cheapest_offer.get("dealer") or {}
-        dealer_id = cheapest_offer.get("dealer_id")
-        source_url = cheapest_offer.get("source_url")
-
-        dealer_contact = format_dealer_contact(dealer)
-        condition_label, raw_condition = offer_condition_display(cheapest_offer.get("condition"))
         watch_id = group.get("watch_id")
+        conditions = group.get("conditions_available") or []
 
         rows.append(
             {
                 "watch_id": watch_id,
                 "brand": _display_value(watch.get("brand")),
                 "reference": _display_value(watch.get("reference")),
-                "dial": _display_value(watch.get("dial")),
-                "bracelet": _display_value(watch.get("bracelet")),
                 "lowest_price": format_usd_price(group.get("lowest_usd")),
-                "dealer_primary": dealer_contact["primary"],
-                "dealer_secondary": dealer_contact["secondary"],
-                "dealer_id": dealer_id,
-                "dealer_url": f"/dealers/{dealer_id}" if dealer_id else None,
+                "offer_count": int(group.get("offer_count") or 0),
+                "unique_dealers": int(group.get("unique_dealers") or 0),
+                "conditions_available": conditions,
+                "conditions_label": " / ".join(conditions) if conditions else "N/A",
                 "watch_url": f"/watch/{watch_id}" if watch_id else None,
-                "source_url": source_url,
-                "condition": condition_label,
-                "raw_condition": raw_condition,
-                "card_date": cheapest_offer.get("card_date") or "N/A",
             }
         )
 
@@ -981,11 +966,11 @@ def normalize_offer(offer: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(offer)
     normalized["dealer"] = _nested_record(normalized.pop("dealers", None))
     message = _nested_record(normalized.pop("messages", None))
-    normalized["message_id"] = message.get("id")
-    normalized["received_at"] = message.get("received_at")
-    normalized["group_id"] = message.get("group_id")
+    normalized["message_id"] = message.get("id") or normalized.get("message_id")
+    normalized["received_at"] = message.get("received_at") or normalized.get("received_at")
+    normalized["group_id"] = message.get("group_id") or normalized.get("group_id")
     group = _nested_record(message.get("groups"))
-    normalized["group_name"] = group.get("name")
+    normalized["group_name"] = group.get("name") or normalized.get("group_name")
     return normalized
 
 
@@ -1028,11 +1013,13 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for offer in sorted(offers, key=_sort_key_usd_price):
         dealer = offer.get("dealer") or {}
+        watch = offer.get("watch") or {}
         rows.append(
             {
                 "dealer_name": dealer.get("display_name") or "Unknown dealer",
                 "dealer_whatsapp": dealer.get("phone_number") or dealer.get("whatsapp_id") or "N/A",
                 "group_name": offer.get("group_name") or "N/A",
+                "dial": _display_value(watch.get("dial")),
                 "original_price": format_price(
                     offer.get("original_price"),
                     offer.get("original_currency"),
@@ -1041,10 +1028,18 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "card_date": offer.get("card_date") or "N/A",
                 "condition": display_condition(offer.get("condition")),
                 "received_at": format_received_at(offer.get("received_at")),
+                "source_url": offer.get("source_url"),
             }
         )
 
     return rows
+
+
+def normalize_watch_detail_offer(offer: dict[str, Any]) -> dict[str, Any]:
+    """Flatten nested dealer, message, and watch data onto a watch detail offer."""
+    normalized = normalize_offer(offer)
+    normalized["watch"] = _nested_record(offer.get("watches"))
+    return normalized
 
 
 def build_watch_display(watch: dict[str, Any]) -> dict[str, str]:
@@ -2594,20 +2589,51 @@ async def import_submit(
 
 
 @app.get("/watch/{watch_id}", response_class=HTMLResponse, name="watch_detail")
-async def watch_detail(request: Request, watch_id: str) -> HTMLResponse:
+async def watch_detail(
+    request: Request,
+    watch_id: str,
+    condition: str = "all",
+) -> HTMLResponse:
     watch = get_watch_by_id(watch_id)
     if watch is None:
         raise HTTPException(status_code=404, detail="Watch not found")
 
-    offers = [normalize_offer(offer) for offer in get_active_offers_for_watch(watch_id)]
+    condition_filter_input = condition.strip().lower() or "all"
+    try:
+        condition_filter = parse_watch_detail_condition_filter(condition_filter_input)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    offers = [
+        normalize_watch_detail_offer(offer)
+        for offer in get_active_offers_for_brand_reference(watch.get("brand"), watch.get("reference"))
+    ]
+    user = get_current_user(request)
+    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
+        offers
+    )
+    offers = attach_dealer_offer_source_urls(
+        offers,
+        import_logs_by_message_id,
+        user=user,
+        import_logs_by_id=import_logs_by_id,
+        import_logs_by_offer_id=import_logs_by_offer_id,
+    )
+    filtered_offers = [
+        offer
+        for offer in offers
+        if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+    ]
 
     return templates.TemplateResponse(
         request,
         "watch_detail.html",
         {
             "watch": build_watch_display(watch),
-            "stats": build_watch_stats(offers),
-            "offers": build_offer_rows(offers),
+            "stats": build_watch_stats(filtered_offers),
+            "offers": build_offer_rows(filtered_offers),
+            "condition_filter": condition_filter_input,
+            "watch_id": watch_id,
         },
     )
 
@@ -2639,7 +2665,7 @@ async def home(
             )
             offers, cheapest_only_flag = search_offers(query, condition=condition_filter)
             enrich_offers_dealer_contacts(offers)
-            groups = group_offers_by_watch(offers, cheapest_only=cheapest_only_flag)
+            groups = group_offers_by_brand_reference(offers, cheapest_only=cheapest_only_flag)
             user = get_current_user(request)
             message_ids = [
                 str(offer.get("message_id"))
@@ -2855,11 +2881,15 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
     active_offers = [
         normalize_dealer_offer(offer) for offer in get_active_offers_for_dealer(dealer_id)
     ]
-    message_ids = [str(offer["message_id"]) for offer in active_offers if offer.get("message_id")]
+    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
+        active_offers
+    )
     active_offers = attach_dealer_offer_source_urls(
         active_offers,
-        get_import_logs_by_message_ids(message_ids),
+        import_logs_by_message_id,
         user=user,
+        import_logs_by_id=import_logs_by_id,
+        import_logs_by_offer_id=import_logs_by_offer_id,
     )
 
     return templates.TemplateResponse(

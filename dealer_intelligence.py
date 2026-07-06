@@ -495,13 +495,176 @@ def activity_detail_url_for_import_log(
     user: Record | None,
 ) -> str | None:
     """Return the activity detail URL when the user may view the source import."""
-    if not import_log or not import_log.get("id"):
-        return None
-    if is_discarded_no_watch_import(import_log):
-        return None
-    if not can_view_import(user, import_log):
+    if explain_import_log_source_block(import_log, user=user):
         return None
     return f"/activity/{import_log['id']}"
+
+
+def explain_import_log_source_block(
+    import_log: Record | None,
+    *,
+    user: Record | None,
+) -> str | None:
+    """Return a failure reason when an import log cannot become a source URL."""
+    if not import_log or not import_log.get("id"):
+        return "no_import_log_resolved"
+    if is_discarded_no_watch_import(import_log):
+        return "import_log_discarded_no_watch"
+    if not can_view_import(user, import_log):
+        return "import_log_not_visible_to_user"
+    return None
+
+
+DIRECT_OFFER_IMPORT_LOG_ID_FIELDS = (
+    "import_log_id",
+    "source_import_log_id",
+    "created_from_import_log_id",
+)
+STORED_OFFER_SOURCE_URL_FIELDS = ("source_url", "original_url")
+
+
+def _offer_direct_import_log_id(offer: Record) -> str | None:
+    for key in DIRECT_OFFER_IMPORT_LOG_ID_FIELDS:
+        value = offer.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _stored_activity_source_url(offer: Record) -> str | None:
+    for key in STORED_OFFER_SOURCE_URL_FIELDS:
+        value = offer.get(key)
+        if isinstance(value, str) and value.strip().startswith("/activity/"):
+            return value.strip()
+    return None
+
+
+def index_import_logs_by_summary_offer_id(import_logs: list[Record]) -> dict[str, Record]:
+    """Index import logs by offer_id values stored in summary rows."""
+    by_offer_id: dict[str, Record] = {}
+    for import_log in import_logs:
+        summary = import_log.get("summary")
+        if not isinstance(summary, dict):
+            continue
+        for row in summary.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            offer_id = str(row.get("offer_id") or "")
+            if offer_id and offer_id not in by_offer_id:
+                by_offer_id[offer_id] = import_log
+    return by_offer_id
+
+
+def load_offer_source_import_log_lookups(
+    offers: list[Record],
+) -> tuple[dict[str, Record], dict[str, Record], dict[str, Record]]:
+    """Build import log lookup maps for resolving offer source URLs."""
+    from database import (
+        _normalize_uuid_key,
+        get_import_logs_by_message_ids,
+        get_import_logs_by_offer_ids,
+        get_import_logs_for_source_resolution,
+    )
+
+    message_ids = list(
+        dict.fromkeys(
+            _normalize_uuid_key(offer.get("message_id"))
+            for offer in offers
+            if offer.get("message_id")
+        )
+    )
+    direct_import_log_ids = list(
+        dict.fromkeys(
+            import_log_id
+            for offer in offers
+            if (import_log_id := _offer_direct_import_log_id(offer))
+        )
+    )
+
+    import_logs_by_message_id = get_import_logs_by_message_ids(message_ids)
+    import_log_ids = list(
+        dict.fromkeys(
+            [
+                *direct_import_log_ids,
+                *(
+                    str(import_log["id"])
+                    for import_log in import_logs_by_message_id.values()
+                    if import_log.get("id")
+                ),
+            ]
+        )
+    )
+    import_logs_by_id = get_import_logs_for_source_resolution(import_log_ids)
+    normalized_import_logs_by_message_id: dict[str, Record] = {}
+    for message_id, import_log in import_logs_by_message_id.items():
+        normalized_key = _normalize_uuid_key(message_id)
+        import_log_id = str(import_log.get("id") or "")
+        if import_log_id and import_log_id not in import_logs_by_id:
+            import_logs_by_id[import_log_id] = import_log
+        if import_log_id and import_log_id in import_logs_by_id:
+            import_log = import_logs_by_id[import_log_id]
+        if normalized_key:
+            normalized_import_logs_by_message_id[normalized_key] = import_log
+    import_logs_by_message_id = normalized_import_logs_by_message_id
+
+    import_logs_by_offer_id = index_import_logs_by_summary_offer_id(list(import_logs_by_id.values()))
+    unresolved_offer_ids: list[str] = []
+    for offer in offers:
+        offer_id = _normalize_uuid_key(offer.get("id"))
+        if not offer_id or offer_id in import_logs_by_offer_id:
+            continue
+        if _offer_direct_import_log_id(offer):
+            continue
+        message_id = _normalize_uuid_key(offer.get("message_id"))
+        if message_id and import_logs_by_message_id.get(message_id):
+            continue
+        unresolved_offer_ids.append(offer_id)
+    for offer_id, import_log in get_import_logs_by_offer_ids(unresolved_offer_ids).items():
+        import_logs_by_offer_id.setdefault(offer_id, import_log)
+        import_log_id = str(import_log.get("id") or "")
+        if import_log_id:
+            import_logs_by_id.setdefault(import_log_id, import_log)
+
+    return import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id
+
+
+def _resolve_import_log_for_offer(
+    offer: Record,
+    *,
+    import_logs_by_message_id: dict[str, Record],
+    import_logs_by_id: dict[str, Record],
+    import_logs_by_offer_id: dict[str, Record],
+) -> tuple[Record | None, str | None]:
+    from database import _normalize_uuid_key
+
+    direct_import_log_id = _offer_direct_import_log_id(offer)
+    if direct_import_log_id:
+        import_log = import_logs_by_id.get(direct_import_log_id)
+        if import_log:
+            return import_log, "direct_import_log_id"
+        return {"id": direct_import_log_id}, "direct_import_log_id"
+
+    message_id = _normalize_uuid_key(offer.get("message_id"))
+    if message_id:
+        import_log = import_logs_by_message_id.get(message_id)
+        if import_log:
+            return import_log, "message_id"
+
+    offer_id = _normalize_uuid_key(offer.get("id"))
+    if offer_id:
+        import_log = import_logs_by_offer_id.get(offer_id)
+        if import_log:
+            return import_log, "summary_or_request_match"
+
+    stored_url = _stored_activity_source_url(offer)
+    if stored_url:
+        import_log_id = stored_url.rstrip("/").rsplit("/", 1)[-1]
+        import_log = import_logs_by_id.get(import_log_id)
+        if import_log:
+            return import_log, "stored_source_url"
+        return {"id": import_log_id}, "stored_source_url"
+
+    return None, None
 
 
 def attach_dealer_offer_source_urls(
@@ -509,16 +672,53 @@ def attach_dealer_offer_source_urls(
     import_logs_by_message_id: dict[str, Record],
     *,
     user: Record | None,
+    import_logs_by_id: dict[str, Record] | None = None,
+    import_logs_by_offer_id: dict[str, Record] | None = None,
 ) -> list[Record]:
-    """Attach activity detail URLs to dealer offers from batched import log lookups."""
+    """Attach activity detail URLs to offers using import log and message relationships."""
+    logs_by_id = import_logs_by_id or {}
+    logs_by_offer_id = import_logs_by_offer_id or {}
     enriched: list[Record] = []
     for offer in offers:
         row = dict(offer)
-        message_id = str(row.get("message_id") or "")
-        import_log = import_logs_by_message_id.get(message_id)
+        import_log, _resolution_path = _resolve_import_log_for_offer(
+            row,
+            import_logs_by_message_id=import_logs_by_message_id,
+            import_logs_by_id=logs_by_id,
+            import_logs_by_offer_id=logs_by_offer_id,
+        )
         row["source_url"] = activity_detail_url_for_import_log(import_log, user=user)
         enriched.append(row)
     return enriched
+
+
+def resolve_offer_source_url(
+    offer: Record,
+    *,
+    user: Record | None,
+    import_logs_by_message_id: dict[str, Record] | None = None,
+    import_logs_by_id: dict[str, Record] | None = None,
+    import_logs_by_offer_id: dict[str, Record] | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve one offer source URL and return url, resolution path, failure reason."""
+    if import_logs_by_message_id is None:
+        import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
+            [offer]
+        )
+    import_log, resolution_path = _resolve_import_log_for_offer(
+        offer,
+        import_logs_by_message_id=import_logs_by_message_id or {},
+        import_logs_by_id=import_logs_by_id or {},
+        import_logs_by_offer_id=import_logs_by_offer_id or {},
+    )
+    source_url = activity_detail_url_for_import_log(import_log, user=user)
+    if source_url:
+        return source_url, resolution_path, None
+    if resolution_path and import_log:
+        return None, resolution_path, explain_import_log_source_block(import_log, user=user)
+    if not offer.get("message_id") and not _offer_direct_import_log_id(offer):
+        return None, None, "offer_message_id_missing"
+    return None, resolution_path, "no_import_log_resolved"
 
 
 def build_dealer_offer_rows(offers: list[Record]) -> list[Record]:
