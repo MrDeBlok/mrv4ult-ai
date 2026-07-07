@@ -251,7 +251,7 @@ class TestWatchDetailSourceAfterLinking:
             {OFFER_ID.lower(): import_log},
         )
 
-        client = TestClient(app)
+        client = TestClient(app, follow_redirects=True)
         response = client.get(f"/watch/{WATCH_ID}")
 
         assert response.status_code == 200

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -255,11 +255,18 @@ from search import (
     _display_value,
     _nested_record,
     _parse_max_usd_price,
-    _sort_key_usd_price,
     format_price,
     format_usd_price,
     group_offers_by_brand_reference,
     search_offers,
+    summarize_conditions_available,
+)
+from watch_detail_filters import (
+    enrich_watch_detail_offer_recency,
+    offer_matches_watch_detail_date_filter,
+    parse_watch_detail_date_filter,
+    resolve_watch_detail_date_range,
+    sort_key_watch_detail_offer,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -919,6 +926,103 @@ def enrich_offers_dealer_contacts(offers: list[dict[str, Any]]) -> None:
             offer["dealer"] = dealer
 
 
+def build_watch_reference_url(
+    brand: str | None,
+    reference: str | None,
+    *,
+    condition: str | None = None,
+    date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str | None:
+    """Build the canonical brand + reference watch detail URL."""
+    if not brand or not reference:
+        return None
+    params: dict[str, str] = {
+        "brand": brand.strip(),
+        "reference": reference.strip(),
+    }
+    if condition and condition.strip().lower() not in {"", "all"}:
+        params["condition"] = condition.strip().lower()
+    date_value = (date or "").strip().lower()
+    if date_value and date_value != "all":
+        params["date"] = date_value
+        if date_value == "custom":
+            if date_from and date_from.strip():
+                params["date_from"] = date_from.strip()
+            if date_to and date_to.strip():
+                params["date_to"] = date_to.strip()
+    return f"/watch-reference?{urlencode(params)}"
+
+
+def build_watch_reference_filter_urls(
+    brand: str | None,
+    reference: str | None,
+    *,
+    condition: str = "all",
+    date: str = "all",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict[str, str]:
+    """Build watch detail filter URLs preserving the other active dimension."""
+    def _build(
+        *,
+        condition_value: str | None = None,
+        date_value: str | None = None,
+        date_from_value: str | None = None,
+        date_to_value: str | None = None,
+    ) -> str:
+        return (
+            build_watch_reference_url(
+                brand,
+                reference,
+                condition=condition_value if condition_value is not None else condition,
+                date=date_value if date_value is not None else date,
+                date_from=date_from_value if date_from_value is not None else date_from,
+                date_to=date_to_value if date_to_value is not None else date_to,
+            )
+            or "/"
+        )
+
+    return {
+        "condition_all": _build(condition_value="all"),
+        "condition_new": _build(condition_value="new"),
+        "condition_pre_owned": _build(condition_value="pre-owned"),
+        "condition_unknown": _build(condition_value="unknown"),
+        "date_all": _build(date_value="all", date_from_value="", date_to_value=""),
+        "date_today": _build(date_value="today", date_from_value="", date_to_value=""),
+        "date_7d": _build(date_value="7d", date_from_value="", date_to_value=""),
+        "date_30d": _build(date_value="30d", date_from_value="", date_to_value=""),
+        "date_custom": _build(date_value="custom"),
+    }
+
+
+def build_watch_reference_condition_urls(
+    brand: str | None,
+    reference: str | None,
+    *,
+    condition: str = "all",
+    date: str = "all",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict[str, str]:
+    """Backward-compatible condition URL helper."""
+    filter_urls = build_watch_reference_filter_urls(
+        brand,
+        reference,
+        condition=condition,
+        date=date,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return {
+        "all": filter_urls["condition_all"],
+        "new": filter_urls["condition_new"],
+        "pre-owned": filter_urls["condition_pre_owned"],
+        "unknown": filter_urls["condition_unknown"],
+    }
+
+
 def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Turn grouped reference search results into read-only index rows."""
     rows: list[dict[str, Any]] = []
@@ -927,18 +1031,20 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         watch = group.get("watch") or {}
         watch_id = group.get("watch_id")
         conditions = group.get("conditions_available") or []
+        brand = watch.get("brand")
+        reference = watch.get("reference")
 
         rows.append(
             {
                 "watch_id": watch_id,
-                "brand": _display_value(watch.get("brand")),
-                "reference": _display_value(watch.get("reference")),
+                "brand": _display_value(brand),
+                "reference": _display_value(reference),
                 "lowest_price": format_usd_price(group.get("lowest_usd")),
                 "offer_count": int(group.get("offer_count") or 0),
                 "unique_dealers": int(group.get("unique_dealers") or 0),
                 "conditions_available": conditions,
                 "conditions_label": " / ".join(conditions) if conditions else "N/A",
-                "watch_url": f"/watch/{watch_id}" if watch_id else None,
+                "watch_url": build_watch_reference_url(brand, reference),
             }
         )
 
@@ -993,6 +1099,7 @@ def build_watch_stats(offers: list[dict[str, Any]]) -> dict[str, Any]:
         for offer in offers
         if offer.get("group_id") or offer.get("group_name")
     }
+    conditions = summarize_conditions_available(offers)
     return {
         "lowest_usd": format_usd_price(min(usd_prices) if usd_prices else None),
         "average_usd": format_usd_price(average_usd),
@@ -1000,6 +1107,8 @@ def build_watch_stats(offers: list[dict[str, Any]]) -> dict[str, Any]:
         "offer_count": len(offers),
         "unique_dealers": len(dealer_ids),
         "unique_groups": len(group_keys),
+        "conditions_available": conditions,
+        "conditions_label": " / ".join(conditions) if conditions else "N/A",
     }
 
 
@@ -1011,7 +1120,7 @@ def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Format active offers for the watch detail table."""
     rows: list[dict[str, Any]] = []
 
-    for offer in sorted(offers, key=_sort_key_usd_price):
+    for offer in sorted(offers, key=sort_key_watch_detail_offer):
         dealer = offer.get("dealer") or {}
         watch = offer.get("watch") or {}
         rows.append(
@@ -1051,6 +1160,126 @@ def build_watch_display(watch: dict[str, Any]) -> dict[str, str]:
         "dial": _display_value(watch.get("dial")),
         "bracelet": _display_value(watch.get("bracelet")),
     }
+
+
+def build_reference_detail_display(
+    brand: str | None,
+    reference: str | None,
+    offers: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Format brand + reference detail header without a single dial/bracelet variant."""
+    models: set[str] = set()
+    for offer in offers:
+        watch = offer.get("watch") or {}
+        model = _display_value(watch.get("model"))
+        if model != "N/A":
+            models.add(model)
+
+    if len(models) == 1:
+        model_display = next(iter(models))
+    elif models:
+        model_display = "Varies by offer"
+    else:
+        model_display = "N/A"
+
+    return {
+        "brand": _display_value(brand),
+        "reference": _display_value(reference),
+        "model": model_display,
+    }
+
+
+def _render_watch_reference_detail(
+    request: Request,
+    *,
+    brand: str,
+    reference: str,
+    condition_filter_input: str,
+    date_filter_input: str,
+    date_from_input: str,
+    date_to_input: str,
+) -> HTMLResponse:
+    try:
+        condition_filter = parse_watch_detail_condition_filter(condition_filter_input)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        date_filter = parse_watch_detail_date_filter(
+            date_filter_input,
+            date_from=date_from_input,
+            date_to=date_to_input,
+        )
+        date_range = resolve_watch_detail_date_range(
+            date_filter,
+            date_from=date_from_input,
+            date_to=date_to_input,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    offers = [
+        normalize_watch_detail_offer(offer)
+        for offer in get_active_offers_for_brand_reference(brand, reference)
+    ]
+    user = get_current_user(request)
+    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
+        offers
+    )
+    offers = attach_dealer_offer_source_urls(
+        offers,
+        import_logs_by_message_id,
+        user=user,
+        import_logs_by_id=import_logs_by_id,
+        import_logs_by_offer_id=import_logs_by_offer_id,
+    )
+    offers = enrich_watch_detail_offer_recency(
+        offers,
+        import_logs_by_message_id=import_logs_by_message_id,
+        import_logs_by_id=import_logs_by_id,
+        import_logs_by_offer_id=import_logs_by_offer_id,
+    )
+    filtered_offers = [
+        offer
+        for offer in offers
+        if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+        and offer_matches_watch_detail_date_filter(offer, date_range)
+    ]
+    detail_base_url = build_watch_reference_url(brand, reference) or "/"
+    filter_urls = build_watch_reference_filter_urls(
+        brand,
+        reference,
+        condition=condition_filter_input,
+        date=date_filter,
+        date_from=date_from_input,
+        date_to=date_to_input,
+    )
+    condition_urls = build_watch_reference_condition_urls(
+        brand,
+        reference,
+        condition=condition_filter_input,
+        date=date_filter,
+        date_from=date_from_input,
+        date_to=date_to_input,
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "watch_detail.html",
+        {
+            "watch": build_reference_detail_display(brand, reference, offers),
+            "stats": build_watch_stats(filtered_offers),
+            "offers": build_offer_rows(filtered_offers),
+            "condition_filter": condition_filter_input,
+            "date_filter": date_filter,
+            "date_from": date_from_input,
+            "date_to": date_to_input,
+            "detail_base_url": detail_base_url,
+            "condition_urls": condition_urls,
+            "filter_urls": filter_urls,
+            "brand_value": brand,
+            "reference_value": reference,
+        },
+    )
 
 
 def format_timestamp(value: str | None) -> str:
@@ -2588,54 +2817,73 @@ async def import_submit(
     )
 
 
-@app.get("/watch/{watch_id}", response_class=HTMLResponse, name="watch_detail")
-async def watch_detail(
-    request: Request,
+def build_watch_id_redirect_url(
+    watch: dict[str, Any],
+    *,
+    condition: str | None = None,
+) -> str | None:
+    """Build the canonical /watch-reference URL for a watch row."""
+    return build_watch_reference_url(
+        watch.get("brand"),
+        watch.get("reference"),
+        condition=condition,
+    )
+
+
+def redirect_watch_id_to_reference(
     watch_id: str,
+    *,
     condition: str = "all",
-) -> HTMLResponse:
+) -> RedirectResponse:
+    """Redirect legacy /watch/{id} URLs to brand + reference detail."""
     watch = get_watch_by_id(watch_id)
     if watch is None:
         raise HTTPException(status_code=404, detail="Watch not found")
 
+    target_url = build_watch_id_redirect_url(
+        watch,
+        condition=condition.strip().lower() or "all",
+    )
+    if not target_url:
+        raise HTTPException(status_code=404, detail="Watch missing brand or reference")
+
+    return RedirectResponse(url=target_url, status_code=307)
+
+
+@app.get("/watch-reference", response_class=HTMLResponse, name="watch_reference_detail")
+async def watch_reference_detail(
+    request: Request,
+    brand: str,
+    reference: str,
+    condition: str = "all",
+    date: str = "all",
+    date_from: str = "",
+    date_to: str = "",
+) -> HTMLResponse:
+    brand_value = brand.strip()
+    reference_value = reference.strip()
+    if not brand_value or not reference_value:
+        raise HTTPException(status_code=400, detail="Brand and reference are required")
+
     condition_filter_input = condition.strip().lower() or "all"
-    try:
-        condition_filter = parse_watch_detail_condition_filter(condition_filter_input)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    offers = [
-        normalize_watch_detail_offer(offer)
-        for offer in get_active_offers_for_brand_reference(watch.get("brand"), watch.get("reference"))
-    ]
-    user = get_current_user(request)
-    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
-        offers
-    )
-    offers = attach_dealer_offer_source_urls(
-        offers,
-        import_logs_by_message_id,
-        user=user,
-        import_logs_by_id=import_logs_by_id,
-        import_logs_by_offer_id=import_logs_by_offer_id,
-    )
-    filtered_offers = [
-        offer
-        for offer in offers
-        if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
-    ]
-
-    return templates.TemplateResponse(
+    return _render_watch_reference_detail(
         request,
-        "watch_detail.html",
-        {
-            "watch": build_watch_display(watch),
-            "stats": build_watch_stats(filtered_offers),
-            "offers": build_offer_rows(filtered_offers),
-            "condition_filter": condition_filter_input,
-            "watch_id": watch_id,
-        },
+        brand=brand_value,
+        reference=reference_value,
+        condition_filter_input=condition_filter_input,
+        date_filter_input=date.strip().lower() or "all",
+        date_from_input=date_from.strip(),
+        date_to_input=date_to.strip(),
     )
+
+
+@app.get("/watch/{watch_id}", response_class=RedirectResponse, name="watch_detail")
+async def watch_detail(
+    request: Request,
+    watch_id: str,
+    condition: str = "all",
+) -> RedirectResponse:
+    return redirect_watch_id_to_reference(watch_id, condition=condition)
 
 
 @app.get("/", response_class=HTMLResponse)

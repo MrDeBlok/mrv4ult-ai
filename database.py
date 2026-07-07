@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 LOOKUP_IDS_CHUNK_SIZE = 50
 OFFERS_BY_IDS_CHUNK_SIZE = LOOKUP_IDS_CHUNK_SIZE
+WATCH_LOOKUP_PAGE_SIZE = 1000
 
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -768,29 +769,60 @@ def get_watch_by_id(watch_id: str) -> Record | None:
 
 def find_watches_by_reference(reference_query: str) -> list[Record]:
     """Return watches whose stored reference matches a search reference token."""
-    from search import _normalize_search_reference, _reference_contains_token
+    from search import _reference_contains_token, reference_lookup_tokens
 
     token = reference_query.strip()
     if not token:
         return []
 
-    normalized_token = _normalize_search_reference(token)
-    if not normalized_token:
-        return []
+    matched: list[Record] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    lookup_tokens = reference_lookup_tokens(token)
 
-    prefix = re.sub(r"[^A-Za-z0-9]", "", token)[:6]
-    query = get_client().table("watches").select("*")
-    if prefix:
-        query = query.ilike("reference", f"%{prefix}%")
+    while True:
+        query = get_client().table("watches").select("*")
+        if lookup_tokens:
+            for lookup_token in lookup_tokens:
+                query = query.ilike("reference", f"%{lookup_token}%")
+        else:
+            query = query.not_.is_("reference", "null")
+
+        response = query.range(offset, offset + WATCH_LOOKUP_PAGE_SIZE - 1).execute()
+        batch = response.data or []
+        for watch in batch:
+            watch_id = str(watch.get("id") or "")
+            if (
+                watch_id
+                and watch_id not in seen_ids
+                and _reference_contains_token(watch.get("reference"), token)
+            ):
+                seen_ids.add(watch_id)
+                matched.append(watch)
+        if len(batch) < WATCH_LOOKUP_PAGE_SIZE:
+            break
+        offset += WATCH_LOOKUP_PAGE_SIZE
+
+    return matched
+
+
+def _build_watch_brand_reference_scan_query(brand: str | None, reference: str | None):
+    """Build a paginated watches scan query for a brand + reference group lookup."""
+    from search import reference_lookup_tokens
+
+    query = get_client().table("watches").select("id, brand, reference")
+    brand_filter = (brand or "").strip()
+    if brand_filter:
+        query = query.ilike("brand", f"%{brand_filter}%")
+
+    lookup_tokens = reference_lookup_tokens(reference)
+    if lookup_tokens:
+        for token in lookup_tokens:
+            query = query.ilike("reference", f"%{token}%")
     else:
         query = query.not_.is_("reference", "null")
 
-    response = query.execute()
-    return [
-        watch
-        for watch in response.data or []
-        if _reference_contains_token(watch.get("reference"), token)
-    ]
+    return query
 
 
 def find_watch_ids_for_brand_reference(brand: str | None, reference: str | None) -> list[str]:
@@ -801,19 +833,41 @@ def find_watch_ids_for_brand_reference(brand: str | None, reference: str | None)
     if not target_key[0] or not target_key[1]:
         return []
 
-    prefix = re.sub(r"[^A-Za-z0-9]", "", reference or "")[:6]
-    query = get_client().table("watches").select("id, brand, reference")
-    if prefix:
-        query = query.ilike("reference", f"%{prefix}%")
-    else:
-        query = query.not_.is_("reference", "null")
+    matched_ids: list[str] = []
+    offset = 0
 
-    response = query.execute()
-    return [
-        str(watch["id"])
-        for watch in response.data or []
-        if watch.get("id") and brand_reference_group_key(watch) == target_key
-    ]
+    while True:
+        query = _build_watch_brand_reference_scan_query(brand, reference)
+        response = query.range(offset, offset + WATCH_LOOKUP_PAGE_SIZE - 1).execute()
+        batch = response.data or []
+        for watch in batch:
+            if watch.get("id") and brand_reference_group_key(watch) == target_key:
+                matched_ids.append(str(watch["id"]))
+        if len(batch) < WATCH_LOOKUP_PAGE_SIZE:
+            break
+        offset += WATCH_LOOKUP_PAGE_SIZE
+
+    return matched_ids
+
+
+def trace_brand_reference_lookup(brand: str | None, reference: str | None) -> dict[str, Any]:
+    """Debug helper comparing search/detail brand + reference resolution."""
+    from search import brand_reference_group_key, reference_lookup_tokens
+
+    target_key = brand_reference_group_key({"brand": brand, "reference": reference})
+    watch_ids = find_watch_ids_for_brand_reference(brand, reference)
+    offers = get_active_offers_for_brand_reference(brand, reference) if watch_ids else []
+
+    return {
+        "brand": brand,
+        "reference": reference,
+        "target_key": target_key,
+        "normalized_reference": target_key[1],
+        "lookup_tokens": reference_lookup_tokens(reference),
+        "watch_ids": watch_ids,
+        "watch_count": len(watch_ids),
+        "offer_count": len(offers),
+    }
 
 
 def get_active_offers_for_brand_reference(

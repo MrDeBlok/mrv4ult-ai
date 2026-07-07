@@ -75,6 +75,7 @@ WATCH = {
     "dial": "Brown",
     "bracelet": "Bracelet",
 }
+REFERENCE_DETAIL_URL = "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R"
 
 
 class TestOfferSourceResolutionHelpers:
@@ -202,14 +203,11 @@ class TestWatchDetailSourceLinks:
 
     @patch("app.load_offer_source_import_log_lookups")
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_shows_view_original_for_linked_offers(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
         mock_load_lookups: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = WATCH
         mock_get_offers.return_value = [
             _detail_offer(
                 offer_id="offer-linked",
@@ -235,7 +233,7 @@ class TestWatchDetailSourceLinks:
         )
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a")
+        response = client.get(REFERENCE_DETAIL_URL)
 
         assert response.status_code == 200
         assert 'href="/activity/log-linked"' in response.text
@@ -245,14 +243,11 @@ class TestWatchDetailSourceLinks:
 
     @patch("app.load_offer_source_import_log_lookups")
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_resolves_source_from_offer_row_message_id_without_messages_join(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
         mock_load_lookups: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = WATCH
         raw_offer = _detail_offer(
             offer_id="offer-row-message",
             watch_id="w-5711-1r-a",
@@ -270,7 +265,7 @@ class TestWatchDetailSourceLinks:
         )
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a")
+        response = client.get(REFERENCE_DETAIL_URL)
 
         assert response.status_code == 200
         assert 'href="/activity/log-row"' in response.text
@@ -280,14 +275,11 @@ class TestWatchDetailSourceLinks:
 
     @patch("app.load_offer_source_import_log_lookups")
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_condition_filter_keeps_source_links(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
         mock_load_lookups: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = WATCH
         mock_get_offers.return_value = [
             _detail_offer(
                 offer_id="offer-new",
@@ -319,7 +311,7 @@ class TestWatchDetailSourceLinks:
         )
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a?condition=new")
+        response = client.get(f"{REFERENCE_DETAIL_URL}&condition=new")
 
         assert response.status_code == 200
         assert 'href="/activity/log-new"' in response.text

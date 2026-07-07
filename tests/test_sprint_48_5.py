@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app import app, build_offer_rows, build_result_rows, build_watch_stats
+from app import app, build_offer_rows, build_result_rows, build_watch_reference_condition_urls, build_watch_reference_url, build_watch_stats
 from condition_normalizer import (
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
@@ -156,7 +156,7 @@ class TestGroupedReferenceSearch:
         assert row["offer_count"] == 2
         assert row["unique_dealers"] == 2
         assert row["conditions_label"] == "New / Pre-Owned"
-        assert row["watch_url"] == f"/watch/{groups[0]['watch_id']}"
+        assert row["watch_url"] == build_watch_reference_url("Patek Philippe", "5711/1R")
 
     @patch("app.get_import_logs_by_message_ids", return_value={})
     @patch("app.search_offers")
@@ -198,7 +198,7 @@ class TestGroupedReferenceSearch:
 
         assert response.status_code == 200
         assert response.text.count("5711/1R") >= 1
-        assert 'data-href="/watch/' in response.text
+        assert 'data-href="/watch-reference?' in response.text
 
 
 class TestWatchDetailConditionFilters:
@@ -218,17 +218,14 @@ class TestWatchDetailConditionFilters:
     ]
 
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_shows_all_offers_for_brand_reference(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
         mock_get_offers.return_value = self.DETAIL_OFFERS
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a")
+        response = client.get("/watch-reference?brand=Patek+Philippe&reference=5711%2F1R")
 
         assert response.status_code == 200
         assert "Dealer dealer-1" in response.text
@@ -237,17 +234,16 @@ class TestWatchDetailConditionFilters:
         mock_get_offers.assert_called_once_with("Patek Philippe", "5711/1R")
 
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_new_filter(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
         mock_get_offers.return_value = self.DETAIL_OFFERS
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a?condition=new")
+        response = client.get(
+            "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R&condition=new"
+        )
 
         assert response.status_code == 200
         assert "Dealer dealer-1" in response.text
@@ -257,34 +253,32 @@ class TestWatchDetailConditionFilters:
         assert ">1<" in response.text.replace(" ", "")
 
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_pre_owned_filter(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
         mock_get_offers.return_value = self.DETAIL_OFFERS
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a?condition=pre-owned")
+        response = client.get(
+            "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R&condition=pre-owned"
+        )
 
         assert response.status_code == 200
         assert "Dealer dealer-2" in response.text
         assert "Dealer dealer-1" not in response.text
 
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_unknown_filter(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
         mock_get_offers.return_value = self.DETAIL_OFFERS
 
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a?condition=unknown")
+        response = client.get(
+            "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R&condition=unknown"
+        )
 
         assert response.status_code == 200
         assert "Dealer dealer-3" in response.text
@@ -292,18 +286,19 @@ class TestWatchDetailConditionFilters:
         assert "Dealer dealer-2" not in response.text
 
     @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
     def test_watch_detail_stats_update_with_condition_filter(
         self,
-        mock_get_watch: MagicMock,
         mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
         mock_get_offers.return_value = self.DETAIL_OFFERS
 
         client = TestClient(app)
-        all_response = client.get("/watch/w-5711-1r-a?condition=all")
-        new_response = client.get("/watch/w-5711-1r-a?condition=new")
+        all_response = client.get(
+            "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R&condition=all"
+        )
+        new_response = client.get(
+            "/watch-reference?brand=Patek+Philippe&reference=5711%2F1R&condition=new"
+        )
 
         assert all_response.status_code == 200
         assert new_response.status_code == 200
@@ -337,21 +332,17 @@ class TestWatchDetailConditionFilters:
         assert stats["unique_dealers"] == 1
         assert stats["lowest_usd"] == "$180,000"
 
-    @patch("app.get_active_offers_for_brand_reference")
-    @patch("app.get_watch_by_id")
+    @patch("app.get_active_offers_for_brand_reference", return_value=[])
     def test_watch_detail_renders_condition_filter_buttons(
         self,
-        mock_get_watch: MagicMock,
-        mock_get_offers: MagicMock,
+        _mock_get_offers: MagicMock,
     ) -> None:
-        mock_get_watch.return_value = self.WATCH
-        mock_get_offers.return_value = self.DETAIL_OFFERS
-
         client = TestClient(app)
-        response = client.get("/watch/w-5711-1r-a")
+        response = client.get("/watch-reference?brand=Patek+Philippe&reference=5711%2F1R")
 
         assert response.status_code == 200
-        assert 'href="/watch/w-5711-1r-a?condition=all"' in response.text
-        assert 'href="/watch/w-5711-1r-a?condition=new"' in response.text
-        assert 'href="/watch/w-5711-1r-a?condition=pre-owned"' in response.text
-        assert 'href="/watch/w-5711-1r-a?condition=unknown"' in response.text
+        condition_urls = build_watch_reference_condition_urls("Patek Philippe", "5711/1R")
+        assert f'href="{condition_urls["all"].replace("&", "&amp;")}"' in response.text
+        assert f'href="{condition_urls["new"].replace("&", "&amp;")}"' in response.text
+        assert f'href="{condition_urls["pre-owned"].replace("&", "&amp;")}"' in response.text
+        assert f'href="{condition_urls["unknown"].replace("&", "&amp;")}"' in response.text

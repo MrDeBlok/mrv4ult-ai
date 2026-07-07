@@ -475,6 +475,42 @@ def _normalize_search_reference(value: str | None) -> str:
     return re.sub(r"[\s\-/.]", "", value.strip()).upper()
 
 
+def reference_lookup_tokens(reference: str | None) -> list[str]:
+    """Return tokens for narrowing watch lookups before group-key filtering."""
+    stripped = (reference or "").strip()
+    if not stripped:
+        return []
+
+    parts = re.split(r"[\s\-/.]+", stripped)
+    split_tokens = [part for part in parts if part]
+    if len(split_tokens) >= 2:
+        return split_tokens
+
+    normalized = _normalize_search_reference(stripped)
+    if not normalized:
+        return []
+
+    if re.match(r"^\d{4,}[A-Z]", normalized):
+        return [normalized[:4], normalized[4:]]
+
+    digit_prefix = re.match(r"^(\d+)", normalized)
+    if digit_prefix:
+        return [digit_prefix.group(1)]
+
+    return [normalized[: max(4, min(6, len(normalized)))]]
+
+
+def watch_matches_brand_reference_group(
+    watch: Record,
+    brand: str | None,
+    reference: str | None,
+) -> bool:
+    """Return True when a watch row belongs to the brand + reference group."""
+    return brand_reference_group_key(watch) == brand_reference_group_key(
+        {"brand": brand, "reference": reference}
+    )
+
+
 def _reference_contains_token(reference: str | None, token: str) -> bool:
     """Return True when the normalized reference contains the normalized token."""
     normalized_reference = _normalize_search_reference(reference)

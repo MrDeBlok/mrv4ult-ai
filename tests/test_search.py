@@ -135,7 +135,7 @@ class TestSearchResultDisplay:
         assert rows[0]["offer_count"] == 2
         assert rows[0]["unique_dealers"] == 1
         assert rows[0]["conditions_label"] == "New / Pre-Owned"
-        assert rows[0]["watch_url"] == "/watch/w-new"
+        assert rows[0]["watch_url"] == "/watch-reference?brand=Rolex&reference=126200"
 
     @patch("app.get_import_logs_by_message_ids", return_value={})
     @patch("app.search_offers")

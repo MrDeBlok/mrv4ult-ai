@@ -68,7 +68,7 @@ class TestSearchResultSourceLinks:
 
         assert rows[0]["brand"] == "Rolex"
         assert rows[0]["reference"] == "126200"
-        assert rows[0]["watch_url"] == "/watch/watch-1"
+        assert rows[0]["watch_url"] == "/watch-reference?brand=Rolex&reference=126200"
         assert "source_url" not in rows[0]
         assert "dealer_url" not in rows[0]
 
@@ -108,7 +108,7 @@ class TestSearchResultSourceLinks:
         response = client.get("/?q=126200")
 
         assert response.status_code == 200
-        assert 'data-href="/watch/watch-1"' in response.text
+        assert 'data-href="/watch-reference?' in response.text
         assert "126200" in response.text
         assert 'href="/activity/log-offer-1"' not in response.text
         assert "View original" not in response.text

@@ -24,14 +24,6 @@
                 <div class="text-muted small">Model</div>
                 <div class="fw-semibold">{{ watch.model }}</div>
             </div>
-            <div class="col-12 col-md-6 col-lg-4">
-                <div class="text-muted small">Dial</div>
-                <div class="fw-semibold">{{ watch.dial }}</div>
-            </div>
-            <div class="col-12 col-md-6 col-lg-4">
-                <div class="text-muted small">Bracelet</div>
-                <div class="fw-semibold">{{ watch.bracelet }}</div>
-            </div>
         </div>
     </div>
 </section>
@@ -40,13 +32,50 @@
     <div class="card-body p-3 p-md-4">
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
             <h2 class="h5 mb-0">Statistics</h2>
+            {% set detail_href = detail_base_url | default('/') %}
+            {% set filter_urls = filter_urls | default({}) %}
+            {% set condition_urls = condition_urls | default({
+                'all': detail_href,
+                'new': detail_href,
+                'pre-owned': detail_href,
+                'unknown': detail_href,
+            }) %}
             <div class="d-flex flex-wrap gap-2">
-                <a href="/watch/{{ watch_id }}?condition=all" class="btn btn-sm {% if condition_filter == 'all' %}btn-dark{% else %}btn-outline-dark{% endif %}">All</a>
-                <a href="/watch/{{ watch_id }}?condition=new" class="btn btn-sm {% if condition_filter == 'new' %}btn-success{% else %}btn-outline-success{% endif %}">New</a>
-                <a href="/watch/{{ watch_id }}?condition=pre-owned" class="btn btn-sm {% if condition_filter == 'pre-owned' %}btn-warning{% else %}btn-outline-warning{% endif %}">Pre-Owned</a>
-                <a href="/watch/{{ watch_id }}?condition=unknown" class="btn btn-sm {% if condition_filter == 'unknown' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Unknown</a>
+                <a href="{{ condition_urls.all }}" class="btn btn-sm {% if condition_filter == 'all' %}btn-dark{% else %}btn-outline-dark{% endif %}">All</a>
+                <a href="{{ condition_urls.new }}" class="btn btn-sm {% if condition_filter == 'new' %}btn-success{% else %}btn-outline-success{% endif %}">New</a>
+                <a href="{{ condition_urls['pre-owned'] }}" class="btn btn-sm {% if condition_filter == 'pre-owned' %}btn-warning{% else %}btn-outline-warning{% endif %}">Pre-Owned</a>
+                <a href="{{ condition_urls.unknown }}" class="btn btn-sm {% if condition_filter == 'unknown' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Unknown</a>
             </div>
         </div>
+
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+            <div class="text-muted small">Date filter</div>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="{{ filter_urls.date_all | default(detail_href) }}" class="btn btn-sm {% if date_filter == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+                <a href="{{ filter_urls.date_today | default(detail_href) }}" class="btn btn-sm {% if date_filter == 'today' %}btn-primary{% else %}btn-outline-primary{% endif %}">Today</a>
+                <a href="{{ filter_urls.date_7d | default(detail_href) }}" class="btn btn-sm {% if date_filter == '7d' %}btn-primary{% else %}btn-outline-primary{% endif %}">Last 7 days</a>
+                <a href="{{ filter_urls.date_30d | default(detail_href) }}" class="btn btn-sm {% if date_filter == '30d' %}btn-primary{% else %}btn-outline-primary{% endif %}">Last 30 days</a>
+            </div>
+        </div>
+
+        <form method="get" action="/watch-reference" class="row g-2 align-items-end mb-3">
+            <input type="hidden" name="brand" value="{{ brand_value }}">
+            <input type="hidden" name="reference" value="{{ reference_value }}">
+            <input type="hidden" name="condition" value="{{ condition_filter }}">
+            <input type="hidden" name="date" value="custom">
+            <div class="col-12 col-sm-auto">
+                <label for="date_from" class="form-label small text-muted mb-1">From</label>
+                <input id="date_from" type="date" name="date_from" value="{{ date_from }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-12 col-sm-auto">
+                <label for="date_to" class="form-label small text-muted mb-1">To</label>
+                <input id="date_to" type="date" name="date_to" value="{{ date_to }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-12 col-sm-auto">
+                <button type="submit" class="btn btn-sm {% if date_filter == 'custom' %}btn-primary{% else %}btn-outline-primary{% endif %}">Custom range</button>
+            </div>
+        </form>
+
         <div class="row g-3">
             <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Lowest USD price</div>
@@ -71,6 +100,10 @@
             <div class="col-6 col-md-4 col-lg-2">
                 <div class="text-muted small">Groups</div>
                 <div class="fw-semibold">{{ stats.unique_groups }}</div>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+                <div class="text-muted small">Conditions</div>
+                <div class="fw-semibold">{{ stats.conditions_label }}</div>
             </div>
         </div>
     </div>
