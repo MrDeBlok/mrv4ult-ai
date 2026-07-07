@@ -259,6 +259,102 @@ class TestRequestRoutes:
 
 
 class TestRequestDatabaseMutations:
+    @patch("database.request_created_by_user_id_supported", return_value=True)
+    @patch("database.get_client")
+    def test_create_request_includes_created_by_user_id_when_supported(
+        self,
+        mock_get_client: MagicMock,
+        _mock_supported: MagicMock,
+    ) -> None:
+        from database import create_request
+
+        mock_execute = MagicMock()
+        mock_execute.data = [{"id": "req-1", "created_by_user_id": TRADER_ONE["id"]}]
+        mock_get_client.return_value.table.return_value.insert.return_value.execute.return_value = (
+            mock_execute
+        )
+
+        create_request(
+            client_name="Anna Buyer",
+            created_by_user_id=TRADER_ONE["id"],
+        )
+
+        payload = mock_get_client.return_value.table.return_value.insert.call_args.args[0]
+        assert payload["created_by_user_id"] == TRADER_ONE["id"]
+
+    @patch("database.request_created_by_user_id_supported", return_value=False)
+    @patch("database.get_client")
+    def test_create_request_omits_created_by_user_id_when_column_missing(
+        self,
+        mock_get_client: MagicMock,
+        _mock_supported: MagicMock,
+    ) -> None:
+        from database import create_request
+
+        mock_execute = MagicMock()
+        mock_execute.data = [{"id": "req-1"}]
+        mock_get_client.return_value.table.return_value.insert.return_value.execute.return_value = (
+            mock_execute
+        )
+
+        create_request(
+            client_name="Anna Buyer",
+            created_by_user_id=TRADER_ONE["id"],
+        )
+
+        payload = mock_get_client.return_value.table.return_value.insert.call_args.args[0]
+        assert "created_by_user_id" not in payload
+
+    @patch("database.get_client")
+    def test_create_request_retries_without_owner_after_schema_cache_miss(
+        self,
+        mock_get_client: MagicMock,
+    ) -> None:
+        from database import create_request, reset_user_columns_cache
+        from postgrest.exceptions import APIError
+
+        reset_user_columns_cache()
+        schema_error = APIError(
+            {
+                "message": "Could not find the 'created_by_user_id' column of 'requests' in the schema cache",
+                "code": "PGRST204",
+            }
+        )
+        success_execute = MagicMock()
+        success_execute.data = [{"id": "req-1"}]
+        insert_mock = mock_get_client.return_value.table.return_value.insert
+        insert_mock.return_value.execute.side_effect = [schema_error, success_execute]
+
+        with patch("database.request_created_by_user_id_supported", return_value=True):
+            created = create_request(
+                client_name="Anna Buyer",
+                created_by_user_id=TRADER_ONE["id"],
+            )
+
+        assert created["id"] == "req-1"
+        assert insert_mock.call_count == 2
+        retry_payload = insert_mock.call_args_list[1].args[0]
+        assert "created_by_user_id" not in retry_payload
+
+    @patch("app.create_request")
+    def test_post_create_request_redirects_with_schema_error(
+        self,
+        mock_create_request: MagicMock,
+    ) -> None:
+        from database import RequestSchemaError
+
+        mock_create_request.side_effect = RequestSchemaError()
+
+        client = TestClient(app)
+        response = client.post(
+            "/requests",
+            data={"client_name": "Anna Buyer"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/requests?error=schema"
+
     @patch("database.get_client")
     def test_update_request_writes_normalized_payload(self, mock_get_client: MagicMock) -> None:
         mock_execute = MagicMock()

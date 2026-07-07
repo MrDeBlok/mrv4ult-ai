@@ -60,6 +60,7 @@ from import_status import (
 )
 from database import (
     ClientDeleteBlockedError,
+    RequestSchemaError,
     create_client_contact,
     create_request,
     delete_client_permanently,
@@ -2323,6 +2324,7 @@ async def requests_list(
             "deleted": request.query_params.get("deleted") == "1",
             "prefill_client_id": client_id.strip(),
             "prefill_client_name": client_name.strip(),
+            "error": request.query_params.get("error", "").strip().lower(),
         },
     )
 
@@ -2348,22 +2350,25 @@ async def requests_create(
         return RedirectResponse(url="/requests?error=client", status_code=303)
 
     user = get_current_user(request)
-    create_request(
-        client_name=client_name,
-        brand=brand or None,
-        reference=reference or None,
-        model=model or None,
-        alias=alias or None,
-        dial=dial or None,
-        condition=parse_request_condition_form(condition),
-        min_year=_parse_optional_int(min_year),
-        max_year=_parse_optional_int(max_year),
-        max_price=_parse_optional_int(max_price),
-        currency=currency or None,
-        notes=notes or None,
-        client_id=client_id.strip() or None,
-        created_by_user_id=str(user["id"]) if user and user.get("id") else None,
-    )
+    try:
+        create_request(
+            client_name=client_name,
+            brand=brand or None,
+            reference=reference or None,
+            model=model or None,
+            alias=alias or None,
+            dial=dial or None,
+            condition=parse_request_condition_form(condition),
+            min_year=_parse_optional_int(min_year),
+            max_year=_parse_optional_int(max_year),
+            max_price=_parse_optional_int(max_price),
+            currency=currency or None,
+            notes=notes or None,
+            client_id=client_id.strip() or None,
+            created_by_user_id=str(user["id"]) if user and user.get("id") else None,
+        )
+    except RequestSchemaError:
+        return RedirectResponse(url="/requests?error=schema", status_code=303)
     return RedirectResponse(url="/requests?saved=1", status_code=303)
 
 

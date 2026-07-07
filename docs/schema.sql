@@ -117,6 +117,8 @@ CREATE TABLE requests (
     currency        TEXT,
     notes           TEXT,
     status          TEXT            NOT NULL DEFAULT 'open',
+    client_id       UUID            REFERENCES dealers (id) ON DELETE SET NULL,
+    created_by_user_id UUID         REFERENCES users (id) ON DELETE SET NULL,
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
 
@@ -259,6 +261,9 @@ CREATE INDEX idx_requests_status
 CREATE INDEX idx_requests_brand_reference
     ON requests (brand, reference)
     WHERE brand IS NOT NULL AND reference IS NOT NULL;
+
+CREATE INDEX idx_requests_created_by_user_id
+    ON requests (created_by_user_id);
 
 CREATE INDEX idx_request_matches_request_id
     ON request_matches (request_id);

@@ -61,6 +61,14 @@
 {% if deleted %}
 <div class="alert alert-success" role="alert">Request deleted.</div>
 {% endif %}
+{% if error == 'schema' %}
+<div class="alert alert-warning" role="alert">
+    Client request could not be saved because the database schema is out of date.
+    Apply <code>docs/migrations/sprint_46_2_request_ownership.sql</code> in the Supabase SQL Editor, then restart the app.
+</div>
+{% elif error == 'client' %}
+<div class="alert alert-warning" role="alert">Client name is required.</div>
+{% endif %}
 
 <section class="card shadow-sm mb-4">
     <div class="card-header bg-white py-3">

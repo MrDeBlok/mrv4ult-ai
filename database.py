@@ -100,6 +100,7 @@ _contact_type_column_supported: bool | None = None
 _source_import_log_id_column_supported: bool | None = None
 _users_table_supported: bool | None = None
 _user_ownership_columns_supported: bool | None = None
+_request_created_by_user_id_supported: bool | None = None
 _client_profiles_supported: bool | None = None
 _watch_knowledge_supported: bool | None = None
 _reference_brand_mappings_supported: bool | None = None
@@ -115,9 +116,10 @@ def reset_contact_type_column_cache() -> None:
 
 def reset_user_columns_cache() -> None:
     """Reset cached user table/column detection (for tests)."""
-    global _users_table_supported, _user_ownership_columns_supported
+    global _users_table_supported, _user_ownership_columns_supported, _request_created_by_user_id_supported
     _users_table_supported = None
     _user_ownership_columns_supported = None
+    _request_created_by_user_id_supported = None
 
 
 def reset_client_profiles_cache() -> None:
@@ -223,6 +225,44 @@ def user_ownership_columns_supported() -> bool:
         else:
             raise
     return _user_ownership_columns_supported
+
+
+def request_created_by_user_id_supported() -> bool:
+    """Return True when requests.created_by_user_id exists in the connected database."""
+    global _request_created_by_user_id_supported
+    if _request_created_by_user_id_supported is not None:
+        return _request_created_by_user_id_supported
+
+    try:
+        get_client().table("requests").select("created_by_user_id").limit(1).execute()
+        _request_created_by_user_id_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42703", "PGRST204"} or "created_by_user_id" in message:
+            _request_created_by_user_id_supported = False
+            logger.warning(
+                "requests.created_by_user_id column missing; apply "
+                "docs/migrations/sprint_46_2_request_ownership.sql"
+            )
+        else:
+            raise
+    return _request_created_by_user_id_supported
+
+
+class RequestSchemaError(Exception):
+    """Raised when the requests table is missing a required schema upgrade."""
+
+    migration_path = "docs/migrations/sprint_46_2_request_ownership.sql"
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message
+            or (
+                "Client request could not be saved because the database schema is out of date. "
+                f"Apply {self.migration_path} in the Supabase SQL Editor, then restart the app."
+            )
+        )
 
 
 def client_profiles_supported() -> bool:
@@ -969,9 +1009,31 @@ def create_request(
     )
     if client_id:
         payload["client_id"] = client_id
-    if created_by_user_id and user_ownership_columns_supported():
+    include_owner = bool(created_by_user_id and request_created_by_user_id_supported())
+    if include_owner:
         payload["created_by_user_id"] = created_by_user_id
-    response = get_client().table("requests").insert(payload).execute()
+
+    try:
+        response = get_client().table("requests").insert(payload).execute()
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if include_owner and (code == "PGRST204" or "created_by_user_id" in message):
+            global _request_created_by_user_id_supported
+            _request_created_by_user_id_supported = False
+            logger.warning(
+                "requests.created_by_user_id column missing during insert; apply "
+                "docs/migrations/sprint_46_2_request_ownership.sql"
+            )
+            payload.pop("created_by_user_id", None)
+            try:
+                response = get_client().table("requests").insert(payload).execute()
+            except APIError as retry_exc:
+                raise RequestSchemaError() from retry_exc
+            return _first_row(response.data, "requests")
+        if code == "PGRST204":
+            raise RequestSchemaError() from exc
+        raise
     return _first_row(response.data, "requests")
 
 
