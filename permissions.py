@@ -25,6 +25,7 @@ VIEWER_ALLOWED_GET_PREFIXES = (
 VIEWER_FORBIDDEN_GET_PREFIXES = (
     "/import",
     "/parser-review",
+    "/parser-training",
     "/knowledge",
     "/settings/team",
     "/users",
@@ -32,6 +33,8 @@ VIEWER_FORBIDDEN_GET_PREFIXES = (
 ADMIN_ONLY_PATH_PREFIXES = (
     "/import",
     "/parser-review",
+    "/parser-training",
+    "/parser-learning-rules",
     "/ai-health",
     "/parser-accuracy",
     "/knowledge",

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -48,8 +49,29 @@ from parser_accuracy import IMPORT_ACCURACY_SCAN_LIMIT, load_ai_health_dashboard
 from parser_workbench import (
     CONDITION_FIX_OPTIONS,
     WORKBENCH_CURRENCIES,
+    apply_dealer_list_bulk_action,
+    apply_dealer_list_row_fix,
     apply_workbench_fix_and_finalize,
 )
+from parser_training_center import (
+    PARSER_TRAINING_FILTERS,
+    load_parser_training_containers,
+    load_parser_training_overview_page,
+    load_parser_training_rows_for_import,
+    parse_parser_training_filter,
+    parse_parser_training_page,
+    parser_training_page_url,
+    trace_parser_training_import,
+    unique_references_from_rows,
+)
+from parser_training_engine import (
+    backfill_parser_training_rows_for_recent_imports,
+    bulk_training_row_action,
+    correct_training_row,
+    re_evaluate_parser_training_import,
+    re_evaluate_parser_training_imports,
+)
+from parser_training_reprocess import teach_condition_and_reprocess
 from import_status import (
     filter_discarded_import_logs,
     format_import_status,
@@ -94,6 +116,7 @@ from database import (
     list_dealer_offer_counts,
     list_parser_accuracy_import_logs,
     list_parser_review_import_log_candidates,
+    list_parser_training_candidate_import_logs,
     list_import_logs,
     list_notifications,
     list_offer_intelligence_rows,
@@ -127,6 +150,14 @@ from database import (
     resolve_unknown_nickname_with_alias,
     watch_knowledge_supported,
     watch_identification_supported,
+    parser_learning_rules_supported,
+    parser_training_rows_supported,
+    parser_training_rows_schema_status,
+    parser_training_rows_write_guard,
+    list_parser_learning_rules,
+    get_parser_learning_rule,
+    update_parser_learning_rule,
+    disable_parser_learning_rule,
 )
 from brand_registry import invalidate_brand_registry_cache, list_canonical_brands
 from watch_identifier import invalidate_identifier_cache
@@ -2494,6 +2525,30 @@ async def requests_close(request: Request, request_id: str) -> RedirectResponse:
     return RedirectResponse(url="/requests", status_code=303)
 
 
+def _parser_training_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return recent business imports with parsed offer rows for Parser Training Center."""
+    from database import IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW, attach_import_log_summaries, list_activity_import_logs
+
+    try:
+        db_rows = list_activity_import_logs(
+            tab="active",
+            offset=0,
+            limit=IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW,
+        )
+        visible = filter_discarded_import_logs(filter_imports_for_user(db_rows, user))
+        lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+        business = filter_business_import_logs(visible, lookup)
+        offer_imports = [
+            import_log
+            for import_log in business
+            if int(import_log.get("watches_parsed") or 0) > 0
+        ]
+        return attach_import_log_summaries(offer_imports)
+    except Exception:
+        logger.exception("Failed loading imports for Parser Training Center")
+        return []
+
+
 def _parser_review_import_logs(user: dict[str, Any] | None) -> list[dict[str, Any]]:
     visible = filter_discarded_import_logs(
         filter_imports_for_user(list_parser_review_import_log_candidates(), user)
@@ -2628,6 +2683,8 @@ async def parser_review_page(request: Request, filter: str = "all") -> HTMLRespo
             "ignored": request.query_params.get("ignored") == "1",
             "fixed": request.query_params.get("fixed") == "1",
             "alias_saved": request.query_params.get("alias_saved") == "1",
+            "taught": request.query_params.get("taught") == "1",
+            "learning_enabled": parser_learning_rules_supported(),
         },
     )
 
@@ -2705,6 +2762,535 @@ async def parser_review_apply_fix(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return RedirectResponse(url="/parser-review?fixed=1", status_code=303)
+
+
+@app.get("/ai-workbench", include_in_schema=False)
+async def ai_workbench_redirect() -> RedirectResponse:
+    """Backward-compatible redirect from the old AI Workbench label."""
+    return RedirectResponse(url="/parser-training", status_code=307)
+
+
+@app.get("/parser-training", response_class=HTMLResponse, name="parser_training")
+async def parser_training_page(request: Request) -> HTMLResponse:
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    page = parse_parser_training_page(request.query_params.get("page"))
+    filter_name = parse_parser_training_filter(request.query_params.get("filter"))
+
+    render_started = time.perf_counter()
+    page_result = load_parser_training_overview_page(
+        user,
+        page=page,
+        filter_name=filter_name,
+        format_timestamp=format_timestamp,
+    )
+    render_ms = (time.perf_counter() - render_started) * 1000
+    logger.info(
+        "parser-training overview: render=%.1fms page=%s filter=%s",
+        render_ms,
+        page_result.page,
+        page_result.filter_name,
+    )
+
+    schema = parser_training_rows_schema_status()
+    backfill_action_url = str(request.url_for("parser_training_backfill_recent"))
+    reevaluate_action_url = str(request.url_for("parser_training_reevaluate_recent"))
+    return templates.TemplateResponse(
+        request,
+        "parser_training.html",
+        {
+            "containers": page_result.containers,
+            "totals": page_result.totals,
+            "page": page_result.page,
+            "page_size": page_result.page_size,
+            "has_previous": page_result.has_previous,
+            "has_next": page_result.has_next,
+            "previous_page_url": parser_training_page_url(page_result.page - 1, page_result.filter_name),
+            "next_page_url": parser_training_page_url(page_result.page + 1, page_result.filter_name),
+            "showing_from": page_result.showing_from,
+            "showing_to": page_result.showing_to,
+            "filter_name": page_result.filter_name,
+            "filter_options": PARSER_TRAINING_FILTERS,
+            "filter_urls": {
+                name: parser_training_page_url(1, name)
+                for name in PARSER_TRAINING_FILTERS
+            },
+            "training_rows_enabled": schema["status"] == "supported",
+            "training_schema_status": schema["status"],
+            "training_schema_message": schema["message"],
+            "backfill_action_url": backfill_action_url,
+            "reevaluate_action_url": reevaluate_action_url,
+            "saved": request.query_params.get("saved") == "1",
+            "bulk_saved": request.query_params.get("bulk_saved") == "1",
+            "backfill_done": request.query_params.get("backfill") == "1",
+            "reevaluate_done": request.query_params.get("reevaluate") == "1",
+            "backfill_scanned": request.query_params.get("scanned", ""),
+            "backfill_rows": request.query_params.get("rows", ""),
+            "backfill_imports": request.query_params.get("imports", ""),
+            "backfill_skipped": request.query_params.get("skipped", ""),
+            "backfill_errors": request.query_params.get("errors", ""),
+            "reevaluate_imports": request.query_params.get("imports", ""),
+            "reevaluate_rows_checked": request.query_params.get("checked", ""),
+            "reevaluate_rows_updated": request.query_params.get("updated", ""),
+        },
+    )
+
+
+@app.post("/parser-training/backfill-recent", name="parser_training_backfill_recent")
+async def parser_training_backfill_recent(
+    request: Request,
+    limit: int = Form(50),
+) -> RedirectResponse:
+    """Backfill parser_training_rows from recent import_logs.summary rows."""
+    _require_admin_workbench(request)
+    try:
+        with parser_training_rows_write_guard():
+            result = backfill_parser_training_rows_for_recent_imports(limit=max(1, min(limit, 200)))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skipped = int(result.get("skipped_existing") or 0) + int(result.get("skipped_no_rows") or 0)
+    params = urlencode(
+        {
+            "backfill": "1",
+            "scanned": str(result.get("scanned") or 0),
+            "rows": str(result.get("rows_created") or 0),
+            "imports": str(result.get("processed") or 0),
+            "skipped": str(skipped),
+            "errors": str(len(result.get("errors") or [])),
+        }
+    )
+    return RedirectResponse(url=f"/parser-training?{params}", status_code=303)
+
+
+@app.post("/parser-training/re-evaluate-recent", name="parser_training_reevaluate_recent")
+async def parser_training_reevaluate_recent(
+    request: Request,
+    limit: int = Form(50),
+) -> RedirectResponse:
+    """Re-evaluate parser_training_rows for recent imports (writes to DB)."""
+    _require_admin_workbench(request)
+    import_logs = _parser_training_import_logs(get_current_user(request))
+    import_ids = [str(log.get("id") or "") for log in import_logs if log.get("id")]
+    scan_limit = max(1, min(limit, len(import_ids)))
+    message_types_by_id = {
+        str(log.get("id") or ""): (log.get("summary") or {}).get("message_type")
+        for log in import_logs
+        if log.get("id")
+    }
+    with parser_training_rows_write_guard():
+        result = re_evaluate_parser_training_imports(
+            import_ids[:scan_limit],
+            message_types_by_id=message_types_by_id,
+        )
+    params = urlencode(
+        {
+            "reevaluate": "1",
+            "imports": str(result.get("imports_processed") or 0),
+            "checked": str(result.get("rows_checked") or 0),
+            "updated": str(result.get("rows_updated") or 0),
+        }
+    )
+    return RedirectResponse(url=f"/parser-training?{params}", status_code=303)
+
+
+@app.post("/parser-training/{import_id}/re-evaluate", name="parser_training_reevaluate_import")
+async def parser_training_reevaluate_import(request: Request, import_id: str) -> RedirectResponse:
+    """Re-evaluate parser_training_rows for one import (writes to DB)."""
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    import_log = get_import_log(import_id)
+    if import_log is None or not _can_access_import_log(user, import_log):
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    message_type = (import_log.get("summary") or {}).get("message_type")
+    with parser_training_rows_write_guard():
+        re_evaluate_parser_training_import(import_id, message_type=message_type)
+    return RedirectResponse(url=f"/parser-training/{import_id}/rows?reevaluated=1", status_code=303)
+
+
+@app.get(
+    "/parser-training/debug/{import_log_id}",
+    name="parser_training_debug_import",
+)
+async def parser_training_debug_import(request: Request, import_log_id: str) -> JSONResponse:
+    """Trace why one Activity import is or is not visible in Parser Training Center."""
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    lookup = build_dealer_lookup_by_whatsapp(list_contacts_for_import_lookup())
+    trace = trace_parser_training_import(
+        import_log_id,
+        user=user,
+        dealer_lookup=lookup,
+    )
+    return JSONResponse(trace)
+
+
+def _parser_training_rows_url(import_id: str, *, saved: bool = False, bulk_saved: bool = False) -> str:
+    suffix = ""
+    if saved:
+        suffix = "?saved=1"
+    elif bulk_saved:
+        suffix = "?bulk_saved=1"
+    return f"/parser-training/{import_id}/rows{suffix}"
+
+
+@app.get("/parser-training/{import_id}/rows", response_class=HTMLResponse, name="parser_training_rows")
+async def parser_training_rows_page(request: Request, import_id: str) -> HTMLResponse:
+    _require_admin_workbench(request)
+    from activity_feed import format_dealer_label
+
+    user = get_current_user(request)
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not _can_access_import_log(user, import_log):
+        raise HTTPException(status_code=403, detail="Import not accessible")
+
+    message = get_message_by_id(str(import_log.get("message_id") or ""))
+    training_rows, stats = load_parser_training_rows_for_import(import_log, message=message)
+
+    return templates.TemplateResponse(
+        request,
+        "parser_training_rows.html",
+        {
+            "import_log": import_log,
+            "import_time": format_timestamp(import_log.get("import_time")),
+            "dealer": format_dealer_label(import_log),
+            "group_name": import_log.get("group_name") or "N/A",
+            "original_message": (message or {}).get("raw_text") or "",
+            "training_rows": training_rows,
+            "stats": stats,
+            "unique_references": unique_references_from_rows(training_rows),
+            "canonical_brands": list_canonical_brands(),
+            "condition_fix_options": CONDITION_FIX_OPTIONS,
+            "workbench_currencies": WORKBENCH_CURRENCIES,
+            "learning_enabled": parser_learning_rules_supported(),
+            "saved": request.query_params.get("saved") == "1",
+            "bulk_saved": request.query_params.get("bulk_saved") == "1",
+        },
+    )
+
+
+@app.post("/parser-training/rows/{row_id}/correct")
+async def parser_training_row_correct(
+    request: Request,
+    row_id: str,
+    brand: str = Form(""),
+    reference: str = Form(""),
+    condition: str = Form(""),
+    year: str = Form(""),
+    card_date: str = Form(""),
+    price: str = Form(""),
+    currency: str = Form(""),
+    condition_term: str = Form(""),
+    learn_mode: str = Form("row_only"),
+    learn_reference_brand: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    from database import get_parser_training_row
+
+    row = get_parser_training_row(row_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Training row not found")
+
+    import_id = str(row.get("import_log_id") or "")
+    import_log = get_import_log(import_id)
+    if import_log is None or not _can_access_import_log(user, import_log):
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    message = get_message_by_id(str(import_log.get("message_id") or ""))
+    corrections: dict[str, Any] = {}
+    if brand.strip():
+        corrections["brand"] = brand.strip()
+    if reference.strip():
+        corrections["reference"] = reference.strip()
+    if condition.strip():
+        corrections["condition"] = condition.strip()
+    if year.strip():
+        corrections["year"] = year.strip()
+    if card_date.strip():
+        corrections["card_date"] = card_date.strip()
+    if price.strip():
+        corrections["price"] = price.strip()
+    if currency.strip():
+        corrections["currency"] = currency.strip()
+    if condition_term.strip():
+        corrections["condition_term"] = condition_term.strip()
+    if learn_reference_brand.strip().lower() in {"1", "true", "on", "yes"}:
+        corrections["learn_reference_brand"] = True
+
+    try:
+        with parser_training_rows_write_guard():
+            correct_training_row(
+                row_id,
+                corrections,
+                learn_mode=learn_mode,
+                created_by_user_id=str(user.get("id") or "") or None,
+                dealer_id=str((message or {}).get("dealer_id") or "") or None,
+                group_id=str((message or {}).get("group_id") or "") or None,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RedirectResponse(url=_parser_training_rows_url(import_id, saved=True), status_code=303)
+
+
+@app.post("/parser-training/{import_id}/bulk-action")
+async def parser_training_bulk_action(
+    request: Request,
+    import_id: str,
+    action: str = Form(...),
+    brand_name: str = Form(""),
+    condition_value: str = Form(""),
+    condition_term: str = Form(""),
+    currency: str = Form(""),
+    learn_mode: str = Form("row_only"),
+    row_ids: Annotated[list[str], Form()] = [],
+    map_reference: Annotated[list[str], Form()] = [],
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not _can_access_import_log(user, import_log):
+        raise HTTPException(status_code=403, detail="Import not accessible")
+
+    reference_brand_mappings = [
+        {"reference": ref, "selected": True}
+        for ref in map_reference
+        if ref.strip()
+    ]
+
+    try:
+        with parser_training_rows_write_guard():
+            bulk_training_row_action(
+                import_id,
+                action,
+                row_ids=row_ids,
+                brand_name=brand_name,
+                condition_value=condition_value,
+                condition_term=condition_term,
+                currency=currency,
+                reference_brand_mappings=reference_brand_mappings,
+                created_by_user_id=str(user.get("id") or "") or None,
+                learn_mode=learn_mode,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RedirectResponse(url=_parser_training_rows_url(import_id, bulk_saved=True), status_code=303)
+
+
+@app.get("/ai-workbench-legacy", include_in_schema=False)
+async def ai_workbench_legacy_redirect() -> RedirectResponse:
+    """Redirect to legacy import-level parser review."""
+    return RedirectResponse(url="/parser-review", status_code=307)
+
+
+@app.get("/parser-learning-rules", response_class=HTMLResponse, name="parser_learning_rules")
+async def parser_learning_rules_page(request: Request) -> HTMLResponse:
+    _require_admin_workbench(request)
+    rules = list_parser_learning_rules(include_disabled=True)
+    return templates.TemplateResponse(
+        request,
+        "parser_learning_rules.html",
+        {
+            "rules": rules,
+            "learning_enabled": parser_learning_rules_supported(),
+            "updated": request.query_params.get("updated") == "1",
+            "disabled": request.query_params.get("disabled") == "1",
+        },
+    )
+
+
+@app.post("/parser-learning-rules/{rule_id}/edit")
+async def parser_learning_rules_edit(
+    request: Request,
+    rule_id: str,
+    term: str = Form(...),
+    normalized_value: str = Form(...),
+    scope: str = Form("global"),
+    field_type: str = Form("condition"),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    if get_parser_learning_rule(rule_id) is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    try:
+        update_parser_learning_rule(
+            rule_id,
+            term=term.strip(),
+            normalized_value=normalized_value.strip(),
+            scope=scope.strip(),
+            field_type=field_type.strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/parser-learning-rules?updated=1", status_code=303)
+
+
+@app.post("/parser-learning-rules/{rule_id}/disable")
+async def parser_learning_rules_disable(request: Request, rule_id: str) -> RedirectResponse:
+    _require_admin_workbench(request)
+    if get_parser_learning_rule(rule_id) is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    disable_parser_learning_rule(rule_id)
+    return RedirectResponse(url="/parser-learning-rules?disabled=1", status_code=303)
+
+
+@app.post("/parser-review/{import_id}/teach-condition")
+async def parser_review_teach_condition(
+    request: Request,
+    import_id: str,
+    term: str = Form(...),
+    action: str = Form(...),
+    normalized_value: str = Form(""),
+    scope: str = Form("global"),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    try:
+        teach_condition_and_reprocess(
+            import_id,
+            term=term,
+            normalized_value=normalized_value,
+            action=action,
+            scope=scope,
+            created_by_user_id=str(user.get("id") or "") or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from ingest import is_large_dealer_list_import_log
+
+    if is_large_dealer_list_import_log(import_log):
+        return RedirectResponse(url=_dealer_list_training_url(import_id, saved=True), status_code=303)
+
+    return RedirectResponse(url="/parser-review?taught=1", status_code=303)
+
+
+def _dealer_list_training_url(import_id: str, *, saved: bool = False, bulk_saved: bool = False) -> str:
+    suffix = ""
+    if saved:
+        suffix = "?saved=1"
+    elif bulk_saved:
+        suffix = "?bulk_saved=1"
+    return f"/parser-review/{import_id}/dealer-list{suffix}"
+
+
+@app.get("/parser-review/{import_id}/dealer-list", response_class=HTMLResponse, name="parser_review_dealer_list")
+async def parser_review_dealer_list_page(request: Request, import_id: str) -> HTMLResponse:
+    _require_admin_workbench(request)
+    from activity_feed import format_dealer_label
+    from dealer_list_training import build_dealer_list_training_rows, compute_dealer_list_stats
+    from ingest import is_large_dealer_list_import_log
+
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not is_large_dealer_list_import_log(import_log):
+        raise HTTPException(status_code=404, detail="Dealer list training is only available for bulk dealer lists")
+
+    message = get_message_by_id(str(import_log.get("message_id") or ""))
+    summary = import_log.get("summary") or {}
+    training_rows = build_dealer_list_training_rows(import_log, message=message)
+    watches = list(summary.get("offer_watches") or summary.get("parsed_watches") or [])
+    stats = summary.get("dealer_list_stats") or compute_dealer_list_stats(
+        watches,
+        summary,
+        message_type=summary.get("message_type"),
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "parser_review_dealer_list.html",
+        {
+            "import_log": import_log,
+            "import_time": format_timestamp(import_log.get("import_time")),
+            "dealer": format_dealer_label(import_log),
+            "group_name": import_log.get("group_name") or "N/A",
+            "original_message": (message or {}).get("raw_text") or "",
+            "training_rows": training_rows,
+            "stats": stats,
+            "canonical_brands": list_canonical_brands(),
+            "condition_fix_options": CONDITION_FIX_OPTIONS,
+            "workbench_currencies": WORKBENCH_CURRENCIES,
+            "learning_enabled": parser_learning_rules_supported(),
+            "saved": request.query_params.get("saved") == "1",
+            "bulk_saved": request.query_params.get("bulk_saved") == "1",
+        },
+    )
+
+
+@app.post("/parser-review/{import_id}/row-fix")
+async def parser_review_row_fix(
+    request: Request,
+    import_id: str,
+    line_index: int = Form(...),
+    brand: str = Form(""),
+    reference: str = Form(""),
+    condition: str = Form(""),
+    production_year: str = Form(""),
+    card_date: str = Form(""),
+    price: str = Form(""),
+    currency: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    if get_import_log(import_id) is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    try:
+        apply_dealer_list_row_fix(
+            import_id,
+            line_index,
+            brand=brand,
+            reference=reference,
+            condition=condition,
+            production_year=production_year,
+            card_date=card_date,
+            price=price,
+            currency=currency,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from parser_training_reprocess import finalize_training_import
+
+    finalize_training_import(import_id)
+    return RedirectResponse(url=_dealer_list_training_url(import_id, saved=True), status_code=303)
+
+
+@app.post("/parser-review/{import_id}/bulk-action")
+async def parser_review_bulk_action(
+    request: Request,
+    import_id: str,
+    action: str = Form(...),
+    brand_name: str = Form(""),
+    row_indexes: Annotated[list[int], Form()] = [],
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    if get_import_log(import_id) is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    try:
+        apply_dealer_list_bulk_action(
+            import_id,
+            action,
+            row_indexes=row_indexes,
+            brand_name=brand_name,
+            created_by_user_id=str(user.get("id") or "") or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RedirectResponse(url=_dealer_list_training_url(import_id, bulk_saved=True), status_code=303)
 
 
 @app.post("/parser-review/{import_id}/add-brand-alias")

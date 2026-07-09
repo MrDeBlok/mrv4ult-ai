@@ -50,7 +50,7 @@ class TestSprint34DashboardRules:
 
         assert [card["title"] for card in cards] == list(TRADING_DESK_KPI_TITLES)
         assert cards[0]["url"] == "/activity"
-        assert cards[4]["url"] == "/parser-review"
+        assert cards[4]["url"] == "/parser-training"
         assert cards[5]["url"] == "/notifications"
 
     @patch("dashboard_data.get_messages_by_ids", return_value={})
@@ -194,7 +194,7 @@ class TestSprint34DashboardRoutes:
                 unread_notifications=11,
             ),
             "quick_actions": [
-                {"key": "parser_review", "label": "AI Workbench", "url": "/parser-review", "style": "outline-dark", "visible": True},
+                {"key": "parser_review", "label": "Parser Training Center", "url": "/parser-training", "style": "outline-dark", "visible": True},
                 {"key": "notifications", "label": "Notifications", "url": "/notifications", "style": "outline-dark", "visible": True},
             ],
             "todays_best_deals": [],
@@ -206,7 +206,7 @@ class TestSprint34DashboardRoutes:
         response = route_test_client.get("/dashboard")
 
         assert response.status_code == 200
-        assert 'href="/parser-review"' in response.text
+        assert 'href="/parser-training"' in response.text
         assert 'href="/notifications"' in response.text
         assert ">7<" in response.text
         assert ">11<" in response.text

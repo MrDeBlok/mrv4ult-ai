@@ -103,7 +103,7 @@ class TestParserReviewPageLoads:
         response = client.get("/parser-review")
 
         assert response.status_code == 200
-        assert "AI Workbench" in response.text
+        assert "Parser Training Center" in response.text
         assert "Price:" in response.text
 
     @patch("database.get_messages_by_ids")

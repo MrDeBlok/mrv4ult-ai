@@ -281,7 +281,7 @@ class TestParserReviewPage:
         response = client.get("/parser-review")
 
         assert response.status_code == 200
-        assert "AI Workbench" in response.text
+        assert "Parser Training Center" in response.text
         assert "Needs review:" in response.text
         assert "Missing reference" in response.text
         assert "Rolex Submariner offer" in response.text

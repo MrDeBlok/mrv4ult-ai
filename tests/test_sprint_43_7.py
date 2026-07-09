@@ -8,8 +8,10 @@ from fastapi.testclient import TestClient
 
 from app import app, build_activity_row
 from database import (
+    IMPORT_LOG_SUMMARY_BATCH_SIZE,
     attach_import_log_summaries,
     get_import_log,
+    get_import_log_summaries_by_ids,
     import_log_detail_columns_full,
     import_log_list_columns_light,
     list_activity_import_logs,
@@ -124,6 +126,62 @@ class TestAttachImportLogSummaries:
 
         mock_summaries.assert_not_called()
         assert rows[0]["summary"] == {"parsed_watches": []}
+
+
+class TestImportLogSummaryBatching:
+    @patch("database._execute_import_log_summary_batch")
+    def test_batches_1000_import_ids(self, mock_batch: MagicMock) -> None:
+        mock_batch.return_value = []
+        ids = [f"id-{index}" for index in range(1000)]
+
+        get_import_log_summaries_by_ids(ids)
+
+        assert mock_batch.call_count == 10
+        batch_sizes = [len(call.args[0]) for call in mock_batch.call_args_list]
+        assert all(size <= IMPORT_LOG_SUMMARY_BATCH_SIZE for size in batch_sizes)
+        assert sum(batch_sizes) == 1000
+
+    @patch("database._execute_import_log_summary_batch")
+    def test_one_failed_batch_does_not_crash_summary_load(self, mock_batch: MagicMock) -> None:
+        def side_effect(chunk: list[str]) -> list[dict]:
+            if chunk[0] == "id-200":
+                raise Exception("JSON could not be generated - Cloudflare error code 521")
+            return [{"id": import_id, "summary": {"offer_watches": []}} for import_id in chunk]
+
+        mock_batch.side_effect = side_effect
+        ids = [f"id-{index}" for index in range(250)]
+
+        summaries = get_import_log_summaries_by_ids(ids)
+
+        assert len(summaries) == 200
+        assert "id-0" in summaries
+        assert "id-199" in summaries
+        assert "id-200" not in summaries
+
+    @patch("database._execute_import_log_summary_batch")
+    def test_attach_continues_when_summary_batch_fails(self, mock_batch: MagicMock) -> None:
+        def side_effect(chunk: list[str]) -> list[dict]:
+            if "log-bad" in chunk:
+                raise Exception("JSON could not be generated")
+            return [{"id": import_id, "summary": {"loaded": True}} for import_id in chunk]
+
+        mock_batch.side_effect = side_effect
+        import_logs = [{"id": f"log-{index}", "watches_parsed": 1} for index in range(100)]
+        import_logs.append({"id": "log-bad", "watches_parsed": 1})
+
+        rows = attach_import_log_summaries(import_logs)
+
+        assert rows[0]["summary"] == {"loaded": True}
+        assert rows[-1]["summary"] == {}
+
+    @patch("database.get_import_log_summaries_by_ids", side_effect=RuntimeError("total summary failure"))
+    def test_attach_never_raises_when_summary_loader_fails(
+        self,
+        _mock_summaries: MagicMock,
+    ) -> None:
+        rows = attach_import_log_summaries([{"id": "log-1", "watches_parsed": 1}])
+
+        assert rows[0]["summary"] == {}
 
 
 class TestActivityLightRows:

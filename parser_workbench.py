@@ -1,4 +1,4 @@
-"""AI Workbench: actionable parser review fixes and single-import reprocess."""
+"""Parser Training Center: actionable parser review fixes and single-import reprocess."""
 
 from __future__ import annotations
 
@@ -58,6 +58,8 @@ def enrich_workbench_row(
     message: Record | None = None,
 ) -> Record:
     """Attach workbench fix metadata to a parser review row."""
+    from parser_confidence import attach_parser_confidence_metadata
+
     summary = import_log.get("summary") or {}
     issues = set(row.get("issues") or [])
     preview = (message or {}).get("raw_text") or row.get("original_message") or ""
@@ -67,6 +69,47 @@ def enrich_workbench_row(
         summary.get("workbench_fix_applied") or summary.get("parser_review_ignored")
     )
     row["fix_applied"] = bool(summary.get("workbench_fix_applied"))
+
+    watches = _parsed_watches(import_log)
+    training_watches: list[Record] = []
+    for watch in watches:
+        enriched = attach_parser_confidence_metadata(
+            dict(watch),
+            message_type=summary.get("message_type"),
+        )
+        training_watches.append(enriched)
+
+    row["parsed_watches"] = training_watches
+    from dealer_list_training import compute_dealer_list_stats
+    from ingest import is_large_dealer_list_import_log
+
+    if is_large_dealer_list_import_log(import_log):
+        row["is_dealer_list"] = True
+        row["dealer_list_stats"] = summary.get("dealer_list_stats") or compute_dealer_list_stats(
+            training_watches,
+            summary,
+            message_type=summary.get("message_type"),
+        )
+    if training_watches:
+        primary = training_watches[0]
+        row["field_confidences"] = {
+            key: primary.get(key)
+            for key in (
+                "brand_confidence",
+                "reference_confidence",
+                "price_confidence",
+                "condition_confidence",
+                "intent_confidence",
+                "overall_confidence",
+            )
+        }
+        row["field_explanations"] = primary.get("field_explanations") or {}
+        row["condition_needs_training"] = bool(primary.get("condition_needs_training"))
+        row["condition_training_term"] = primary.get("condition_training_term")
+        if row["condition_needs_training"]:
+            issues.add("condition_needs_training")
+            if "condition_needs_training" not in row.get("issues", []):
+                row["issues"] = sorted(set(row.get("issues") or []) | {"condition_needs_training"})
     return row
 
 
@@ -120,6 +163,178 @@ def _apply_field_overrides(watch: Record, overrides: Record) -> None:
     if currency:
         watch["original_currency"] = currency.upper()
         watch["currency"] = currency.upper()
+
+    year_raw = str(overrides.get("production_year") or overrides.get("year") or "").strip()
+    if year_raw.isdigit():
+        watch["production_year"] = int(year_raw)
+
+    card_date = str(overrides.get("card_date") or "").strip()
+    if card_date:
+        watch["card_date"] = card_date
+
+
+def apply_row_field_overrides(watch: Record, overrides: Record) -> Record:
+    """Apply per-row dealer-list corrections to one parsed watch."""
+    _apply_field_overrides(watch, overrides)
+    return watch
+
+
+def _merge_summary_training_state(summary: Record, old_summary: Record) -> Record:
+    for key in (
+        "row_corrections",
+        "ignored_row_indexes",
+        "approved_row_indexes",
+        "dealer_list_stats",
+    ):
+        if key in old_summary:
+            summary[key] = old_summary[key]
+    return summary
+
+
+def _store_row_correction(summary: Record, line_index: int, overrides: Record) -> None:
+    corrections = dict(summary.get("row_corrections") or {})
+    existing = dict(corrections.get(str(line_index)) or {})
+    existing.update({key: value for key, value in overrides.items() if value not in (None, "")})
+    corrections[str(line_index)] = existing
+    summary["row_corrections"] = corrections
+
+
+def apply_dealer_list_row_fix(
+    import_log_id: str,
+    line_index: int,
+    *,
+    brand: str = "",
+    reference: str = "",
+    condition: str = "",
+    production_year: str = "",
+    card_date: str = "",
+    price: str = "",
+    currency: str = "",
+) -> Record:
+    """Save a per-row dealer-list correction and reprocess the full message."""
+    from database import get_import_log, patch_import_log
+    from dealer_list_training import compute_dealer_list_stats
+
+    import_log = get_import_log(import_log_id)
+    if import_log is None:
+        raise ValueError("Import log not found")
+
+    summary = dict(import_log.get("summary") or {})
+    _store_row_correction(
+        summary,
+        line_index,
+        {
+            "brand": brand.strip(),
+            "reference": reference.strip(),
+            "condition": condition.strip(),
+            "production_year": production_year.strip(),
+            "card_date": card_date.strip(),
+            "price": price.strip(),
+            "currency": currency.strip(),
+        },
+    )
+    patch_import_log(import_log_id, summary=summary)
+    import_log = reprocess_import_log(import_log_id)
+    refreshed_summary = import_log.get("summary") or {}
+    watches = list(refreshed_summary.get("offer_watches") or refreshed_summary.get("parsed_watches") or [])
+    refreshed_summary["dealer_list_stats"] = compute_dealer_list_stats(
+        watches,
+        refreshed_summary,
+        message_type=refreshed_summary.get("message_type"),
+    )
+    return patch_import_log(import_log_id, summary=refreshed_summary)
+
+
+def apply_dealer_list_bulk_action(
+    import_log_id: str,
+    action: str,
+    *,
+    row_indexes: list[int],
+    brand_name: str = "",
+    condition_term: str = "",
+    condition_value: str = "",
+    teach_scope: str = "global",
+    created_by_user_id: str | None = None,
+) -> Record:
+    """Apply a bulk dealer-list training action to selected rows."""
+    from database import get_import_log, mark_import_parser_issue_ignored, patch_import_log
+    from dealer_list_training import compute_dealer_list_stats
+    from parser_learning import teach_condition_rule
+
+    import_log = get_import_log(import_log_id)
+    if import_log is None:
+        raise ValueError("Import log not found")
+    if not row_indexes:
+        raise ValueError("Select at least one row")
+
+    summary = dict(import_log.get("summary") or {})
+    ignored = set(summary.get("ignored_row_indexes") or [])
+    approved = set(summary.get("approved_row_indexes") or [])
+    cleaned_action = action.strip().lower()
+
+    if cleaned_action == "ignore_rows":
+        ignored.update(row_indexes)
+        summary["ignored_row_indexes"] = sorted(ignored)
+        return patch_import_log(import_log_id, summary=summary)
+
+    if cleaned_action == "approve_rows":
+        approved.update(row_indexes)
+        summary["approved_row_indexes"] = sorted(approved)
+        patch_import_log(import_log_id, summary=summary)
+        import_log = reprocess_import_log(import_log_id)
+        from parser_training_reprocess import finalize_training_import
+
+        return finalize_training_import(import_log_id)
+
+    if cleaned_action == "apply_brand":
+        brand = brand_name.strip()
+        if not brand:
+            raise ValueError("Brand is required")
+        for line_index in row_indexes:
+            _store_row_correction(summary, line_index, {"brand": brand})
+        patch_import_log(import_log_id, summary=summary)
+        import_log = reprocess_import_log(import_log_id)
+        refreshed_summary = import_log.get("summary") or {}
+        watches = list(refreshed_summary.get("offer_watches") or refreshed_summary.get("parsed_watches") or [])
+        refreshed_summary["dealer_list_stats"] = compute_dealer_list_stats(
+            watches,
+            refreshed_summary,
+            message_type=refreshed_summary.get("message_type"),
+        )
+        return patch_import_log(import_log_id, summary=refreshed_summary)
+
+    if cleaned_action == "teach_condition":
+        term = condition_term.strip()
+        value = condition_value.strip()
+        if not term or not value:
+            raise ValueError("Condition term and value are required")
+        teach_condition_rule(
+            term=term,
+            normalized_value=value,
+            scope=teach_scope,
+            source_import_log_id=import_log_id,
+            created_by_user_id=created_by_user_id,
+        )
+        return reprocess_import_log(import_log_id)
+
+    if cleaned_action == "teach_brand_header":
+        term = brand_name.strip()
+        if not term:
+            raise ValueError("Brand header text is required")
+        from database import create_parser_learning_rule, invalidate_parser_learning_rules_cache
+
+        create_parser_learning_rule(
+            field_type="brand_header",
+            term=term,
+            normalized_value=term if not condition_value else condition_value,
+            scope=teach_scope,
+            source_import_log_id=import_log_id,
+            created_by_user_id=created_by_user_id,
+        )
+        invalidate_parser_learning_rules_cache()
+        return reprocess_import_log(import_log_id)
+
+    raise ValueError(f"Unsupported bulk action: {action}")
 
 
 def reprocess_import_log(
@@ -177,6 +392,24 @@ def reprocess_import_log(
     else:
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
         if import_classification is None and offer_watches:
+            from condition_normalizer import apply_inferred_pre_owned_defaults
+            from parser_confidence import attach_parser_confidence_metadata
+            from parser_learning import prepare_watch_for_ingest
+
+            message = get_message_by_id(str(message_id))
+            dealer_id = str((message or {}).get("dealer_id") or "") or None
+            group_id = str((message or {}).get("group_id") or "") or None
+            for watch in offer_watches:
+                prepare_watch_for_ingest(
+                    watch,
+                    message_text=text,
+                    dealer_id=dealer_id,
+                    group_id=group_id,
+                )
+            offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
+            for watch in offer_watches:
+                attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
+        if import_classification is None and offer_watches:
             offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
             if not offer_watches and insufficient_evidence_watches:
                 import_classification = "insufficient_evidence"
@@ -187,7 +420,12 @@ def reprocess_import_log(
         if not offer_watches and parsed_watches:
             offer_watches = [parsed_watches[0]]
 
+    from dealer_list_training import apply_row_corrections_to_watches, compute_dealer_list_stats
+
     status_watches = offer_watches if offer_watches else parsed_watches
+    status_watches = apply_row_corrections_to_watches(status_watches, old_summary)
+    if offer_watches:
+        offer_watches = status_watches
     bulk_mode = is_dealer_list_bulk_import(offer_watches)
     parse_status = _parse_status(parsed)
 
@@ -210,6 +448,13 @@ def reprocess_import_log(
         "offer_watches": list(offer_watches),
         "message_type": parsed.get("message_type") or "unknown",
     }
+    summary = _merge_summary_training_state(summary, old_summary)
+    if bulk_mode and status_watches:
+        summary["dealer_list_stats"] = compute_dealer_list_stats(
+            status_watches,
+            summary,
+            message_type=summary.get("message_type"),
+        )
 
     if is_buyer_request_message(text, parsed):
         summary["message_type"] = "request"
@@ -382,5 +627,8 @@ def apply_workbench_fix_and_finalize(
     **kwargs: Any,
 ) -> Record:
     """Apply a workbench fix and finalize the import queue state."""
+    from parser_training_reprocess import finalize_training_import
+
     import_log = apply_workbench_fix(import_log_id, fix_action, **kwargs)
+    finalize_training_import(import_log_id)
     return _finalize_workbench_fix(import_log_id, import_log)

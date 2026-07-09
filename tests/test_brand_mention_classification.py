@@ -108,7 +108,6 @@ class TestBrandMentionClassification:
         mock_record_unknown: MagicMock,
         mock_record_unknown_nicknames: MagicMock,
     ) -> None:
-        mock_insert_offer.return_value = ({"id": "offer-1"}, True)
         mock_insert_import_log.return_value = {"id": "log-incomplete"}
 
         summary = ingest_message(
@@ -119,8 +118,8 @@ class TestBrandMentionClassification:
 
         assert summary["status"] == "warning"
         assert summary["watches_parsed"] == 1
-        assert summary["new_offers"] == 1
-        mock_insert_offer.assert_called_once()
+        assert summary["new_offers"] == 0
+        mock_insert_offer.assert_not_called()
 
         import_log = {
             "id": "log-incomplete",

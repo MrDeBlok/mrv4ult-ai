@@ -98,7 +98,7 @@ class TestTradingDeskData:
             "Unread notifications",
         ]
         assert cards[0]["url"] == "/activity"
-        assert cards[4]["url"] == "/parser-review"
+        assert cards[4]["url"] == "/parser-training"
 
 
 class TestTradingDeskPage:

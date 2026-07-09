@@ -297,6 +297,8 @@ def mark_explicit_condition_metadata(watch: Record) -> Record:
 
 def apply_inferred_pre_owned_default(watch: Record) -> Record:
     """Infer Pre-Owned for active priced offers missing explicit wear condition."""
+    if watch.get("condition_needs_training"):
+        return watch
     updated = dict(watch)
     if updated.get("condition_explicit") or updated.get("condition_source") == CONDITION_SOURCE_EXPLICIT:
         return updated

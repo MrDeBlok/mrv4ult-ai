@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
 from timezone_utils import ensure_utc_datetime
@@ -18,14 +21,55 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+_parser_training_rows_writes_allowed: ContextVar[bool] = ContextVar(
+    "parser_training_rows_writes_allowed",
+    default=False,
+)
+
+
+@contextmanager
+def parser_training_rows_write_guard():
+    """Allow parser_training_rows INSERT/UPDATE/PATCH (POST actions only)."""
+    token = _parser_training_rows_writes_allowed.set(True)
+    try:
+        yield
+    finally:
+        _parser_training_rows_writes_allowed.reset(token)
+
+
+def parser_training_rows_writes_enabled() -> bool:
+    """Return True when parser_training_rows mutations are permitted."""
+    return _parser_training_rows_writes_allowed.get()
+
+
+def _ensure_parser_training_row_writes_allowed(action: str) -> None:
+    if not _parser_training_rows_writes_allowed.get():
+        raise RuntimeError(
+            f"Blocked parser_training_rows {action} during read-only request. "
+            "Use POST training actions (save, bulk, backfill, re-evaluate) to write."
+        )
+
+
 LOOKUP_IDS_CHUNK_SIZE = 50
 OFFERS_BY_IDS_CHUNK_SIZE = LOOKUP_IDS_CHUNK_SIZE
 WATCH_LOOKUP_PAGE_SIZE = 1000
+PARSER_TRAINING_ROWS_PAGE_SIZE = 1000
+IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
+IMPORT_LOG_SUMMARY_MAX_RETRIES = 3
+IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS = 0.5
+IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS = 30
 
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+
+
+def is_valid_uuid(value: str | None) -> bool:
+    """Return True when value is a canonical UUID string."""
+    if not value:
+        return False
+    return bool(_UUID_PATTERN.match(str(value).strip()))
 
 from condition_normalizer import normalize_condition_value
 from contact_classification import (
@@ -67,6 +111,9 @@ IMPORT_LOG_LIST_LIMIT_ACTIVITY = 1500
 IMPORT_LOG_LIST_LIMIT_MARKET_REQUESTS = 250
 IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW = 400
 IMPORT_LOG_LIST_LIMIT_PARSER_ACCURACY = 400
+PARSER_TRAINING_IMPORT_PAGE_SIZE = 25
+PARSER_TRAINING_MAX_SCANNED_IMPORTS = 400
+PARSER_TRAINING_OVERFETCH_MULTIPLIER = 3
 
 REQUEST_STATUSES = frozenset({"open", "matched", "closed", "active"})
 OPEN_REQUEST_STATUSES = ("open", "active")
@@ -105,6 +152,9 @@ _client_profiles_supported: bool | None = None
 _watch_knowledge_supported: bool | None = None
 _reference_brand_mappings_supported: bool | None = None
 _watch_identification_supported: bool | None = None
+_parser_learning_rules_supported: bool | None = None
+_parser_learning_rules_cache: list[Record] | None = None
+_parser_training_rows_supported: bool | None = None
 
 
 def reset_contact_type_column_cache() -> None:
@@ -134,6 +184,20 @@ def reset_watch_knowledge_cache() -> None:
     _watch_knowledge_supported = None
     _watch_identification_supported = None
     _reference_brand_mappings_supported = None
+
+
+def reset_parser_learning_rules_cache() -> None:
+    """Reset cached parser learning rules table detection (for tests)."""
+    global _parser_learning_rules_supported, _parser_learning_rules_cache, _parser_training_rows_supported
+    _parser_learning_rules_supported = None
+    _parser_learning_rules_cache = None
+    _parser_training_rows_supported = None
+
+
+def invalidate_parser_learning_rules_cache() -> None:
+    """Clear cached active parser learning rules."""
+    global _parser_learning_rules_cache
+    _parser_learning_rules_cache = None
 
 
 def contact_type_column_supported() -> bool:
@@ -1801,23 +1865,113 @@ def import_log_list_columns() -> str:
     return import_log_list_columns_light()
 
 
+def _is_transient_import_summary_error(exc: BaseException) -> bool:
+    """Return True for retryable Supabase/Cloudflare gateway failures."""
+    message = str(exc).lower()
+    if "json could not be generated" in message:
+        return True
+    if "cloudflare" in message:
+        return True
+    if "timeout" in message or "timed out" in message:
+        return True
+    for code in ("521", "502", "503", "504", "500"):
+        if code in message:
+            return True
+    if isinstance(exc, APIError):
+        error_code = str(getattr(exc, "code", "") or "")
+        if error_code.isdigit() and int(error_code) >= 500:
+            return True
+    return False
+
+
+def _execute_import_log_summary_batch(chunk: list[str]) -> list[Record]:
+    """Fetch one import_logs summary batch with retry for transient failures."""
+    last_exc: Exception | None = None
+    for attempt in range(1, IMPORT_LOG_SUMMARY_MAX_RETRIES + 1):
+        started = time.perf_counter()
+        try:
+            response = (
+                get_client()
+                .table("import_logs")
+                .select("id,summary")
+                .in_("id", chunk)
+                .execute()
+            )
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if elapsed_ms > IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000:
+                logger.warning(
+                    "import_log summary batch exceeded timeout threshold: "
+                    "ids=%s elapsed_ms=%s threshold_ms=%s",
+                    len(chunk),
+                    elapsed_ms,
+                    IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000,
+                )
+            return response.data or []
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            last_exc = exc
+            if attempt < IMPORT_LOG_SUMMARY_MAX_RETRIES and _is_transient_import_summary_error(exc):
+                logger.warning(
+                    "import_log summary batch transient failure "
+                    "(attempt %s/%s, ids=%s, elapsed_ms=%s): %s",
+                    attempt,
+                    IMPORT_LOG_SUMMARY_MAX_RETRIES,
+                    len(chunk),
+                    elapsed_ms,
+                    exc,
+                )
+                time.sleep(IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return []
+
+
 def get_import_log_summaries_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
-    """Return summary JSON keyed by import log id."""
+    """Return summary JSON keyed by import log id, loading in bounded batches."""
     if not import_log_ids:
         return {}
 
-    unique_ids = list(dict.fromkeys(import_log_ids))
-    response = (
-        get_client()
-        .table("import_logs")
-        .select("id,summary")
-        .in_("id", unique_ids)
-        .execute()
+    unique_ids = list(dict.fromkeys(str(import_log_id) for import_log_id in import_log_ids if import_log_id))
+    started = time.perf_counter()
+    logger.info(
+        "Loading import_log summaries: requested_ids=%s batch_size=%s",
+        len(unique_ids),
+        IMPORT_LOG_SUMMARY_BATCH_SIZE,
     )
+
     summaries: dict[str, Record] = {}
-    for row in response.data or []:
-        summary = row.get("summary")
-        summaries[str(row["id"])] = summary if isinstance(summary, dict) else {}
+    failed_batches = 0
+    for offset in range(0, len(unique_ids), IMPORT_LOG_SUMMARY_BATCH_SIZE):
+        chunk = unique_ids[offset : offset + IMPORT_LOG_SUMMARY_BATCH_SIZE]
+        batch_index = offset // IMPORT_LOG_SUMMARY_BATCH_SIZE
+        try:
+            rows = _execute_import_log_summary_batch(chunk)
+        except Exception as exc:
+            failed_batches += 1
+            logger.warning(
+                "import_log summary batch failed: batch_index=%s batch_size=%s "
+                "sample_ids=%s error=%s",
+                batch_index,
+                len(chunk),
+                chunk[:3],
+                exc,
+            )
+            continue
+
+        for row in rows:
+            summary = row.get("summary")
+            summaries[str(row["id"])] = summary if isinstance(summary, dict) else {}
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "import_log summaries loaded: requested=%s loaded=%s failed_batches=%s elapsed_ms=%s",
+        len(unique_ids),
+        len(summaries),
+        failed_batches,
+        elapsed_ms,
+    )
     return summaries
 
 
@@ -1834,7 +1988,16 @@ def attach_import_log_summaries(import_logs: list[Record]) -> list[Record]:
     if not missing_ids:
         return import_logs
 
-    summaries_by_id = get_import_log_summaries_by_ids(missing_ids)
+    try:
+        summaries_by_id = get_import_log_summaries_by_ids(missing_ids)
+    except Exception as exc:
+        logger.warning(
+            "attach_import_log_summaries failed for %s id(s); continuing without summaries: %s",
+            len(missing_ids),
+            exc,
+        )
+        summaries_by_id = {}
+
     merged: list[Record] = []
     for import_log in import_logs:
         row = dict(import_log)
@@ -1936,6 +2099,39 @@ def list_parser_review_import_log_candidates(
     return _query_import_logs(limit=limit, status="warning")
 
 
+def list_parser_training_candidate_import_logs(
+    *,
+    limit: int = IMPORT_LOG_LIST_LIMIT_PARSER_REVIEW,
+) -> list[Record]:
+    """Return recent imports with parsed offer rows for Parser Training Center."""
+    return list_parser_training_import_logs(offset=0, limit=limit)
+
+
+def list_parser_training_import_logs(
+    *,
+    since_iso: str | None = None,
+    offset: int = 0,
+    limit: int,
+) -> list[Record]:
+    """Return bounded parser-training import_logs with optional import_time filter."""
+    if offset < 0:
+        raise ValueError("offset must be zero or greater")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    query = (
+        get_client()
+        .table("import_logs")
+        .select(import_log_list_columns_light())
+        .gt("watches_parsed", 0)
+        .order("import_time", desc=True)
+    )
+    if since_iso:
+        query = query.gte("import_time", since_iso)
+    response = query.range(offset, offset + limit - 1).execute()
+    return response.data or []
+
+
 def list_parser_accuracy_import_logs(
     *,
     limit: int = IMPORT_LOG_LIST_LIMIT_PARSER_ACCURACY,
@@ -2035,6 +2231,9 @@ def cleanup_ignored_messages(days: int = 30) -> int:
 
 def get_message_by_id(message_id: str) -> Record | None:
     """Return a message row by id."""
+    if not is_valid_uuid(message_id):
+        return None
+
     response = (
         get_client()
         .table("messages")
@@ -3250,6 +3449,459 @@ def mark_unknown_nickname_ignored(unknown_nickname_id: str) -> Record:
         .execute()
     )
     return _first_row(response.data, "unknown_nicknames")
+
+
+def parser_learning_rules_supported() -> bool:
+    """Return True when parser_learning_rules table exists."""
+    global _parser_learning_rules_supported
+    if _parser_learning_rules_supported is not None:
+        return _parser_learning_rules_supported
+
+    try:
+        get_client().table("parser_learning_rules").select("id").limit(1).execute()
+        _parser_learning_rules_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code in {"42P01", "PGRST205"} or "parser_learning_rules" in message:
+            _parser_learning_rules_supported = False
+        else:
+            raise
+    return _parser_learning_rules_supported
+
+
+def list_parser_learning_rules(*, include_disabled: bool = False) -> list[Record]:
+    """Return parser learning rules ordered by newest first."""
+    if not parser_learning_rules_supported():
+        return []
+
+    query = get_client().table("parser_learning_rules").select("*")
+    if not include_disabled:
+        query = query.eq("status", "active")
+    response = query.order("created_at", desc=True).execute()
+    return response.data or []
+
+
+def list_active_parser_learning_rules() -> list[Record]:
+    """Return active parser learning rules with a short-lived in-process cache."""
+    global _parser_learning_rules_cache
+    if _parser_learning_rules_cache is not None:
+        return list(_parser_learning_rules_cache)
+
+    rules = list_parser_learning_rules(include_disabled=False)
+    _parser_learning_rules_cache = list(rules)
+    return rules
+
+
+def get_parser_learning_rule(rule_id: str) -> Record | None:
+    """Return one parser learning rule by id."""
+    if not parser_learning_rules_supported():
+        return None
+
+    response = (
+        get_client()
+        .table("parser_learning_rules")
+        .select("*")
+        .eq("id", rule_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def create_parser_learning_rule(
+    *,
+    field_type: str,
+    term: str,
+    normalized_value: str,
+    scope: str = "global",
+    dealer_id: str | None = None,
+    group_id: str | None = None,
+    source_import_log_id: str | None = None,
+    created_by_user_id: str | None = None,
+) -> Record:
+    """Create or reactivate a parser learning rule."""
+    if not parser_learning_rules_supported():
+        raise RuntimeError(
+            "Parser learning rules require the Sprint 49.0 migration. Apply "
+            "docs/migrations/sprint_49_0_parser_learning_rules.sql in Supabase."
+        )
+
+    cleaned_term = term.strip()
+    cleaned_value = normalized_value.strip()
+    if not cleaned_term:
+        raise ValueError("Term is required")
+    if not cleaned_value:
+        raise ValueError("Normalized value is required")
+
+    now = datetime.now(timezone.utc).isoformat()
+    payload: Record = {
+        "field_type": field_type.strip().lower(),
+        "term": cleaned_term,
+        "normalized_value": cleaned_value,
+        "scope": scope.strip().lower(),
+        "dealer_id": dealer_id,
+        "group_id": group_id,
+        "source_import_log_id": source_import_log_id,
+        "created_by_user_id": created_by_user_id,
+        "status": "active",
+        "updated_at": now,
+    }
+
+    existing = (
+        get_client()
+        .table("parser_learning_rules")
+        .select("*")
+        .eq("field_type", payload["field_type"])
+        .eq("term", cleaned_term)
+        .eq("scope", payload["scope"])
+        .limit(20)
+        .execute()
+    )
+    for row in existing.data or []:
+        same_dealer = str(row.get("dealer_id") or "") == str(dealer_id or "")
+        same_group = str(row.get("group_id") or "") == str(group_id or "")
+        if payload["scope"] == "global" or (
+            payload["scope"] == "dealer" and same_dealer
+        ) or (
+            payload["scope"] == "group" and same_group
+        ):
+            response = (
+                get_client()
+                .table("parser_learning_rules")
+                .update(payload)
+                .eq("id", row["id"])
+                .execute()
+            )
+            invalidate_parser_learning_rules_cache()
+            return _first_row(response.data, "parser_learning_rules")
+
+    response = get_client().table("parser_learning_rules").insert(payload).execute()
+    invalidate_parser_learning_rules_cache()
+    return _first_row(response.data, "parser_learning_rules")
+
+
+def update_parser_learning_rule(rule_id: str, **fields: Any) -> Record:
+    """Update editable parser learning rule fields."""
+    if not parser_learning_rules_supported():
+        raise RuntimeError("Parser learning rules table is not available")
+
+    allowed = {
+        "field_type",
+        "term",
+        "normalized_value",
+        "scope",
+        "dealer_id",
+        "group_id",
+        "status",
+    }
+    payload = {key: value for key, value in fields.items() if key in allowed and value is not None}
+    if not payload:
+        raise ValueError("No valid fields to update")
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    response = (
+        get_client()
+        .table("parser_learning_rules")
+        .update(payload)
+        .eq("id", rule_id)
+        .execute()
+    )
+    invalidate_parser_learning_rules_cache()
+    return _first_row(response.data, "parser_learning_rules")
+
+
+def disable_parser_learning_rule(rule_id: str) -> Record:
+    """Disable a parser learning rule without deleting history."""
+    return update_parser_learning_rule(rule_id, status="disabled")
+
+
+def get_offers_by_message_id(message_id: str) -> list[Record]:
+    """Return all offers linked to one message."""
+    cleaned = message_id.strip()
+    if not cleaned:
+        return []
+
+    response = (
+        get_client()
+        .table("offers")
+        .select(
+            "id, message_id, watch_id, dealer_id, status, line_index, "
+            "original_price, original_currency, usd_price, condition"
+        )
+        .eq("message_id", cleaned)
+        .order("line_index")
+        .execute()
+    )
+    return response.data or []
+
+
+    return response.data or []
+
+
+def parser_training_rows_schema_status() -> Record:
+    """Return parser_training_rows availability for UI banners and debug traces."""
+    global _parser_training_rows_supported
+    try:
+        get_client().table("parser_training_rows").select("id").limit(1).execute()
+        _parser_training_rows_supported = True
+        return {
+            "status": "supported",
+            "message": "parser_training_rows table is accessible.",
+        }
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "PGRST205" or "schema cache" in message:
+            _parser_training_rows_supported = False
+            return {
+                "status": "schema_cache_stale",
+                "message": (
+                    "parser_training_rows exists but Supabase PostgREST schema cache is stale. "
+                    "Reload the schema in Supabase Dashboard → Settings → API."
+                ),
+            }
+        if code in {"42P01", "PGRST205"} or "parser_training_rows" in message:
+            _parser_training_rows_supported = False
+            return {
+                "status": "missing",
+                "message": (
+                    "parser_training_rows table is missing. Apply "
+                    "docs/migrations/sprint_50_0_parser_training_rows.sql in Supabase."
+                ),
+            }
+        raise
+    except Exception as exc:
+        _parser_training_rows_supported = False
+        return {
+            "status": "error",
+            "message": f"parser_training_rows check failed: {exc}",
+        }
+
+
+def parser_training_rows_supported() -> bool:
+    """Return True when parser_training_rows table exists."""
+    global _parser_training_rows_supported
+    if _parser_training_rows_supported is not None:
+        return _parser_training_rows_supported
+
+    status = parser_training_rows_schema_status()["status"]
+    _parser_training_rows_supported = status == "supported"
+    return _parser_training_rows_supported
+
+
+PARSER_TRAINING_ROWS_PAGE_SIZE = 1000
+
+
+def list_parser_training_rows_for_imports(
+    import_log_ids: list[str],
+) -> dict[str, list[Record]]:
+    """Return training rows grouped by import_log_id."""
+    if not parser_training_rows_supported() or not import_log_ids:
+        return {}
+
+    unique_ids = [str(import_id) for import_id in import_log_ids if str(import_id).strip()]
+    if not unique_ids:
+        return {}
+
+    by_import: dict[str, list[Record]] = {import_id: [] for import_id in unique_ids}
+    offset = 0
+    while True:
+        response = (
+            get_client()
+            .table("parser_training_rows")
+            .select("*")
+            .in_("import_log_id", unique_ids)
+            .order("import_log_id")
+            .order("row_index")
+            .range(offset, offset + PARSER_TRAINING_ROWS_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = response.data or []
+        if not batch:
+            break
+        for row in batch:
+            import_id = str(row.get("import_log_id") or "")
+            if import_id in by_import:
+                by_import[import_id].append(row)
+        if len(batch) < PARSER_TRAINING_ROWS_PAGE_SIZE:
+            break
+        offset += PARSER_TRAINING_ROWS_PAGE_SIZE
+
+    for import_id in by_import:
+        by_import[import_id].sort(key=lambda item: int(item.get("row_index") or 0))
+    return by_import
+
+
+def list_parser_training_rows_for_import(import_log_id: str) -> list[Record]:
+    """Return all training rows for one import, ordered by row_index."""
+    return list_parser_training_rows_for_imports([import_log_id]).get(str(import_log_id), [])
+
+
+def get_parser_training_row(row_id: str) -> Record | None:
+    """Return one parser training row by id."""
+    if not parser_training_rows_supported() or not is_valid_uuid(row_id):
+        return None
+
+    response = (
+        get_client()
+        .table("parser_training_rows")
+        .select("*")
+        .eq("id", row_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
+
+
+def upsert_parser_training_row(payload: Record) -> Record:
+    """Insert or update a parser training row by import_log_id + row_index."""
+    _ensure_parser_training_row_writes_allowed("upsert")
+    if not parser_training_rows_supported():
+        raise RuntimeError(
+            "Parser training rows require Sprint 50.0 migration. Apply "
+            "docs/migrations/sprint_50_0_parser_training_rows.sql in Supabase."
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    import_log_id = str(payload.get("import_log_id") or "")
+    row_index = int(payload.get("row_index") or 0)
+    if not import_log_id:
+        raise ValueError("import_log_id is required")
+    if not is_valid_uuid(import_log_id):
+        raise ValueError(f"import_log_id must be a UUID, got: {import_log_id}")
+
+    body = dict(payload)
+    source_message_id = body.get("source_message_id")
+    if source_message_id is not None and not is_valid_uuid(str(source_message_id)):
+        body.pop("source_message_id", None)
+    created_offer_id = body.get("created_offer_id")
+    if created_offer_id is not None and not is_valid_uuid(str(created_offer_id)):
+        body["created_offer_id"] = None
+    created_by_user_id = body.get("created_by_user_id")
+    if created_by_user_id is not None and not is_valid_uuid(str(created_by_user_id)):
+        body.pop("created_by_user_id", None)
+
+    existing = (
+        get_client()
+        .table("parser_training_rows")
+        .select("id")
+        .eq("import_log_id", import_log_id)
+        .eq("row_index", row_index)
+        .limit(1)
+        .execute()
+    )
+    body = dict(body)
+    body["updated_at"] = now
+    if existing.data:
+        response = (
+            get_client()
+            .table("parser_training_rows")
+            .update(body)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        body.setdefault("created_at", now)
+        response = get_client().table("parser_training_rows").insert(body).execute()
+    return _first_row(response.data, "parser_training_rows")
+
+
+def bulk_upsert_parser_training_rows(rows: list[Record]) -> list[Record]:
+    """Upsert multiple parser training rows for one import."""
+    return [upsert_parser_training_row(row) for row in rows]
+
+
+def update_parser_training_row(row_id: str, **fields: Any) -> Record:
+    """Update fields on one parser training row."""
+    _ensure_parser_training_row_writes_allowed("update")
+    if not parser_training_rows_supported():
+        raise RuntimeError("Parser training rows table is not available")
+
+    payload = {key: value for key, value in fields.items() if value is not None}
+    if not payload:
+        raise ValueError("No valid fields to update")
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    response = (
+        get_client()
+        .table("parser_training_rows")
+        .update(payload)
+        .eq("id", row_id)
+        .execute()
+    )
+    return _first_row(response.data, "parser_training_rows")
+
+
+def list_parser_training_rows_for_reference(reference: str) -> list[Record]:
+    """Return training rows that match a reference (any import)."""
+    if not parser_training_rows_supported():
+        return []
+
+    from watch_knowledge import normalize_reference
+
+    key = normalize_reference(reference)
+    if not key:
+        return []
+
+    response = (
+        get_client()
+        .table("parser_training_rows")
+        .select("*")
+        .or_(f"detected_reference.eq.{key},normalized_reference.eq.{key}")
+        .execute()
+    )
+    return response.data or []
+
+
+def list_parser_training_import_summaries(
+    import_log_ids: list[str],
+) -> list[Record]:
+    """Return per-import row counts for the given import_log_ids only."""
+    if not parser_training_rows_supported():
+        return []
+
+    from parser_training_engine import summarize_training_rows_by_status
+
+    unique_ids = [str(import_id) for import_id in import_log_ids if str(import_id).strip()]
+    if not unique_ids:
+        return []
+
+    rows: list[Record] = []
+    offset = 0
+    while True:
+        response = (
+            get_client()
+            .table("parser_training_rows")
+            .select("import_log_id, status, created_offer_id")
+            .in_("import_log_id", unique_ids)
+            .range(offset, offset + PARSER_TRAINING_ROWS_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = response.data or []
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < PARSER_TRAINING_ROWS_PAGE_SIZE:
+            break
+        offset += PARSER_TRAINING_ROWS_PAGE_SIZE
+
+    by_import: dict[str, list[Record]] = {import_id: [] for import_id in unique_ids}
+    for row in rows:
+        import_id = str(row.get("import_log_id") or "")
+        if import_id in by_import:
+            by_import[import_id].append(row)
+
+    summaries: list[Record] = []
+    for import_id in unique_ids:
+        summary = summarize_training_rows_by_status(by_import.get(import_id) or [])
+        summary["import_log_id"] = import_id
+        summaries.append(summary)
+    return summaries
 
 
 def resolve_unknown_nickname_with_alias(

@@ -525,8 +525,6 @@ def ingest_message(
         offer_watches, import_classification = [], "request_intent"
     else:
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
-        if import_classification is None and offer_watches:
-            offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
         reference_review_watches_list = reference_review_watches(parsed_watches)
     insufficient_evidence_watches: list[dict[str, Any]] = []
     if import_classification is None and offer_watches:
@@ -662,9 +660,28 @@ def ingest_message(
     }
 
     new_offers_for_matching: list[dict[str, Any]] = []
+    offer_ids_by_index: dict[int, str | None] = {}
     offers_started_at = time.perf_counter()
     watch_cache: dict[tuple[str | None, str | None, str | None, str | None], dict[str, Any]] = {}
     duplicate_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+    if offer_watches and import_classification is None:
+        from parser_confidence import attach_parser_confidence_metadata
+        from parser_learning import prepare_watch_for_ingest
+
+        for watch in offer_watches:
+            prepare_watch_for_ingest(
+                watch,
+                message_text=text,
+                dealer_id=str(dealer_id),
+                group_id=str(group_id),
+            )
+            attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
+        offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
+        for watch in offer_watches:
+            attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
+
+    from parser_safety_gates import should_block_active_offer
 
     for line_index, watch in enumerate(offer_watches):
         summary["watches_parsed"] += 1
@@ -693,7 +710,11 @@ def ingest_message(
         else:
             active_offers = _get_active_offers(watch_row["id"])
 
-        if bulk_mode:
+        blocked_for_training = should_block_active_offer(watch, message_type=parsed.get("message_type"))
+        if blocked_for_training:
+            offer_row = {"id": None}
+            offer_created = False
+        elif bulk_mode:
             offer_row, offer_created = _cached_insert_offer(
                 duplicate_cache,
                 message_id=message["id"],
@@ -736,8 +757,19 @@ def ingest_message(
         else:
             summary["duplicate_offers"] += 1
 
+        offer_ids_by_index[line_index] = (
+            str(offer_row["id"]) if offer_row.get("id") else None
+        )
+
         if bulk_mode:
             price_intelligence = _bulk_deferred_price_intelligence(is_duplicate=not offer_created)
+        elif blocked_for_training or not offer_row.get("id"):
+            price_intelligence = _build_price_intelligence(
+                watch.get("usd_price"),
+                [],
+                is_duplicate=True,
+                market_condition=None,
+            )
         else:
             comparable_usd_prices, market_condition = _comparable_usd_prices(
                 active_offers,
@@ -767,6 +799,15 @@ def ingest_message(
 
     if reference_review_watches_list and summary["watches_parsed"] == 0:
         summary["watches_parsed"] = len(reference_review_watches_list)
+
+    if bulk_mode and offer_watches:
+        from dealer_list_training import compute_dealer_list_stats
+
+        summary["dealer_list_stats"] = compute_dealer_list_stats(
+            offer_watches,
+            summary,
+            message_type=parsed.get("message_type"),
+        )
 
     import_status, status_reason = _import_status(
         summary,
@@ -837,6 +878,24 @@ def ingest_message(
     from database import link_import_log_to_summary_offers
 
     link_import_log_to_summary_offers(import_log["id"], message["id"], summary)
+
+    if offer_watches:
+        from parser_training_engine import sync_training_rows_after_ingest
+
+        try:
+            sync_training_rows_after_ingest(
+                import_log,
+                message_id=str(message["id"]),
+                watches=offer_watches,
+                offer_ids_by_index=offer_ids_by_index,
+                message_type=parsed.get("message_type"),
+                created_by_user_id=imported_by_user_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to sync parser_training_rows for import_log_id=%s",
+                import_log.get("id"),
+            )
 
     matched_request_count = 0
     if business_import and not bulk_mode:
@@ -1257,6 +1316,22 @@ def _import_status(
         if watch.get("retail_price_only"):
             watches_needing_review.append(f"watch {line_index}: retail price only")
             continue
+        try:
+            from parser_safety_gates import should_block_active_offer
+
+            if should_block_active_offer(watch, message_type=watch.get("message_type")):
+                if watch.get("condition_needs_training"):
+                    term = watch.get("condition_training_term") or "unknown"
+                    watches_needing_review.append(
+                        f"watch {line_index}: condition '{term}' needs parser training"
+                    )
+                else:
+                    watches_needing_review.append(
+                        f"watch {line_index}: parser training required before going live"
+                    )
+                continue
+        except Exception:
+            pass
         missing = _watch_missing_fields(watch)
         if missing:
             watches_needing_review.append(
@@ -1265,9 +1340,19 @@ def _import_status(
 
     if watches_needing_review:
         if bulk_mode:
-            watches_parsed = summary["watches_parsed"]
+            total_rows = len(watches)
+            review_count = len(watches_needing_review)
+            valid_count = max(total_rows - review_count, 0)
             duplicate_count = summary["duplicate_offers"]
-            reason = f"Successfully parsed {watches_parsed} watch offer(s)."
+            if review_count > 0:
+                reason = (
+                    f"Dealer list parsed {total_rows} row(s): "
+                    f"{valid_count} valid, {review_count} need parser training."
+                )
+                if duplicate_count:
+                    reason += f" {duplicate_count} duplicate offer(s) were skipped."
+                return "warning", reason
+            reason = f"Successfully parsed {total_rows} watch offer(s)."
             if duplicate_count:
                 reason += f" {duplicate_count} duplicate offer(s) were skipped."
             return "success", reason

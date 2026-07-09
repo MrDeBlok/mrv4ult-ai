@@ -76,7 +76,7 @@ class TestAiWorkbenchAccess:
         response = client.get("/parser-review")
 
         assert response.status_code == 200
-        assert "AI Workbench" in response.text
+        assert "Parser Training Center" in response.text
 
     @patch("app.get_current_user", return_value=TRADER_ONE)
     def test_trader_cannot_access_ai_workbench(self, _mock_user: MagicMock) -> None:
@@ -92,7 +92,7 @@ class TestAiWorkbenchAccess:
         ai_group = next(group for group in groups if group["label"] == "AI")
         labels = {link["label"] for link in ai_group["links"]}
 
-        assert "AI Workbench" in labels
+        assert "Parser Training Center" in labels
         assert "Unknown Brands" in labels
         assert "Unknown Nicknames" in labels
 

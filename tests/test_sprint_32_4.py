@@ -453,8 +453,8 @@ class TestRealOfferClassification:
         )
 
         assert summary["status"] == "warning"
-        assert summary["new_offers"] == 1
-        mock_insert_offer.assert_called_once()
+        assert summary["new_offers"] == 0
+        mock_insert_offer.assert_not_called()
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
     @patch("ingest.record_unknown_brands_for_watches", return_value=[])

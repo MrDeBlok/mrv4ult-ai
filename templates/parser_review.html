@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}AI Workbench · MRV4ULT AI{% endblock %}
+{% block title %}Parser Training Center · MRV4ULT AI{% endblock %}
 
 {% block content %}
 <section class="card shadow-sm mb-4">
     <div class="card-body p-3 p-md-4">
         <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
             <div>
-                <h1 class="h3 mb-1">AI Workbench</h1>
+                <h1 class="h3 mb-1">Parser Training Center</h1>
                 <p class="text-muted mb-0">
-                    Teach the parser from real failures: fix each issue, reprocess the import, and clear the review queue.
+                    Review one WhatsApp import at a time. Teach the parser from real failures before uncertain offers enter live Search.
                 </p>
             </div>
             <div class="d-flex flex-wrap align-items-start gap-3">
@@ -21,7 +21,10 @@
                     <span class="activity-stat"><strong>Unknown brand:</strong> {{ counts.unknown_brand }}</span>
                     <span class="activity-stat"><strong>Unknown reference:</strong> {{ counts.unknown_reference }}</span>
                 </div>
-                <a href="/ai-health" class="btn btn-sm btn-outline-dark">AI Health Dashboard</a>
+                <div class="d-flex flex-wrap gap-2">
+                    <a href="/ai-health" class="btn btn-sm btn-outline-dark">AI Health Dashboard</a>
+                    <a href="/parser-learning-rules" class="btn btn-sm btn-outline-dark">Learned Rules</a>
+                </div>
             </div>
         </div>
     </div>
@@ -36,8 +39,17 @@
 {% if fixed %}
 <div class="alert alert-success" role="alert">Correction saved and import reprocessed.</div>
 {% endif %}
+{% if taught %}
+<div class="alert alert-success" role="alert">Parser rule saved and import reprocessed.</div>
+{% endif %}
 {% if alias_saved %}
 <div class="alert alert-success" role="alert">Brand alias saved. Future imports will recognize it immediately.</div>
+{% endif %}
+{% if not learning_enabled %}
+<div class="alert alert-warning" role="alert">
+    Parser learning rules are not available yet. Apply
+    <code>docs/migrations/sprint_49_0_parser_learning_rules.sql</code> in Supabase.
+</div>
 {% endif %}
 
 <section class="card shadow-sm mb-4">
@@ -64,6 +76,10 @@
                 class="btn btn-sm {% if active_filter == 'missing_condition' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Missing condition</a>
             <a
+                href="/parser-review?filter=condition_needs_training"
+                class="btn btn-sm {% if active_filter == 'condition_needs_training' %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            >Condition training</a>
+            <a
                 href="/parser-review?filter=unknown_brand"
                 class="btn btn-sm {% if active_filter == 'unknown_brand' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Unknown brand</a>
@@ -75,6 +91,10 @@
                 href="/parser-review?filter=unknown_reference"
                 class="btn btn-sm {% if active_filter == 'unknown_reference' %}btn-dark{% else %}btn-outline-dark{% endif %}"
             >Unknown reference</a>
+            <a
+                href="/parser-review?filter=suspicious_price"
+                class="btn btn-sm {% if active_filter == 'suspicious_price' %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            >Suspicious price</a>
         </div>
     </div>
 </section>
@@ -89,9 +109,10 @@
                     <th scope="col">Dealer</th>
                     <th scope="col">Group</th>
                     <th scope="col">Original message</th>
+                    <th scope="col">Parsed watches</th>
+                    <th scope="col">Confidence</th>
                     <th scope="col">Failure reason</th>
-                    <th scope="col">Parsed fields</th>
-                    <th scope="col">Fix action</th>
+                    <th scope="col">Training actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -101,22 +122,74 @@
                     <td>{{ row.dealer }}</td>
                     <td>{{ row.group_name }}</td>
                     <td class="small text-muted" style="min-width: 14rem; max-width: 18rem;">{{ row.original_message or row.message_preview }}</td>
+                    <td class="small" style="min-width: 12rem;">
+                        {% if row.is_dealer_list and row.dealer_list_stats %}
+                        <div class="fw-semibold">Dealer list</div>
+                        <div>{{ row.dealer_list_stats.total_rows }} rows · {{ row.dealer_list_stats.valid_rows }} valid · {{ row.dealer_list_stats.rows_needing_review }} need review</div>
+                        <a href="{{ row.training_detail_url }}" class="btn btn-sm btn-primary mt-1">Open row table</a>
+                        {% elif row.parsed_watches %}
+                            {% for watch in row.parsed_watches %}
+                            <div class="mb-2">
+                                {% if watch.brand %}<div><strong>Brand:</strong> {{ watch.brand }}</div>{% endif %}
+                                {% if watch.reference %}<div><strong>Ref:</strong> {{ watch.reference }}</div>{% endif %}
+                                {% if watch.condition %}<div><strong>Condition:</strong> {{ watch.condition }}</div>{% endif %}
+                                {% if watch.original_price or watch.price %}
+                                <div><strong>Price:</strong> {{ watch.original_price or watch.price }} {{ watch.original_currency or watch.currency or '' }}</div>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% elif row.parsed_fields %}
+                            {{ row.parsed_fields | join(" · ") }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td class="small" style="min-width: 14rem;">
+                        {% if row.field_confidences %}
+                        <div><strong>Overall:</strong> {{ row.field_confidences.overall_confidence }}%</div>
+                        <div>Brand {{ row.field_confidences.brand_confidence }}%</div>
+                        <div>Reference {{ row.field_confidences.reference_confidence }}%</div>
+                        <div>Price {{ row.field_confidences.price_confidence }}%</div>
+                        <div>Condition {{ row.field_confidences.condition_confidence }}%</div>
+                        <div>Intent {{ row.field_confidences.intent_confidence }}%</div>
+                        {% if row.field_explanations %}
+                        <details class="mt-1">
+                            <summary class="text-muted">Why parser chose these fields</summary>
+                            <ul class="mb-0 ps-3">
+                                <li>{{ row.field_explanations.brand }}</li>
+                                <li>{{ row.field_explanations.reference }}</li>
+                                <li>{{ row.field_explanations.price }}</li>
+                                <li>{{ row.field_explanations.condition }}</li>
+                                <li>{{ row.field_explanations.intent }}</li>
+                            </ul>
+                        </details>
+                        {% endif %}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
                     <td>
                         <span class="badge text-bg-warning">{{ row.primary_failure_label }}</span>
                         {% if row.issue_labels|length > 1 %}
                         <div class="small text-muted mt-1">{{ row.issue_labels | join(", ") }}</div>
                         {% endif %}
                     </td>
-                    <td class="small">
-                        {% if row.parsed_fields %}
-                        {{ row.parsed_fields | join(" · ") }}
-                        {% else %}
-                        —
-                        {% endif %}
-                    </td>
                     <td style="min-width: 18rem;">
                         <div class="d-flex flex-column gap-2">
                             <a href="{{ row.detail_url }}" class="btn btn-sm btn-outline-primary">Open import detail</a>
+
+                            {% if row.condition_needs_training and row.condition_training_term and learning_enabled %}
+                            <div class="border rounded p-2 bg-light">
+                                <div class="small fw-semibold mb-1">Teach condition: “{{ row.condition_training_term }}”</div>
+                                <form method="post" action="/parser-review/{{ row.id }}/teach-condition" class="d-flex flex-column gap-1">
+                                    <input type="hidden" name="term" value="{{ row.condition_training_term }}">
+                                    <button type="submit" name="action" value="teach_new" class="btn btn-sm btn-success">Teach = New</button>
+                                    <button type="submit" name="action" value="teach_pre_owned" class="btn btn-sm btn-success">Teach = Pre-Owned</button>
+                                    <button type="submit" name="action" value="apply_once" class="btn btn-sm btn-outline-success">Apply once only</button>
+                                    <button type="submit" name="action" value="ignore" class="btn btn-sm btn-outline-secondary">Ignore</button>
+                                </form>
+                            </div>
+                            {% endif %}
 
                             {% if row.primary_fix_action %}
                             <button
@@ -260,6 +333,6 @@
 </section>
 {% endif %}
 {% if not rows %}
-<div class="alert alert-secondary" role="alert">No imports need AI workbench review.</div>
+<div class="alert alert-secondary" role="alert">No imports need parser training review.</div>
 {% endif %}
 {% endblock %}

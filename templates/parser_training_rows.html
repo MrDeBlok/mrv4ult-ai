@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}Training Rows · MRV4ULT AI{% endblock %}
+
+{% block content %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3 p-md-4">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+            <div>
+                <h1 class="h3 mb-1">Offer Rows</h1>
+                <p class="text-muted mb-0">
+                    Review and correct individual offer lines. Changes apply only to selected rows — no full import reprocess.
+                </p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="/parser-training" class="btn btn-sm btn-outline-dark">Back to Training Center</a>
+                <a href="/activity/{{ import_log.id }}" class="btn btn-sm btn-outline-primary">Open import detail</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+{% if saved %}
+<div class="alert alert-success" role="alert">Row correction saved.</div>
+{% endif %}
+{% if bulk_saved %}
+<div class="alert alert-success" role="alert">Bulk action applied to selected rows.</div>
+{% endif %}
+
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <div class="small text-muted">Import time</div>
+                <div>{{ import_time }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="small text-muted">Dealer</div>
+                <div>{{ dealer }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="small text-muted">Group</div>
+                <div>{{ group_name }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="small text-muted">Rows</div>
+                <div>
+                    <strong>{{ stats.total_rows }}</strong> total ·
+                    <strong>{{ stats.approved_rows }}</strong> approved ·
+                    <strong>{{ stats.pending_review_rows }}</strong> pending
+                </div>
+            </div>
+        </div>
+        <details class="mt-3">
+            <summary class="text-muted">Original WhatsApp message</summary>
+            <pre class="small bg-light border rounded p-2 mb-0 mt-2" style="white-space: pre-wrap;">{{ original_message }}</pre>
+        </details>
+    </div>
+</section>
+
+<section class="card shadow-sm mb-4">
+    <div class="card-body p-3">
+        <form id="bulk-action-form" method="post" action="/parser-training/{{ import_log.id }}/bulk-action" class="d-flex flex-wrap gap-2 align-items-end">
+            <div>
+                <label class="form-label small mb-0">Learn scope</label>
+                <select class="form-select form-select-sm" name="learn_mode">
+                    <option value="row_only">Apply only to selected rows</option>
+                    <option value="global">Learn globally</option>
+                    <option value="dealer">Learn for this dealer</option>
+                    <option value="group">Learn for this group</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label small mb-0">Bulk brand</label>
+                <select class="form-select form-select-sm" name="brand_name">
+                    <option value="">Select brand…</option>
+                    {% for brand in canonical_brands %}
+                    <option value="{{ brand }}">{{ brand }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="form-label small mb-0">Bulk condition</label>
+                <select class="form-select form-select-sm" name="condition_value">
+                    <option value="">Condition…</option>
+                    {% for value, label in condition_fix_options %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="form-label small mb-0">Condition term</label>
+                <input class="form-control form-control-sm" name="condition_term" placeholder="e.g. Fresh">
+            </div>
+            <div>
+                <label class="form-label small mb-0">Currency</label>
+                <select class="form-select form-select-sm" name="currency">
+                    <option value="">Currency…</option>
+                    {% for code in workbench_currencies %}
+                    <option value="{{ code }}">{{ code }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" name="action" value="set_brand" class="btn btn-sm btn-primary">Set brand</button>
+            <button type="submit" name="action" value="set_condition" class="btn btn-sm btn-primary">Set condition</button>
+            <button type="submit" name="action" value="set_currency" class="btn btn-sm btn-primary">Set currency</button>
+            <button type="submit" name="action" value="map_references" class="btn btn-sm btn-outline-primary">Map refs to brand</button>
+            <button type="submit" name="action" value="approve_rows" class="btn btn-sm btn-success">Approve selected</button>
+            <button type="submit" name="action" value="ignore_rows" class="btn btn-sm btn-outline-secondary">Ignore selected</button>
+        </form>
+
+        {% if unique_references %}
+        <div class="mt-3 border rounded p-2 bg-light">
+            <div class="small text-muted mb-2">Reference-brand mapping checklist (for Set brand / Map refs to brand)</div>
+            <div class="d-flex flex-wrap gap-3">
+                {% for ref in unique_references %}
+                <label class="form-check-label small">
+                    <input class="form-check-input" type="checkbox" name="map_reference" value="{{ ref }}" form="bulk-action-form" checked>
+                    {{ ref }}
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col"><input type="checkbox" id="select-all-rows" aria-label="Select all rows"></th>
+                    <th scope="col">#</th>
+                    <th scope="col">Raw row text</th>
+                    <th scope="col">Brand</th>
+                    <th scope="col">Reference</th>
+                    <th scope="col">Condition</th>
+                    <th scope="col">Year / card</th>
+                    <th scope="col">Price</th>
+                    <th scope="col">Confidence</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Review issues</th>
+                    <th scope="col">Optional notes</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in training_rows %}
+                <tr class="{% if row.needs_review %}table-warning{% elif row.approved %}table-success{% elif row.ignored %}table-secondary{% endif %}">
+                    <td>
+                        <input
+                            class="form-check-input row-select"
+                            type="checkbox"
+                            name="row_ids"
+                            value="{{ row.id }}"
+                            form="bulk-action-form"
+                            {% if row.ignored or row.uses_fallback %}disabled{% endif %}
+                        >
+                    </td>
+                    <td>{{ row.row_index + 1 }}</td>
+                    <td class="small text-muted" style="min-width: 12rem; max-width: 16rem;">{{ row.source_line }}</td>
+                    <td>{{ row.brand or "—" }}</td>
+                    <td>{{ row.reference or "—" }}</td>
+                    <td>{{ row.condition or "—" }}</td>
+                    <td class="small">
+                        {% if row.production_year %}{{ row.production_year }}{% endif %}
+                        {% if row.card_date %}{{ row.card_date }}{% endif %}
+                        {% if not row.production_year and not row.card_date %}—{% endif %}
+                    </td>
+                    <td class="small">
+                        {% if row.original_price %}{{ row.original_price }} {{ row.original_currency or '' }}{% else %}—{% endif %}
+                    </td>
+                    <td class="small">{{ row.overall_confidence or 0 }}%</td>
+                    <td>
+                        <span class="badge text-bg-{{ row.status_badge }}">{{ row.status_label }}</span>
+                    </td>
+                    <td class="small">
+                        {% if row.issues %}{{ row.issues | join(", ") }}{% else %}—{% endif %}
+                    </td>
+                    <td class="small text-muted">
+                        {% if row.optional_notes %}{{ row.optional_notes | join(", ") }}{% else %}—{% endif %}
+                    </td>
+                    <td style="min-width: 18rem;">
+                        {% if not row.ignored and not row.uses_fallback %}
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-outline-primary"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#row-fix-{{ row.id }}"
+                        >Edit</button>
+                        {% if row.field_details %}
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-outline-secondary"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#row-detail-{{ row.id }}"
+                        >Details</button>
+                        <div class="collapse mt-2" id="row-detail-{{ row.id }}">
+                            <div class="border rounded p-2 bg-light small">
+                                {% for detail in row.field_details %}
+                                <div class="mb-1">
+                                    <strong>{{ detail.field }}:</strong>
+                                    {{ detail.value or "—" }}
+                                    · {{ detail.status }}
+                                    {% if detail.confidence is not none and detail.confidence != "N/A" %}· {{ detail.confidence }}%{% elif detail.confidence == "N/A" %}· N/A{% endif %}
+                                    <div class="text-muted">{{ detail.reason }}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        <div class="collapse mt-2" id="row-fix-{{ row.id }}">
+                            <form method="post" action="/parser-training/rows/{{ row.id }}/correct" class="border rounded p-2 bg-light d-flex flex-column gap-2">
+                                <select class="form-select form-select-sm" name="learn_mode">
+                                    <option value="row_only">Apply only to this row</option>
+                                    <option value="global">Learn globally</option>
+                                    <option value="dealer">Learn for this dealer</option>
+                                    <option value="group">Learn for this group</option>
+                                </select>
+                                <input class="form-control form-control-sm" name="brand" value="{{ row.brand or '' }}" placeholder="Brand">
+                                <input class="form-control form-control-sm" name="reference" value="{{ row.reference or '' }}" placeholder="Reference">
+                                <select class="form-select form-select-sm" name="condition">
+                                    <option value="">Condition…</option>
+                                    {% for value, label in condition_fix_options %}
+                                    <option value="{{ value }}" {% if row.condition == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                <input class="form-control form-control-sm" name="year" value="{{ row.production_year or '' }}" placeholder="Year">
+                                <input class="form-control form-control-sm" name="card_date" value="{{ row.card_date or '' }}" placeholder="Card date">
+                                <input class="form-control form-control-sm" name="price" value="{{ row.original_price or '' }}" placeholder="Price">
+                                <select class="form-select form-select-sm" name="currency">
+                                    <option value="">Currency…</option>
+                                    {% for code in workbench_currencies %}
+                                    <option value="{{ code }}" {% if row.original_currency == code %}selected{% endif %}>{{ code }}</option>
+                                    {% endfor %}
+                                </select>
+                                <input class="form-control form-control-sm" name="condition_term" placeholder="Condition term to teach (optional)">
+                                {% if row.reference %}
+                                <label class="form-check-label small">
+                                    <input class="form-check-input" type="checkbox" name="learn_reference_brand" value="1">
+                                    Learn {{ row.reference }} → brand globally
+                                </label>
+                                {% endif %}
+                                <button type="submit" class="btn btn-sm btn-success">Save row</button>
+                            </form>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script>
+document.getElementById("select-all-rows")?.addEventListener("change", (event) => {
+    const checked = event.target.checked;
+    document.querySelectorAll(".row-select:not(:disabled)").forEach((input) => {
+        input.checked = checked;
+    });
+});
+</script>
+{% endblock %}

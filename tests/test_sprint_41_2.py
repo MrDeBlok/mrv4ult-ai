@@ -100,13 +100,13 @@ class TestBulkReviewRemoved:
         assert "Bulk imports:" not in response.text
         assert "Missing price" in response.text
 
-    def test_large_imports_do_not_flood_parser_review(self) -> None:
+    def test_large_imports_with_review_rows_appear_in_parser_review(self) -> None:
         import_log = _bulk_import_log(watches_count=100)
 
         assert is_large_dealer_list_import_log(import_log) is True
-        assert is_parser_review_pending(import_log) is False
-        assert filter_parser_review_imports([import_log]) == []
-        assert parser_review_counts([import_log])["total"] == 0
+        assert is_parser_review_pending(import_log) is True
+        assert len(filter_parser_review_imports([import_log])) == 1
+        assert parser_review_counts([import_log])["total"] == 1
 
     def test_normal_single_needs_review_still_appears(self) -> None:
         import_log = _single_missing_price_import()
@@ -114,9 +114,9 @@ class TestBulkReviewRemoved:
         assert is_parser_review_pending(import_log) is True
         assert parser_review_counts([import_log])["total"] == 1
 
-    def test_bulk_import_status_uses_success_without_bulk_warning_label(self) -> None:
+    def test_bulk_import_status_uses_warning_when_rows_need_training(self) -> None:
         watches = [
-            {"brand": "Rolex", "reference": None, "dealer_list_line": True}
+            {"brand": "Rolex", "reference": None, "dealer_list_line": True, "original_price": 12500, "original_currency": "USD"}
             for _ in range(12)
         ]
         summary = {"watches_parsed": 12, "duplicate_offers": 2}
@@ -128,9 +128,9 @@ class TestBulkReviewRemoved:
             bulk_mode=True,
         )
 
-        assert status == "success"
+        assert status == "warning"
+        assert "need parser training" in reason
         assert "Bulk imported with warnings" not in reason
-        assert reason.startswith("Successfully parsed 12 watch offer(s).")
 
     @patch("app.get_import_log")
     @patch("app.get_message_by_id")

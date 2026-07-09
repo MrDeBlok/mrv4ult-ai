@@ -8,7 +8,7 @@ from activity_feed import format_dealer_label, message_preview
 from condition_normalizer import resolve_offer_wear_condition
 from import_classification import looks_like_parser_review_offer
 from import_status import normalize_import_status
-from ingest import _watch_missing_fields, is_large_dealer_list_import_log
+from ingest import _watch_missing_fields
 from unknown_brand_intelligence import extract_unknown_brand_text
 
 Record = dict[str, Any]
@@ -21,6 +21,10 @@ ISSUE_LABELS: dict[str, str] = {
     "unknown_brand": "Unknown brand",
     "unknown_model": "Unknown model",
     "multiple_fields_missing": "Multiple fields missing",
+    "condition_needs_training": "Condition needs training",
+    "suspicious_price": "Suspicious price",
+    "brand_confidence_low": "Brand confidence low",
+    "reference_confidence_low": "Reference confidence low",
 }
 
 MISSING_FIELD_LABELS: dict[str, str] = {
@@ -31,7 +35,7 @@ MISSING_FIELD_LABELS: dict[str, str] = {
     "currency": "Currency",
 }
 
-PARSER_CONFIDENCE_THRESHOLD = 60
+from parser_confidence import PARSER_CONFIDENCE_THRESHOLD
 
 FAILURE_REASON_PRIORITY: tuple[str, ...] = (
     "unknown_brand",
@@ -43,6 +47,10 @@ FAILURE_REASON_PRIORITY: tuple[str, ...] = (
     "missing_price",
     "missing_currency",
     "missing_condition",
+    "condition_needs_training",
+    "suspicious_price",
+    "brand_confidence_low",
+    "reference_confidence_low",
     "low_parser_confidence",
 )
 
@@ -56,6 +64,10 @@ FAILURE_REASON_LABELS: dict[str, str] = {
     "missing_price": "Missing price",
     "missing_currency": "Currency missing",
     "missing_condition": "Missing condition",
+    "condition_needs_training": "Condition needs training",
+    "suspicious_price": "Suspicious price",
+    "brand_confidence_low": "Brand confidence low",
+    "reference_confidence_low": "Reference confidence low",
     "low_parser_confidence": "Parser confidence too low",
 }
 
@@ -69,6 +81,8 @@ PARSER_REVIEW_FILTERS = frozenset(
         "missing_currency",
         "unknown_brand",
         "unknown_reference",
+        "condition_needs_training",
+        "suspicious_price",
     }
 ) | frozenset(FAILURE_REASON_PRIORITY)
 
@@ -88,8 +102,11 @@ PARSED_FIELD_SPECS: list[tuple[str, str]] = [
 
 def is_parser_review_pending(import_log: Record) -> bool:
     """Return True when an import still belongs on the parser review queue."""
+    from dealer_list_training import dealer_list_has_rows_needing_review
+    from ingest import is_large_dealer_list_import_log
+
     if is_large_dealer_list_import_log(import_log):
-        return False
+        return dealer_list_has_rows_needing_review(import_log)
     if normalize_import_status(import_log) != "warning":
         return False
     summary = import_log.get("summary") or {}
@@ -154,6 +171,21 @@ def detect_watch_issues(watch: Record) -> tuple[set[str], list[str]]:
 
     if _has_unknown_reference(watch):
         issues.add("unknown_reference")
+
+    if watch.get("condition_needs_training"):
+        issues.add("condition_needs_training")
+        if "condition" not in missing:
+            missing.append("condition")
+
+    try:
+        from parser_safety_gates import evaluate_offer_safety
+
+        blocked, safety_reasons = evaluate_offer_safety(watch)
+        for reason in safety_reasons:
+            if reason in ISSUE_LABELS:
+                issues.add(reason)
+    except Exception:
+        pass
 
     basic_issues = {
         "missing_price",
@@ -273,6 +305,21 @@ def detect_watch_failure_reasons(watch: Record) -> set[str]:
         reasons.add("missing_currency")
     if "missing_condition" in issues:
         reasons.add("missing_condition")
+    if watch.get("condition_needs_training") or "condition_needs_training" in issues:
+        reasons.add("condition_needs_training")
+    try:
+        from parser_safety_gates import evaluate_offer_safety
+
+        _, safety_reasons = evaluate_offer_safety(watch)
+        for reason in (
+            "suspicious_price",
+            "brand_confidence_low",
+            "reference_confidence_low",
+        ):
+            if reason in safety_reasons:
+                reasons.add(reason)
+    except Exception:
+        pass
 
     if (
         not reasons
@@ -488,6 +535,28 @@ def build_parser_review_row(
     }
 
 
+def enrich_parser_review_row(import_log: Record, row: Record) -> Record:
+    """Attach dealer-list stats and training URLs to a parser review row."""
+    from dealer_list_training import compute_dealer_list_stats
+    from ingest import is_large_dealer_list_import_log
+
+    summary = import_log.get("summary") or {}
+    if is_large_dealer_list_import_log(import_log):
+        watches = _parsed_watches(import_log)
+        stats = summary.get("dealer_list_stats") or compute_dealer_list_stats(
+            watches,
+            summary,
+            message_type=summary.get("message_type"),
+        )
+        row["is_dealer_list"] = True
+        row["dealer_list_stats"] = stats
+        row["training_detail_url"] = f"/parser-review/{import_log['id']}/dealer-list"
+        row["detail_url"] = row["training_detail_url"]
+    else:
+        row["is_dealer_list"] = False
+    return row
+
+
 def load_parser_review_page_data(
     import_logs: list[Record],
     filter_key: str,
@@ -538,5 +607,6 @@ def load_parser_review_page_data(
             format_timestamp=format_timestamp,
             issue_data=issue_index[import_id],
         )
+        row = enrich_parser_review_row(import_log, row)
         rows.append(enrich_workbench_row(row, import_log, message=message))
     return rows, counts

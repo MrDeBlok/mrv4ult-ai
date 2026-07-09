@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from database import reset_client_profiles_cache, reset_contact_type_column_cache, reset_user_columns_cache
+from database import reset_client_profiles_cache, reset_contact_type_column_cache, reset_parser_learning_rules_cache, reset_user_columns_cache
 
 ADMIN_USER = {
     "id": "11111111-1111-4111-8111-111111111111",
@@ -56,10 +56,12 @@ def _reset_contact_type_column_cache() -> None:
     reset_contact_type_column_cache()
     reset_client_profiles_cache()
     reset_user_columns_cache()
+    reset_parser_learning_rules_cache()
     yield
     reset_contact_type_column_cache()
     reset_client_profiles_cache()
     reset_user_columns_cache()
+    reset_parser_learning_rules_cache()
 
 
 @pytest.fixture(autouse=True)

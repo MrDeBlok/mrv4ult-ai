@@ -90,7 +90,7 @@ class TestTradingDeskRequestSplit:
         assert [card["title"] for card in cards] == list(TRADING_DESK_KPI_TITLES)
         assert cards[2]["url"] == "/market-requests"
         assert cards[3]["url"] == "/requests"
-        assert cards[4]["url"] == "/parser-review"
+        assert cards[4]["url"] == "/parser-training"
 
     @patch("dashboard_data.get_messages_by_ids", return_value={})
     @patch(
@@ -156,7 +156,7 @@ class TestTradingDeskRequestSplit:
         actions = build_quick_actions(ADMIN_USER)
         labels = {action["label"] for action in actions}
 
-        assert "AI Workbench" in labels
+        assert "Parser Training Center" in labels
 
 
 class TestTradingDeskUiVisibility:
@@ -186,7 +186,7 @@ class TestTradingDeskUiVisibility:
         assert response.status_code == 200
         assert 'data-nav-group="ai"' in response.text
         assert "AI needs help" in response.text
-        assert "AI Workbench" in response.text
+        assert "Parser Training Center" in response.text
         assert "Active client requests" in response.text
         assert "Active market requests" in response.text
 

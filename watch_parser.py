@@ -449,7 +449,22 @@ def parse_message(message: str) -> ParseResult:
 
     is_request = bool(REQUEST_PATTERN.search(text))
 
-    from dealer_list_splitter import split_dealer_list_message
+    from dealer_list_splitter import split_dealer_list_message, split_multi_brand_dealer_list_message
+
+    multi_brand_rows = split_multi_brand_dealer_list_message(text)
+    if multi_brand_rows is not None and not (is_request and not OFFER_PATTERN.search(text)):
+        watches: list[WatchDict] = []
+        for header_brand, line in multi_brand_rows:
+            if watch := parse_watch_line(line, current_brand=header_brand):
+                watch["source_line"] = line
+                watch["dealer_list_line"] = True
+                watch["dealer_list_brand_header"] = header_brand
+                watches.append(watch)
+        if len(watches) >= 2:
+            message_type = classify_message(text, watches, is_request)
+            if message_type == "offer":
+                message_type = "offer_list"
+            return {"message_type": message_type, "watches": watches}
 
     dealer_list = split_dealer_list_message(text)
     if dealer_list is not None and not (is_request and not OFFER_PATTERN.search(text)):
