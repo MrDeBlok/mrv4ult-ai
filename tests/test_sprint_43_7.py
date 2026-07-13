@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app import app, build_activity_row
 from database import (
     IMPORT_LOG_SUMMARY_BATCH_SIZE,
+    activity_import_log_list_columns,
     attach_import_log_summaries,
     get_import_log,
     get_import_log_summaries_by_ids,
@@ -31,11 +32,16 @@ class TestImportLogColumnProjections:
         columns = import_log_detail_columns_full()
         assert "summary" in columns
 
+    def test_activity_projection_omits_summary(self) -> None:
+        columns = activity_import_log_list_columns()
+        assert "summary" not in columns
+        assert "*" not in columns
+
     @patch("database.get_client")
-    @patch("database.import_log_list_columns_light", return_value="id,status,watches_parsed")
+    @patch("database.activity_import_log_list_columns", return_value="id,status,watches_parsed")
     def test_activity_list_query_uses_light_columns(
         self,
-        _mock_columns: MagicMock,
+        mock_columns: MagicMock,
         mock_get_client: MagicMock,
     ) -> None:
         mock_execute = MagicMock()
@@ -52,7 +58,11 @@ class TestImportLogColumnProjections:
 
         list_activity_import_logs(tab="active", offset=0, limit=20)
 
+        mock_columns.assert_called_once_with()
         mock_table.select.assert_called_once_with("id,status,watches_parsed")
+        mock_table.select.assert_called_once()
+        assert mock_table.select.call_args.args[0] != "*"
+        mock_query.range.assert_called_once_with(0, 19)
 
     @patch("database.get_client")
     @patch("database.import_log_detail_columns_full", return_value="id,summary,status")

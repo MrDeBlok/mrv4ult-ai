@@ -43,6 +43,10 @@ MESSAGE_NEW_YEAR_BATCH_PATTERN = re.compile(
 
 NEW_ALIASES: dict[str, str] = {
     "brand new": NEW_CONDITION,
+    "brand new / unworn": NEW_CONDITION,
+    "fresh new": NEW_CONDITION,
+    "fresh new / unworn": NEW_CONDITION,
+    "new / unworn": NEW_CONDITION,
     "bn": NEW_CONDITION,
     "new": NEW_CONDITION,
     "unworn": NEW_CONDITION,
@@ -81,7 +85,9 @@ ACCESSORY_CONDITIONS = frozenset(
 
 
 def _condition_key(value: str) -> str:
-    return re.sub(r"[\s_-]+", " ", value.strip().lower())
+    cleaned = value.strip().lower()
+    cleaned = re.sub(r"\s*/\s*", " / ", cleaned)
+    return re.sub(r"[\s_-]+", " ", cleaned).strip()
 
 
 def normalize_wear_condition(value: str | None) -> tuple[str | None, str | None]:
@@ -107,9 +113,12 @@ def normalize_wear_condition(value: str | None) -> tuple[str | None, str | None]
 
 def normalize_watch_condition(watch: Record) -> Record:
     """Apply wear-condition normalization to a parsed watch dict in place."""
+    existing_raw = watch.get("raw_condition")
     normalized, raw_condition = normalize_wear_condition(watch.get("condition"))
     watch["condition"] = normalized
-    if raw_condition:
+    if existing_raw:
+        watch["raw_condition"] = existing_raw
+    elif raw_condition:
         watch["raw_condition"] = raw_condition
     return watch
 

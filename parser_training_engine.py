@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from parser_confidence import (
@@ -101,6 +103,38 @@ def apply_reference_brand_mapping_to_watch(watch: Record) -> Record:
     updated = apply_brand_resolution_to_watch(updated, resolution)
     updated.pop("reference_needs_review", None)
     updated.pop("reference_status", None)
+    return updated
+
+
+def _apply_manual_correction_trust(watch: Record, corrections: Record) -> Record:
+    """Treat explicit Save Row field edits as trusted parser-training input."""
+    updated = dict(watch)
+    manual_reference = bool(str(corrections.get("reference") or "").strip())
+    manual_brand = bool(str(corrections.get("brand") or "").strip())
+
+    if manual_reference:
+        updated["reference_high_confidence"] = True
+        updated.pop("reference_needs_review", None)
+        updated.pop("reference_status", None)
+        identification = dict(updated.get("watch_identification") or {})
+        identification.pop("reference_status", None)
+        if identification:
+            updated["watch_identification"] = identification
+        else:
+            updated.pop("watch_identification", None)
+        model_alias = dict(updated.get("model_alias") or {})
+        model_alias.pop("reference_status", None)
+        if model_alias:
+            updated["model_alias"] = model_alias
+        else:
+            updated.pop("model_alias", None)
+
+    if manual_brand:
+        updated.pop("unknown_brand_text", None)
+
+    if manual_brand and manual_reference:
+        updated.pop("reference_brand_conflict", None)
+
     return updated
 
 
@@ -379,6 +413,9 @@ def re_evaluate_parser_training_reference_batch(
     batch_limit = max(1, min(int(limit), REFERENCE_REEVALUATE_BATCH_SIZE))
     batch_offset = max(0, int(offset))
 
+    logger = logging.getLogger(__name__)
+    started = time.perf_counter()
+
     with parser_training_rows_write_guard():
         rows = list_parser_training_rows_for_reference(
             reference,
@@ -391,6 +428,18 @@ def re_evaluate_parser_training_reference_batch(
             if updates and row.get("id"):
                 update_parser_training_row(str(row["id"]), **updates)
                 updated += 1
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "re_evaluate_parser_training_reference_batch reference=%s offset=%s "
+            "limit=%s rows_checked=%s rows_updated=%s elapsed_ms=%s",
+            reference,
+            batch_offset,
+            batch_limit,
+            len(rows),
+            updated,
+            elapsed_ms,
+        )
 
         return {
             "reference": reference,
@@ -743,14 +792,19 @@ def _correct_training_row_impl(
     if import_log:
         message_type = (import_log.get("summary") or {}).get("message_type")
 
-    watch = enrich_watch_for_training_evaluation(
-        apply_corrections_to_watch(watch_from_training_row(row), corrections),
-        message_type=message_type,
-    )
+    watch = apply_corrections_to_watch(watch_from_training_row(row), corrections)
 
     if corrections.get("learn_reference_brand") and corrections.get("brand"):
-        ref = str(watch.get("reference") or row.get("normalized_reference") or row.get("detected_reference") or "")
+        ref = str(
+            watch.get("reference")
+            or row.get("normalized_reference")
+            or row.get("detected_reference")
+            or ""
+        )
         _save_reference_brand_mappings(str(corrections["brand"]), [ref])
+
+    watch = enrich_watch_for_training_evaluation(watch, message_type=message_type)
+    watch = _apply_manual_correction_trust(watch, corrections)
 
     if learn_mode != "row_only":
         _apply_learning_from_correction(
@@ -765,56 +819,44 @@ def _correct_training_row_impl(
     message = get_message_by_id(str(row.get("source_message_id") or import_log.get("message_id") or "")) if import_log else None
     dealer = str((message or {}).get("dealer_id") or "") or None
 
-    updates: Record = {
-        "normalized_brand": watch.get("brand"),
-        "normalized_reference": watch.get("reference"),
-        "normalized_condition": watch.get("condition"),
+    blocked, issue_types = evaluate_offer_safety(watch, message_type=message_type)
+    offer_id = row.get("created_offer_id")
+    persisted_detected_fields = {
         "detected_year": str(watch.get("production_year") or corrections.get("year") or "") or None,
         "detected_card_date": watch.get("card_date"),
         "detected_price": watch.get("original_price") or watch.get("price"),
         "detected_currency": watch.get("original_currency") or watch.get("currency"),
-        "usd_price": watch.get("usd_price"),
     }
 
-    blocked, issue_types = evaluate_offer_safety(watch, message_type=message_type)
-    offer_id = row.get("created_offer_id")
+    if not blocked and dealer and import_log and message and not offer_id:
+        offer_row, _ = create_offer_for_training_row(
+            {
+                **row,
+                "normalized_brand": watch.get("brand"),
+                "normalized_reference": watch.get("reference"),
+                "normalized_condition": watch.get("condition"),
+                "usd_price": watch.get("usd_price"),
+                **persisted_detected_fields,
+            },
+            import_log_id=str(import_log["id"]),
+            message_id=str(message["id"]),
+            dealer_id=dealer,
+            line_index=int(row.get("row_index") or 0),
+        )
+        if offer_row:
+            offer_id = offer_row["id"]
 
-    if not blocked and dealer and import_log and message:
-        if row.get("created_offer_id"):
-            offer_id = row["created_offer_id"]
-            updates["status"] = "corrected"
-            updates["issue_types"] = []
-        else:
-            offer_row, _ = create_offer_for_training_row(
-                {**row, **updates},
-                import_log_id=str(import_log["id"]),
-                message_id=str(message["id"]),
-                dealer_id=dealer,
-                line_index=int(row.get("row_index") or 0),
-            )
-            if offer_row:
-                offer_id = offer_row["id"]
-                updates["status"] = "corrected"
-                updates["issue_types"] = []
-            else:
-                updates["status"] = "pending_review"
-                updates["issue_types"] = issue_types
-    elif blocked:
-        updates["status"] = "pending_review"
-        updates["issue_types"] = issue_types
-    else:
-        updates["status"] = "corrected"
-
-    field_confidences = compute_field_confidences(watch)
+    updates = _training_row_update_fields(
+        row,
+        watch,
+        message_type=message_type,
+        blocked=blocked,
+        issue_types=issue_types,
+    )
     updates.update(
         {
-            "confidence_overall": compute_training_overall_confidence(field_confidences),
-            "confidence_brand": field_confidences.get("brand_confidence"),
-            "confidence_reference": field_confidences.get("reference_confidence"),
-            "confidence_condition": optional_condition_confidence(watch),
-            "confidence_price": field_confidences.get("price_confidence"),
-            "confidence_intent": field_confidences.get("intent_confidence"),
-            "parser_explanation": build_training_parser_explanation(watch),
+            **persisted_detected_fields,
+            "status": "pending_review" if blocked else "corrected",
             "created_offer_id": offer_id,
             "created_by_user_id": created_by_user_id,
         }

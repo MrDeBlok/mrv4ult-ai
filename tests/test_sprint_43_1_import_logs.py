@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app import _parser_review_import_logs
-from activity_feed import load_activity_page
+from activity_feed import ACTIVITY_PAGE_SIZE, load_activity_page
 from database import (
     IMPORT_LOG_LIST_COLUMNS_LIGHT,
     IMPORT_LOG_LIST_LIMIT_DASHBOARD,
@@ -128,7 +128,12 @@ class TestImportLogCallSiteLimits:
     ) -> None:
         load_activity_page(ADMIN_USER, "active", page=1)
 
-        mock_list_activity.assert_called_once_with(tab="active", offset=0, limit=60)
+        mock_list_activity.assert_called_once_with(
+            tab="active",
+            offset=0,
+            limit=ACTIVITY_PAGE_SIZE,
+        )
+        assert ACTIVITY_PAGE_SIZE <= 50
 
     @patch("app.filter_business_import_logs", side_effect=lambda logs, _lookup: logs)
     @patch("app.build_dealer_lookup_by_whatsapp", return_value={})

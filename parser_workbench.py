@@ -114,19 +114,9 @@ def enrich_workbench_row(
 
 
 def _parse_workbench_price(value: str) -> int | None:
-    cleaned = value.strip().replace(",", "").replace(" ", "")
-    if not cleaned:
-        return None
-    if cleaned.lower().endswith("k"):
-        base = cleaned[:-1]
-        if base.replace(".", "", 1).isdigit():
-            return int(float(base) * 1000)
-    if cleaned.replace(".", "", 1).isdigit():
-        number = float(cleaned)
-        if number.is_integer():
-            return int(number)
-        return int(round(number))
-    return None
+    from watch_parser import parse_compact_price_amount
+
+    return parse_compact_price_amount(value)
 
 
 def _apply_field_overrides(watch: Record, overrides: Record) -> None:

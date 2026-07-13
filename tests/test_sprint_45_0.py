@@ -28,6 +28,16 @@ class TestBrandKnowledgeModule:
         assert "Piaget" in BRAND_KNOWLEDGE
         assert "Rolex" in BRAND_KNOWLEDGE
         assert "Richard Mille" in BRAND_KNOWLEDGE
+        assert "Tudor" in BRAND_KNOWLEDGE
+
+    def test_tudor_patterns_registered(self) -> None:
+        knowledge = get_brand_knowledge("Tudor")
+        assert knowledge is not None
+        assert any("M\\d" in pattern for pattern in knowledge.reference_patterns)
+
+    def test_tudor_reference_matches_brand_pattern(self) -> None:
+        assert reference_matches_brand_pattern("M2836C1A3-0002", "Tudor") is True
+        assert reference_matches_brand_pattern("M79030N-0001", "Tudor") is True
 
 
 class TestBrandKnowledgeReferences:
@@ -40,6 +50,8 @@ class TestBrandKnowledgeReferences:
             ("AP 26240ST blue 2024 full set", "Audemars Piguet", "26240ST"),
             ("Cartier WSSA0032 steel 8200 usd", "Cartier", "WSSA0032"),
             ("RM 35-02 Rafael Nadal 280k", "Richard Mille", "RM 35-02"),
+            ("Tudor Royal M2836C1A3-0002 Fresh New", "Tudor", "M2836C1A3-0002"),
+            ("Tudor M79030N-0001 blue dial 3500 eur", "Tudor", "M79030N-0001"),
         ],
     )
     def test_brand_specific_references(

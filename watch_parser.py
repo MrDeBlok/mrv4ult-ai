@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from model_aliases import find_alias_match
@@ -77,6 +78,10 @@ BRACELET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bfresh\s+new\s*/\s*unworn\b", re.I), "Fresh New / Unworn"),
+    (re.compile(r"\bbrand\s+new\s*/\s*unworn\b", re.I), "Brand New / Unworn"),
+    (re.compile(r"\bnew\s*/\s*unworn\b", re.I), "New / Unworn"),
+    (re.compile(r"\bfresh\s+new\b", re.I), "Fresh New"),
     (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
     (re.compile(r"\bunworn\s+complete\b", re.I), "Unworn complete"),
     (re.compile(r"\bfull\s+stickers?\b", re.I), "Full stickers"),
@@ -141,8 +146,11 @@ OFFER_PATTERN = re.compile(
 )
 HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*$", re.I)
 
-NEW_CARD_DATE_PATTERN = re.compile(r"\bn(\d{1,2})/(\d{2})\b", re.I)
+NEW_CARD_DATE_PATTERN = re.compile(
+    r"\b[Nn]\s*(\d{1,2})/(\d{2}|\d{4})\b",
+)
 NEW_CARD_DATE_MMYyyy_PATTERN = re.compile(r"\bnew\s+(\d{1,2})/(\d{4})\b", re.I)
+FROM_CARD_DATE_PATTERN = re.compile(r"\bfrom\s+(\d{1,2})-(\d{4})\b", re.I)
 CARD_MMYyyy_PATTERN = re.compile(r"\b(\d{1,2})/(\d{4})\b")
 USED_YEAR_PATTERN = re.compile(r"\bused\s+(\d{4})y\b", re.I)
 YEAR_SUFFIX_PATTERN = re.compile(r"\b(19|20)\d{2}\s*y\b", re.I)
@@ -178,6 +186,11 @@ _GLUED_BRAND_PREFIX_REPLACEMENTS = (
     (re.compile(r"\bRLX(\d{5}[A-Za-z]{0,4})\b", re.I), r"RLX \1"),
 )
 
+_GLUED_CURRENCY_PRICE_PATTERN = re.compile(
+    rf"\b({CURRENCY_CODE_PATTERN})(?=([\d.,]+)\s*([kKmM])?\b)",
+    re.I,
+)
+
 
 def _normalize_glued_intent_prefixes(text: str) -> str:
     """Split glued intent tokens like WTB126334 into WTB 126334."""
@@ -195,13 +208,21 @@ def _normalize_glued_brand_prefixes(text: str) -> str:
     return normalized
 
 
+def _normalize_glued_currency_amounts(text: str) -> str:
+    """Split glued currency tokens like HKD1.424m into HKD 1.424m."""
+    return _GLUED_CURRENCY_PRICE_PATTERN.sub(r"\1 ", text)
+
+
 def _normalize_parser_text(text: str) -> str:
-    """Apply intent and brand glue normalization before parsing."""
-    return _normalize_glued_brand_prefixes(_normalize_glued_intent_prefixes(text))
+    """Apply intent, brand, and currency glue normalization before parsing."""
+    normalized = _normalize_glued_intent_prefixes(text)
+    normalized = _normalize_glued_brand_prefixes(normalized)
+    return _normalize_glued_currency_amounts(normalized)
 
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{3}\.\d{3})\b"), "A. Lange & Söhne"),
     (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
+    (re.compile(r"\b(M\d{4,}[A-Z0-9]+-\d{4})\b", re.I), "Tudor"),
     (re.compile(r"\b(\d{4}/[0-9A-Z]+)\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{4}[A-Za-z]-\d{3,})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b([12]\d{5}[A-Za-z]{0,4})\b", re.I), "Rolex"),
@@ -334,8 +355,8 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     ),
     (re.compile(r"\b(\d{1,3}(?:\.\d{3})+)\b"), None),
     (re.compile(r"\b(\d{1,3}(?:,\d{3})+)\b"), None),
-    (re.compile(r"\b(\d+(?:\.\d+)?)\s*(m|M)\b"), None),
-    (re.compile(r"\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
+    (re.compile(r"(?<![\d.,])\b(\d+(?:\.\d+)?)\s*(m|M)\b"), None),
+    (re.compile(r"(?<![\d.,])\b(\d+(?:\.\d+)?)\s*(k|K)\b"), None),
     (re.compile(r"\b(\d{4,7})\b"), None),
 ]
 
@@ -607,6 +628,8 @@ def _is_continuation_content(line: str, *, brand_hint: str | None = None) -> boo
         return True
     if NEW_CARD_DATE_PATTERN.search(line):
         return True
+    if FROM_CARD_DATE_PATTERN.search(line):
+        return True
     if re.search(r"\bnew\b", line, re.I) and CARD_MMYyyy_PATTERN.search(line):
         return True
     if USED_YEAR_PATTERN.search(line):
@@ -741,11 +764,17 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     watch["dial"] = _extract_dial(text)
     watch["bracelet"] = _extract_bracelet(text)
 
-    card_date, new_condition = _extract_card_date(text)
+    card_date, new_condition, raw_card_notation = _extract_card_date(text)
     watch["card_date"] = card_date
     remaining = text
     if new_condition:
         watch["condition"] = new_condition
+        if raw_card_notation:
+            watch["raw_condition"] = raw_card_notation
+        if card_date:
+            card_year_match = re.search(r"/(\d{4})\b", card_date)
+            if card_year_match:
+                watch["production_year"] = int(card_year_match.group(1))
         remaining = _remove_card_date_tokens(remaining)
     else:
         used_condition, production_year = _extract_used_year(text)
@@ -838,7 +867,8 @@ def _line_dealer_note_fragment(line: str, watch: WatchDict) -> str | None:
 
 
 def _remove_card_date_tokens(text: str) -> str:
-    remaining = NEW_CARD_DATE_MMYyyy_PATTERN.sub(" ", text)
+    remaining = FROM_CARD_DATE_PATTERN.sub(" ", text)
+    remaining = NEW_CARD_DATE_MMYyyy_PATTERN.sub(" ", remaining)
     remaining = NEW_CARD_DATE_PATTERN.sub(" ", remaining)
     return re.sub(r"\s+", " ", remaining).strip()
 
@@ -1416,31 +1446,44 @@ def _extract_bracelet(text: str) -> str | None:
     return None
 
 
-def _extract_card_date(text: str) -> tuple[str | None, str | None]:
+def _extract_card_date(text: str) -> tuple[str | None, str | None, str | None]:
+    match = FROM_CARD_DATE_PATTERN.search(text)
+    if match:
+        month = int(match.group(1))
+        year = int(match.group(2))
+        if 1 <= month <= 12 and 1990 <= year <= 2035:
+            return f"{month:02d}/{year}", None, None
+
     match = NEW_CARD_DATE_PATTERN.search(text)
     if match:
         month = int(match.group(1))
-        year_suffix = int(match.group(2))
+        year_token = match.group(2)
         if month < 1 or month > 12:
-            return None, None
-        year = 2000 + year_suffix if year_suffix < 70 else 1900 + year_suffix
-        return f"{month:02d}/{year}", "New"
+            return None, None, None
+        if len(year_token) == 4:
+            year = int(year_token)
+            if not (1990 <= year <= 2035):
+                return None, None, None
+        else:
+            year_suffix = int(year_token)
+            year = 2000 + year_suffix if year_suffix < 70 else 1900 + year_suffix
+        return f"{month:02d}/{year}", "New", match.group(0).strip()
 
     match = NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
     if match:
         month = int(match.group(1))
         year = int(match.group(2))
         if 1 <= month <= 12:
-            return f"{month:02d}/{year}", "New"
+            return f"{month:02d}/{year}", "New", match.group(0).strip()
 
     match = CARD_MMYyyy_PATTERN.search(text)
     if match and re.search(r"\bnew\b", text, re.I):
         month = int(match.group(1))
         year = int(match.group(2))
         if 1 <= month <= 12 and 1990 <= year <= 2035:
-            return f"{month:02d}/{year}", "New"
+            return f"{month:02d}/{year}", "New", match.group(0).strip()
 
-    return None, None
+    return None, None, None
 
 
 def _extract_used_year(text: str) -> tuple[str | None, int | None]:
@@ -1454,9 +1497,19 @@ def _extract_used_year(text: str) -> tuple[str | None, int | None]:
 def _extract_standalone_year(text: str, watch: WatchDict) -> int | None:
     if watch.get("production_year") is not None:
         return watch["production_year"]
+
+    card_date = watch.get("card_date")
+    if isinstance(card_date, str):
+        card_year_match = re.search(r"/(\d{4})\b", card_date)
+        if card_year_match:
+            year = int(card_year_match.group(1))
+            if 1990 <= year <= 2035:
+                return year
+
     if (
         NEW_CARD_DATE_PATTERN.search(text)
         or NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
+        or FROM_CARD_DATE_PATTERN.search(text)
         or CARD_MMYyyy_PATTERN.search(text)
         or USED_YEAR_PATTERN.search(text)
         or YEAR_SUFFIX_PATTERN.search(text)
@@ -1678,17 +1731,41 @@ def _parse_price_match(
     return price, _normalize_currency_code(currency_code)
 
 
+def parse_compact_price_amount(value: str) -> int | None:
+    """Parse a price token through the centralized amount normalizer."""
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    normalized = _normalize_glued_currency_amounts(cleaned)
+    price, _ = _extract_price(normalized)
+    if price is not None:
+        return price
+
+    compact_match = re.fullmatch(r"([\d.,]+)\s*([kKmM])", normalized, flags=re.I)
+    if compact_match:
+        return _normalize_amount(compact_match.group(1), compact_match.group(2))
+
+    plain_match = re.fullmatch(r"([\d.,]+)", normalized)
+    if plain_match:
+        return _normalize_amount(plain_match.group(1), None)
+    return None
+
+
 def _normalize_amount(amount_text: str, suffix: str | None) -> int | None:
     raw = amount_text.strip()
     if not raw:
         return None
 
-    if suffix and suffix.lower() == "k":
-        multiplier = 1000
-    elif suffix and suffix.lower() == "m":
-        multiplier = 1_000_000
-    else:
-        multiplier = 1
+    if suffix and _is_amount_suffix(suffix):
+        try:
+            value = Decimal(raw.replace(",", "."))
+        except InvalidOperation:
+            return None
+        multiplier = Decimal(1000 if suffix.lower() == "k" else 1_000_000)
+        return int((value * multiplier).to_integral_value(rounding=ROUND_HALF_UP))
+
+    multiplier = 1
 
     if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", raw):
         value = int(raw.replace(".", ""))

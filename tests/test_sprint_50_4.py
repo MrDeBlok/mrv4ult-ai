@@ -11,7 +11,10 @@ from app import app
 from database import (
     PARSER_TRAINING_REFERENCE_BATCH_SIZE,
     PARSER_TRAINING_REFERENCE_QUERY_MAX,
+    PARSER_TRAINING_REFERENCE_ROW_COLUMNS,
+    parser_training_reference_lookup_key,
 )
+from parser_training_center import format_training_row_display
 from parser_training_engine import (
     REFERENCE_REEVALUATE_BATCH_SIZE,
     correct_training_row,
@@ -132,9 +135,13 @@ class TestLearnGloballyRowSave:
 
 
 class TestPaginatedReferenceListing:
+    def test_reference_lookup_key_preserves_hyphens_and_uppercases(self) -> None:
+        assert parser_training_reference_lookup_key("m2836c1a3-0002") == "M2836C1A3-0002"
+        assert parser_training_reference_lookup_key(" 5524g ") == "5524G"
+
     @patch("database.get_client")
     @patch("database.parser_training_rows_supported", return_value=True)
-    def test_list_parser_training_rows_for_reference_uses_range_and_cap(
+    def test_list_parser_training_rows_for_reference_uses_indexed_normalized_column(
         self,
         _supported: MagicMock,
         mock_get_client: MagicMock,
@@ -145,13 +152,17 @@ class TestPaginatedReferenceListing:
         query = MagicMock()
         mock_get_client.return_value.table.return_value = table
         table.select.return_value = query
-        query.or_.return_value = query
+        query.eq.return_value = query
         query.order.return_value = query
         query.range.return_value.execute.return_value = MagicMock(data=[])
 
         list_parser_training_rows_for_reference(REFERENCE, limit=200, offset=10)
 
+        table.select.assert_called_once_with(PARSER_TRAINING_REFERENCE_ROW_COLUMNS)
+        query.eq.assert_called_once_with("normalized_reference", REFERENCE)
+        query.order.assert_called_once_with("id")
         query.range.assert_called_once_with(10, 10 + PARSER_TRAINING_REFERENCE_QUERY_MAX - 1)
+        query.or_.assert_not_called()
 
     def test_batch_size_constants_match(self) -> None:
         assert REFERENCE_REEVALUATE_BATCH_SIZE == PARSER_TRAINING_REFERENCE_BATCH_SIZE == 50
@@ -297,3 +308,195 @@ class TestReevaluateReferenceEndpoint:
         assert response.status_code == 303
         assert response.headers["location"].startswith("/parser-training?")
         assert "ref_reevaluated=1" in response.headers["location"]
+
+
+TUDOR_REFERENCE = "M2836C1A3-0002"
+TUDOR_BRAND = "Tudor"
+
+
+def _tudor_pending_row(**overrides) -> dict:
+    base = {
+        "id": ROW_ID,
+        "import_log_id": IMPORT_LOG_ID,
+        "source_message_id": MESSAGE_ID,
+        "row_index": 0,
+        "raw_row_text": (
+            "Tudor Royal M2836C1A3-0002 Fresh New / Unworn\n"
+            "From 06-2026 Full set\n"
+            "€4.200,-"
+        ),
+        "detected_brand": TUDOR_BRAND,
+        "detected_reference": None,
+        "detected_price": 4200,
+        "detected_currency": "EUR",
+        "normalized_brand": None,
+        "normalized_reference": None,
+        "status": "pending_review",
+        "issue_types": ["missing_reference", "reference_confidence_low"],
+        "created_offer_id": "offer-existing-1",
+        "usd_price": 4536,
+        "parser_explanation": {
+            "reference": "No reference number was detected.",
+            "reference_confidence": "0",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+class TestSaveRowReviewIssueRecalculation:
+    @patch("database.update_parser_training_row")
+    @patch("database.get_message_by_id")
+    @patch("database.get_import_log")
+    @patch("database.get_parser_training_row")
+    def test_save_row_clears_stale_reference_issues(
+        self,
+        mock_get_row: MagicMock,
+        mock_get_import: MagicMock,
+        mock_get_message: MagicMock,
+        mock_update: MagicMock,
+    ) -> None:
+        mock_get_row.return_value = _tudor_pending_row()
+        mock_get_import.return_value = {
+            "id": IMPORT_LOG_ID,
+            "message_id": MESSAGE_ID,
+            "summary": {"message_type": "offer"},
+        }
+        mock_get_message.return_value = {"id": MESSAGE_ID, "dealer_id": "dealer-1"}
+
+        def _capture_update(row_id: str, **fields: dict) -> dict:
+            return {"id": row_id, **fields}
+
+        mock_update.side_effect = _capture_update
+
+        result = correct_training_row(
+            ROW_ID,
+            {"brand": TUDOR_BRAND, "reference": TUDOR_REFERENCE},
+            learn_mode="row_only",
+        )
+
+        assert result["status"] == "corrected"
+        assert result["normalized_brand"] == TUDOR_BRAND
+        assert result["normalized_reference"] == TUDOR_REFERENCE
+        assert result["issue_types"] == []
+        assert result["confidence_reference"] >= 50
+        assert result["parser_explanation"]["reference"] != "No reference number was detected."
+
+        display = format_training_row_display(result)
+        assert display["issues"] == []
+        assert display["status_label"] == "Corrected"
+        assert "Missing reference" not in ", ".join(display["issues"])
+        assert "Reference confidence low" not in ", ".join(display["issues"])
+
+    @patch("database.update_parser_training_row")
+    @patch("database.get_message_by_id")
+    @patch("database.get_import_log")
+    @patch("database.get_parser_training_row")
+    def test_save_row_without_dealer_context_still_recalculates_issues(
+        self,
+        mock_get_row: MagicMock,
+        mock_get_import: MagicMock,
+        mock_get_message: MagicMock,
+        mock_update: MagicMock,
+    ) -> None:
+        mock_get_row.return_value = _tudor_pending_row(created_offer_id=None)
+        mock_get_import.return_value = {
+            "id": IMPORT_LOG_ID,
+            "message_id": MESSAGE_ID,
+            "summary": {"message_type": "offer"},
+        }
+        mock_get_message.return_value = None
+        mock_update.side_effect = lambda row_id, **fields: {"id": row_id, **fields}
+
+        result = correct_training_row(
+            ROW_ID,
+            {"brand": TUDOR_BRAND, "reference": TUDOR_REFERENCE},
+            learn_mode="row_only",
+        )
+
+        assert result["status"] == "corrected"
+        assert result["issue_types"] == []
+
+    @patch("database.update_parser_training_row")
+    @patch("database.get_message_by_id")
+    @patch("database.get_import_log")
+    @patch("database.get_parser_training_row")
+    def test_save_row_keeps_pending_review_when_unresolved_issue_remains(
+        self,
+        mock_get_row: MagicMock,
+        mock_get_import: MagicMock,
+        mock_get_message: MagicMock,
+        mock_update: MagicMock,
+    ) -> None:
+        mock_get_row.return_value = _tudor_pending_row(
+            detected_price=2,
+            detected_currency="HKD",
+            usd_price=0,
+            issue_types=["missing_reference", "suspicious_price"],
+        )
+        mock_get_import.return_value = {
+            "id": IMPORT_LOG_ID,
+            "message_id": MESSAGE_ID,
+            "summary": {"message_type": "offer"},
+        }
+        mock_get_message.return_value = {"id": MESSAGE_ID, "dealer_id": "dealer-1"}
+        mock_update.side_effect = lambda row_id, **fields: {"id": row_id, **fields}
+
+        result = correct_training_row(
+            ROW_ID,
+            {"brand": TUDOR_BRAND, "reference": TUDOR_REFERENCE},
+            learn_mode="row_only",
+        )
+
+        assert result["status"] == "pending_review"
+        assert "missing_reference" not in result["issue_types"]
+        assert "suspicious_price" in result["issue_types"]
+
+    @patch("parser_training_engine.create_offer_for_training_row", return_value=(None, False))
+    @patch(
+        "watch_knowledge._load_reference_brand_mapping_index",
+        return_value={TUDOR_REFERENCE: TUDOR_BRAND},
+    )
+    @patch("database.update_parser_training_row")
+    @patch("database.get_message_by_id")
+    @patch("database.get_import_log")
+    @patch("database.get_parser_training_row")
+    def test_save_row_with_learned_mapping_clears_reference_confidence_low(
+        self,
+        mock_get_row: MagicMock,
+        mock_get_import: MagicMock,
+        mock_get_message: MagicMock,
+        mock_update: MagicMock,
+        _mock_index: MagicMock,
+        _mock_create_offer: MagicMock,
+    ) -> None:
+        from watch_knowledge import invalidate_reference_brand_mapping_cache
+
+        invalidate_reference_brand_mapping_cache()
+        mock_get_row.return_value = _tudor_pending_row(created_offer_id=None)
+        mock_get_import.return_value = {
+            "id": IMPORT_LOG_ID,
+            "message_id": MESSAGE_ID,
+            "summary": {"message_type": "offer"},
+        }
+        mock_get_message.return_value = {"id": MESSAGE_ID, "dealer_id": "dealer-1"}
+        mock_update.side_effect = lambda row_id, **fields: {"id": row_id, **fields}
+
+        with patch("database.create_reference_brand_mapping") as mock_create_mapping, patch(
+            "database.reference_brand_mappings_supported",
+            return_value=True,
+        ):
+            mock_create_mapping.return_value = {"id": "mapping-1"}
+            result = correct_training_row(
+                ROW_ID,
+                {
+                    "brand": TUDOR_BRAND,
+                    "reference": TUDOR_REFERENCE,
+                    "learn_reference_brand": True,
+                },
+                learn_mode="row_only",
+            )
+
+        assert result["status"] == "corrected"
+        assert result["issue_types"] == []
+        assert result["confidence_reference"] >= 50

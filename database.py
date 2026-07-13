@@ -56,6 +56,12 @@ WATCH_LOOKUP_PAGE_SIZE = 1000
 PARSER_TRAINING_ROWS_PAGE_SIZE = 1000
 PARSER_TRAINING_REFERENCE_BATCH_SIZE = 50
 PARSER_TRAINING_REFERENCE_QUERY_MAX = 50
+PARSER_TRAINING_REFERENCE_ROW_COLUMNS = (
+    "id, status, created_offer_id, import_log_id, source_message_id, row_index, "
+    "raw_row_text, detected_brand, detected_reference, detected_condition, "
+    "detected_year, detected_card_date, detected_price, detected_currency, "
+    "normalized_brand, normalized_reference, normalized_condition, usd_price"
+)
 IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
 IMPORT_LOG_SUMMARY_MAX_RETRIES = 3
 IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS = 0.5
@@ -3879,6 +3885,14 @@ def update_parser_training_row(row_id: str, **fields: Any) -> Record:
     return _first_row(response.data, "parser_training_rows")
 
 
+def parser_training_reference_lookup_key(reference: str | None) -> str | None:
+    """Normalize a reference for indexed parser_training_rows lookups."""
+    if not reference or not isinstance(reference, str):
+        return None
+    cleaned = reference.strip().upper()
+    return cleaned or None
+
+
 def list_parser_training_rows_for_reference(
     reference: str,
     *,
@@ -3889,9 +3903,7 @@ def list_parser_training_rows_for_reference(
     if not parser_training_rows_supported():
         return []
 
-    from watch_knowledge import normalize_reference
-
-    key = normalize_reference(reference)
+    key = parser_training_reference_lookup_key(reference)
     if not key:
         return []
 
@@ -3899,16 +3911,35 @@ def list_parser_training_rows_for_reference(
     start = max(0, int(offset))
     end = start + batch_limit - 1
 
+    started = time.perf_counter()
     response = (
         get_client()
         .table("parser_training_rows")
-        .select("*")
-        .or_(f"detected_reference.eq.{key},normalized_reference.eq.{key}")
+        .select(PARSER_TRAINING_REFERENCE_ROW_COLUMNS)
+        .eq("normalized_reference", key)
         .order("id")
         .range(start, end)
         .execute()
     )
-    return response.data or []
+    rows = response.data or []
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "list_parser_training_rows_for_reference reference=%s offset=%s limit=%s "
+        "rows=%s elapsed_ms=%s",
+        key,
+        start,
+        batch_limit,
+        len(rows),
+        elapsed_ms,
+    )
+    if elapsed_ms >= 1000:
+        logger.warning(
+            "Slow parser_training_rows reference lookup reference=%s elapsed_ms=%s "
+            "(expected idx_parser_training_rows_norm_reference_id)",
+            key,
+            elapsed_ms,
+        )
+    return rows
 
 
 def list_parser_training_import_summaries(

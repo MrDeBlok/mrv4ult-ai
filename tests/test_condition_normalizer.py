@@ -25,6 +25,11 @@ from request_matching import match_offer_against_requests
         ("New", NEW_CONDITION),
         ("Unworn", NEW_CONDITION),
         ("unworn", NEW_CONDITION),
+        ("Fresh New / Unworn", NEW_CONDITION),
+        ("Fresh New", NEW_CONDITION),
+        ("New / Unworn", NEW_CONDITION),
+        ("New/Unworn", NEW_CONDITION),
+        ("Brand New / Unworn", NEW_CONDITION),
         ("bnib", NEW_CONDITION),
     ],
 )

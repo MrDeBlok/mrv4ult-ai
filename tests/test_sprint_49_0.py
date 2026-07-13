@@ -104,6 +104,25 @@ class TestConditionTraining:
     def test_detect_condition_training_term_from_message(self) -> None:
         assert detect_condition_training_term("Patek 5711 mint full set") == "mint"
         assert detect_condition_training_term("Rolex never worn bnib") == "never worn"
+        assert detect_condition_training_term(
+            "Tudor Royal M2836C1A3-0002 Fresh New / Unworn"
+        ) is None
+
+    def test_fresh_new_unworn_does_not_trigger_fresh_training(self) -> None:
+        watch = {
+            "brand": "Tudor",
+            "reference": "M2836C1A3-0002",
+            "condition": "New",
+            "raw_condition": "Fresh New / Unworn",
+        }
+        flagged = flag_condition_training(
+            watch,
+            message_text="Tudor Royal M2836C1A3-0002 Fresh New / Unworn",
+            rules=[],
+        )
+
+        assert flagged is False
+        assert watch["condition"] == "New"
 
     def test_teach_fresh_rule_applies_on_future_import(self) -> None:
         rules = [

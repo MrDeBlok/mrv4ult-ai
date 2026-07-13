@@ -116,6 +116,16 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
             "classic fusion": "Classic Fusion",
         },
     ),
+    "Tudor": BrandKnowledge(
+        brand="Tudor",
+        reference_patterns=(
+            r"\b(M\d{4,}[A-Z0-9]+-\d{4})\b",
+        ),
+        collection_aliases={
+            "royal": "Royal",
+            "black bay": "Black Bay",
+        },
+    ),
 }
 
 

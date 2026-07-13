@@ -44,6 +44,16 @@ CONDITION_TRAINING_TERM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bclean\b", re.I), "clean"),
 ]
 
+EXPLICIT_NEW_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bfresh\s+new(?:\s*/\s*unworn)?\b", re.I),
+    re.compile(r"\bbrand\s+new\s*/\s*unworn\b", re.I),
+    re.compile(r"\bnew\s*/\s*unworn\b", re.I),
+)
+
+
+def _has_explicit_new_condition_phrase(text: str) -> bool:
+    return any(pattern.search(text) for pattern in EXPLICIT_NEW_CONDITION_PATTERNS)
+
 SCOPE_PRIORITY = {"group": 0, "dealer": 1, "global": 2}
 
 
@@ -105,7 +115,10 @@ def detect_condition_training_term(message_text: str, watch: Record | None = Non
                 haystacks.append(str(value))
 
     for text in haystacks:
+        explicit_new = _has_explicit_new_condition_phrase(text)
         for pattern, label in CONDITION_TRAINING_TERM_PATTERNS:
+            if label == "fresh" and explicit_new:
+                continue
             if pattern.search(text):
                 return label
     return None
@@ -191,9 +204,10 @@ def apply_learning_rules_to_watch(
                 watch["original_currency"] = normalized_value.upper()
                 watch["currency"] = normalized_value.upper()
             elif field_type == "price":
-                try:
-                    parsed_price = int(float(normalized_value.replace(",", "")))
-                except ValueError:
+                from watch_parser import parse_compact_price_amount
+
+                parsed_price = parse_compact_price_amount(normalized_value)
+                if parsed_price is None:
                     continue
                 watch["original_price"] = parsed_price
                 watch["price"] = parsed_price
