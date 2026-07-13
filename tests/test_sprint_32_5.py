@@ -136,12 +136,19 @@ class TestSprint325ActivityPages:
             _import_log(import_id="request", status="request_intent"),
         ]
 
+    @classmethod
+    def _activity_logs_for_tab(cls, *, tab: str, offset: int, limit: int) -> list[dict]:
+        from activity_feed import ACTIVITY_TAB_FILTERS
+
+        filtered = ACTIVITY_TAB_FILTERS[tab](cls._sample_logs())
+        return filtered[offset : offset + limit]
+
     @patch("database.list_activity_import_logs")
     def test_active_page_shows_only_active_items(
         self,
         mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_activity_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.side_effect = self._activity_logs_for_tab
 
         client = TestClient(app)
         response = client.get("/activity")
@@ -161,7 +168,7 @@ class TestSprint325ActivityPages:
         self,
         mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_activity_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.side_effect = self._activity_logs_for_tab
 
         client = TestClient(app)
         response = client.get("/activity/reviewed")
@@ -175,7 +182,7 @@ class TestSprint325ActivityPages:
         self,
         mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        mock_list_activity_import_logs.return_value = self._sample_logs()
+        mock_list_activity_import_logs.side_effect = self._activity_logs_for_tab
 
         client = TestClient(app)
         response = client.get("/activity/ignored")
@@ -191,12 +198,11 @@ class TestSprint325ActivityPages:
         self,
         mock_list_activity_import_logs: MagicMock,
     ) -> None:
-        logs = self._sample_logs()
-        mock_list_activity_import_logs.return_value = logs
+        mock_list_activity_import_logs.side_effect = self._activity_logs_for_tab
 
         client = TestClient(app)
         response = client.get("/activity/all")
 
         assert response.status_code == 200
-        for import_log in logs:
+        for import_log in self._sample_logs():
             assert f'data-href="/activity/{import_log["id"]}"' in response.text

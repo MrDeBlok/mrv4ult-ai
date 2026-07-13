@@ -54,6 +54,8 @@ LOOKUP_IDS_CHUNK_SIZE = 50
 OFFERS_BY_IDS_CHUNK_SIZE = LOOKUP_IDS_CHUNK_SIZE
 WATCH_LOOKUP_PAGE_SIZE = 1000
 PARSER_TRAINING_ROWS_PAGE_SIZE = 1000
+PARSER_TRAINING_REFERENCE_BATCH_SIZE = 50
+PARSER_TRAINING_REFERENCE_QUERY_MAX = 50
 IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
 IMPORT_LOG_SUMMARY_MAX_RETRIES = 3
 IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS = 0.5
@@ -96,6 +98,12 @@ IMPORT_LOG_LIST_COLUMNS_LIGHT = (
     "watches_parsed,new_offers,duplicate_offers,matched_requests,"
     "processing_time,status"
 )
+IMPORT_LOG_ACTIVITY_LIST_COLUMNS = (
+    "id,import_time,created_at,group_name,dealer_whatsapp,dealer_alias,"
+    "watches_parsed,new_offers,duplicate_offers,matched_requests,"
+    "processing_time,status"
+)
+ACTIVITY_IMPORT_LOG_MAX_LIMIT = 50
 IMPORT_LOG_LIST_COLUMNS_FULL = f"{IMPORT_LOG_LIST_COLUMNS_LIGHT},summary"
 # Backward-compatible alias used by older tests and docs.
 IMPORT_LOG_LIST_COLUMNS_BASE = IMPORT_LOG_LIST_COLUMNS_FULL
@@ -1853,6 +1861,25 @@ def import_log_list_columns_light() -> str:
     return IMPORT_LOG_LIST_COLUMNS_LIGHT
 
 
+def activity_import_log_list_columns() -> str:
+    """Return columns required to render the Activity list page."""
+    if user_ownership_columns_supported():
+        return f"{IMPORT_LOG_ACTIVITY_LIST_COLUMNS},imported_by_user_id"
+    return IMPORT_LOG_ACTIVITY_LIST_COLUMNS
+
+
+def _is_supabase_statement_timeout(exc: BaseException) -> bool:
+    """Return True when Supabase/Postgres cancelled a query for statement timeout."""
+    message = str(exc).lower()
+    if "57014" in message or "statement timeout" in message:
+        return True
+    if isinstance(exc, APIError):
+        code = str(getattr(exc, "code", "") or "")
+        if code == "57014":
+            return True
+    return False
+
+
 def import_log_detail_columns_full() -> str:
     """Return the full column projection for import log detail views."""
     if user_ownership_columns_supported():
@@ -2066,20 +2093,35 @@ def list_activity_import_logs(
     offset: int = 0,
     limit: int,
 ) -> list[Record]:
-    """Return bounded activity import logs with tab-aware database filters."""
+    """Return one page of activity import logs with tab-aware database filters."""
     if offset < 0:
         raise ValueError("offset must be zero or greater")
     if limit < 1:
         raise ValueError("limit must be at least 1")
 
+    capped_limit = min(int(limit), ACTIVITY_IMPORT_LOG_MAX_LIMIT)
+    start = max(0, int(offset))
+    end = start + capped_limit - 1
+
     query = (
         get_client()
         .table("import_logs")
-        .select(import_log_list_columns_light())
-        .order("import_time", desc=True)
+        .select(activity_import_log_list_columns())
+        .order("created_at", desc=True)
     )
     query = _apply_activity_tab_filters(query, tab)
-    response = query.range(offset, offset + limit - 1).execute()
+    try:
+        response = query.range(start, end).execute()
+    except APIError as exc:
+        if _is_supabase_statement_timeout(exc):
+            logger.warning(
+                "list_activity_import_logs timed out: tab=%s offset=%s limit=%s",
+                tab,
+                start,
+                capped_limit,
+            )
+            return []
+        raise
     return response.data or []
 
 
@@ -3837,8 +3879,13 @@ def update_parser_training_row(row_id: str, **fields: Any) -> Record:
     return _first_row(response.data, "parser_training_rows")
 
 
-def list_parser_training_rows_for_reference(reference: str) -> list[Record]:
-    """Return training rows that match a reference (any import)."""
+def list_parser_training_rows_for_reference(
+    reference: str,
+    *,
+    limit: int = PARSER_TRAINING_REFERENCE_BATCH_SIZE,
+    offset: int = 0,
+) -> list[Record]:
+    """Return a capped page of training rows that match a reference (any import)."""
     if not parser_training_rows_supported():
         return []
 
@@ -3848,11 +3895,17 @@ def list_parser_training_rows_for_reference(reference: str) -> list[Record]:
     if not key:
         return []
 
+    batch_limit = max(1, min(int(limit), PARSER_TRAINING_REFERENCE_QUERY_MAX))
+    start = max(0, int(offset))
+    end = start + batch_limit - 1
+
     response = (
         get_client()
         .table("parser_training_rows")
         .select("*")
         .or_(f"detected_reference.eq.{key},normalized_reference.eq.{key}")
+        .order("id")
+        .range(start, end)
         .execute()
     )
     return response.data or []

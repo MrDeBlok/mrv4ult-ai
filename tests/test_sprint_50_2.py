@@ -148,7 +148,7 @@ class TestReferenceBrandLearning:
     @patch("database.get_message_by_id")
     @patch("database.get_import_log")
     @patch("database.get_parser_training_row")
-    def test_row_edit_learn_reference_mapping_creates_mapping(
+    def test_row_edit_learn_reference_mapping_creates_mapping_without_sync_reevaluate(
         self,
         mock_get_row: MagicMock,
         mock_get_import: MagicMock,
@@ -176,13 +176,15 @@ class TestReferenceBrandLearning:
         )
 
         mock_create_mapping.assert_called_once()
-        mock_re_eval.assert_called()
+        mock_re_eval.assert_not_called()
+        mock_update.assert_called_once()
+        assert mock_update.call_args.kwargs["normalized_brand"] == PATEK
 
     @patch("parser_training_engine.re_evaluate_parser_training_rows")
     @patch("database.create_reference_brand_mapping")
     @patch("database.reference_brand_mappings_supported", return_value=True)
     @patch("database.get_parser_training_row")
-    def test_bulk_brand_creates_mappings_for_selected_refs(
+    def test_bulk_brand_creates_mappings_without_sync_reevaluate(
         self,
         mock_get_row: MagicMock,
         _supported: MagicMock,
@@ -205,7 +207,7 @@ class TestReferenceBrandLearning:
             )
 
         mock_create_mapping.assert_called_once()
-        mock_re_eval.assert_called()
+        mock_re_eval.assert_not_called()
 
 
 class TestContainerCountsAfterReclassification:

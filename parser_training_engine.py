@@ -28,6 +28,8 @@ TRAINING_ROW_STATUSES = frozenset({
 
 APPROVED_CONTAINER_STATUSES = frozenset({"approved", "valid", "corrected"})
 
+REFERENCE_REEVALUATE_BATCH_SIZE = 50
+
 LEARN_MODES = frozenset({"row_only", "global", "dealer", "group"})
 
 AI_SUGGESTION_DEFAULTS: Record = {
@@ -360,24 +362,72 @@ def _save_reference_brand_mappings(
     return saved
 
 
-def re_evaluate_parser_training_rows(
+def re_evaluate_parser_training_reference_batch(
+    reference: str,
     *,
-    import_log_id: str | None = None,
-    reference: str | None = None,
+    limit: int = REFERENCE_REEVALUATE_BATCH_SIZE,
+    offset: int = 0,
     message_type: str | None = None,
 ) -> Record:
-    """Re-evaluate stored training rows after mapping or rule changes."""
+    """Re-evaluate up to `limit` training rows for one reference."""
     from database import (
-        list_parser_training_rows_for_import,
         list_parser_training_rows_for_reference,
         parser_training_rows_write_guard,
         update_parser_training_row,
     )
 
+    batch_limit = max(1, min(int(limit), REFERENCE_REEVALUATE_BATCH_SIZE))
+    batch_offset = max(0, int(offset))
+
     with parser_training_rows_write_guard():
-        if reference:
-            rows = list_parser_training_rows_for_reference(reference)
-        elif import_log_id:
+        rows = list_parser_training_rows_for_reference(
+            reference,
+            limit=batch_limit,
+            offset=batch_offset,
+        )
+        updated = 0
+        for row in rows:
+            updates = compute_training_row_updates(row, message_type=message_type)
+            if updates and row.get("id"):
+                update_parser_training_row(str(row["id"]), **updates)
+                updated += 1
+
+        return {
+            "reference": reference,
+            "offset": batch_offset,
+            "limit": batch_limit,
+            "rows_checked": len(rows),
+            "rows_updated": updated,
+            "has_more": len(rows) == batch_limit,
+            "next_offset": batch_offset + len(rows),
+        }
+
+
+def re_evaluate_parser_training_rows(
+    *,
+    import_log_id: str | None = None,
+    reference: str | None = None,
+    message_type: str | None = None,
+    limit: int = REFERENCE_REEVALUATE_BATCH_SIZE,
+    offset: int = 0,
+) -> Record:
+    """Re-evaluate stored training rows after mapping or rule changes."""
+    from database import (
+        list_parser_training_rows_for_import,
+        parser_training_rows_write_guard,
+        update_parser_training_row,
+    )
+
+    if reference:
+        return re_evaluate_parser_training_reference_batch(
+            reference,
+            limit=limit,
+            offset=offset,
+            message_type=message_type,
+        )
+
+    with parser_training_rows_write_guard():
+        if import_log_id:
             rows = list_parser_training_rows_for_import(import_log_id)
         else:
             return {"rows_checked": 0, "rows_updated": 0}
@@ -700,9 +750,7 @@ def _correct_training_row_impl(
 
     if corrections.get("learn_reference_brand") and corrections.get("brand"):
         ref = str(watch.get("reference") or row.get("normalized_reference") or row.get("detected_reference") or "")
-        saved_refs = _save_reference_brand_mappings(str(corrections["brand"]), [ref])
-        for saved_ref in saved_refs:
-            re_evaluate_parser_training_rows(reference=saved_ref, message_type=message_type)
+        _save_reference_brand_mappings(str(corrections["brand"]), [ref])
 
     if learn_mode != "row_only":
         _apply_learning_from_correction(
@@ -932,9 +980,7 @@ def _bulk_training_row_action_impl(
                 ).strip()
                 for row_id in row_ids
             ]
-        saved_refs = _save_reference_brand_mappings(brand_name.strip(), refs_to_learn)
-        for saved_ref in saved_refs:
-            re_evaluate_parser_training_rows(reference=saved_ref)
+        _save_reference_brand_mappings(brand_name.strip(), refs_to_learn)
         for row_id in row_ids:
             updated_rows.append(
                 correct_training_row(
@@ -991,9 +1037,7 @@ def _bulk_training_row_action_impl(
             for mapping in (reference_brand_mappings or [])
             if str(mapping.get("reference") or "").strip()
         ]
-        saved_refs = _save_reference_brand_mappings(brand_name.strip(), refs_to_learn)
-        for saved_ref in saved_refs:
-            re_evaluate_parser_training_rows(reference=saved_ref)
+        _save_reference_brand_mappings(brand_name.strip(), refs_to_learn)
         for row_id in row_ids:
             row = get_parser_training_row(row_id)
             if row is None:

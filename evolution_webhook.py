@@ -249,6 +249,14 @@ def _return_webhook_result(trace: dict[str, Any], result: dict[str, Any]) -> dic
 
 def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     """Process one Evolution API webhook payload."""
+
+    message_data = unwrap_message_data(payload.get("data")) or {}
+    logger.warning(
+        "EVENT=%s MESSAGE_ID=%s",
+        payload.get("event"),
+        extract_whatsapp_message_id(message_data),
+    )
+
     log_webhook_payload(payload)
     trace = build_webhook_trace(payload)
     log_webhook_trace(trace, decision="received")

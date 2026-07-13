@@ -12,9 +12,8 @@ from user_visibility import filter_imports_for_user
 
 ACTIVITY_TABS = frozenset({"active", "reviewed", "ignored", "all"})
 ACTIVITY_PAGE_SIZE = 20
-ACTIVITY_OVERFETCH_MULTIPLIER = 3
-ACTIVITY_MAX_SCANNED_ROWS = 180
-ACTIVITY_STATS_SCAN_LIMIT = 150
+ACTIVITY_DB_MAX_LIMIT = 50
+ACTIVITY_STATS_SCAN_LIMIT = 50
 IGNORED_ACTIVITY_STATUSES = frozenset({"noise", "request_intent", "insufficient_evidence"})
 
 Record = dict[str, Any]
@@ -164,18 +163,6 @@ def activity_page_url(tab: str, page: int) -> str:
     return f"{base_path}?page={page}"
 
 
-def activity_scan_budget(
-    page: int,
-    *,
-    page_size: int = ACTIVITY_PAGE_SIZE,
-    max_scanned_rows: int = ACTIVITY_MAX_SCANNED_ROWS,
-) -> int:
-    """Return the maximum import rows to read from the database for one page."""
-    safe_page = max(page, 1)
-    needed_rows = safe_page * page_size
-    return min(max_scanned_rows, needed_rows * ACTIVITY_OVERFETCH_MULTIPLIER)
-
-
 def load_activity_stats_bounded(user: Record | None) -> dict[str, int]:
     """Return activity header counts from a bounded recent import scan."""
     from database import list_activity_import_logs
@@ -187,26 +174,6 @@ def load_activity_stats_bounded(user: Record | None) -> dict[str, int]:
     )
     visible = filter_discarded_import_logs(filter_imports_for_user(rows, user))
     return activity_feed_counts(visible)
-
-
-def _paginate_visible_imports(
-    import_logs: list[Record],
-    *,
-    skip: int,
-    page_size: int,
-    scan_budget: int,
-    fetched_row_count: int,
-) -> tuple[list[Record], bool]:
-    """Slice visible imports for the requested page and compute has_next."""
-    page_imports = import_logs[skip : skip + page_size]
-    has_next = len(import_logs) > skip + len(page_imports)
-    if (
-        not has_next
-        and len(page_imports) == page_size
-        and fetched_row_count >= scan_budget
-    ):
-        has_next = True
-    return page_imports, has_next
 
 
 @dataclass(frozen=True)
@@ -228,31 +195,18 @@ def load_activity_page(
     *,
     page: int,
     page_size: int = ACTIVITY_PAGE_SIZE,
-    max_scanned_rows: int = ACTIVITY_MAX_SCANNED_ROWS,
 ) -> ActivityPageResult:
-    """Load one activity tab page with database tab filters and bounded scanning."""
+    """Load one activity tab page with database pagination."""
     from database import list_activity_import_logs
 
-    tab_filter = ACTIVITY_TAB_FILTERS.get(tab, filter_active_activity_imports)
     safe_page = max(page, 1)
     skip = (safe_page - 1) * page_size
-    scan_budget = activity_scan_budget(
-        safe_page,
-        page_size=page_size,
-        max_scanned_rows=max_scanned_rows,
-    )
+    fetch_limit = min(page_size, ACTIVITY_DB_MAX_LIMIT)
 
     stats = load_activity_stats_bounded(user)
-    db_rows = list_activity_import_logs(tab=tab, offset=0, limit=scan_budget)
-    visible = filter_discarded_import_logs(filter_imports_for_user(db_rows, user))
-    tab_rows = tab_filter(visible)
-    page_imports, has_next = _paginate_visible_imports(
-        tab_rows,
-        skip=skip,
-        page_size=page_size,
-        scan_budget=scan_budget,
-        fetched_row_count=len(db_rows),
-    )
+    db_rows = list_activity_import_logs(tab=tab, offset=skip, limit=fetch_limit)
+    page_imports = filter_discarded_import_logs(filter_imports_for_user(db_rows, user))
+    has_next = len(db_rows) >= fetch_limit
 
     showing_from = skip + 1 if page_imports else 0
     showing_to = skip + len(page_imports)

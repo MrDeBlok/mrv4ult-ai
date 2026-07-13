@@ -65,7 +65,7 @@ class TestLoadActivityPage:
         mock_list_activity: MagicMock,
         _mock_stats: MagicMock,
     ) -> None:
-        rows = [_import_log(f"log-{index}") for index in range(25)]
+        rows = [_import_log(f"log-{index}") for index in range(20)]
         mock_list_activity.return_value = rows
 
         result = load_activity_page(ADMIN_USER, "active", page=1)
@@ -79,13 +79,15 @@ class TestLoadActivityPage:
 
     @patch("activity_feed.load_activity_stats_bounded", return_value={"offers": 45, "needs_review": 0, "ignored": 0})
     @patch("database.list_activity_import_logs")
-    def test_page_two_skips_first_twenty_matches(
+    def test_page_two_uses_database_offset(
         self,
         mock_list_activity: MagicMock,
         _mock_stats: MagicMock,
     ) -> None:
-        rows = [_import_log(f"log-{index:02d}") for index in range(45)]
-        mock_list_activity.return_value = rows
+        mock_list_activity.side_effect = [
+            [_import_log(f"log-{index:02d}") for index in range(20)],
+            [_import_log(f"log-{index:02d}") for index in range(20, 40)],
+        ]
 
         page_one = load_activity_page(ADMIN_USER, "all", page=1)
         page_two = load_activity_page(ADMIN_USER, "all", page=2)
@@ -95,22 +97,24 @@ class TestLoadActivityPage:
         assert len(page_two.imports) == ACTIVITY_PAGE_SIZE
         assert page_two.imports[0]["id"] == "log-20"
         assert page_two.has_previous is True
+        assert mock_list_activity.call_args_list[1].kwargs["offset"] == ACTIVITY_PAGE_SIZE
 
     @patch("activity_feed.load_activity_stats_bounded", return_value={"offers": 0, "needs_review": 0, "ignored": 0})
     @patch("database.list_activity_import_logs")
-    def test_page_two_uses_single_bounded_scan(
+    def test_page_two_requests_offset_twenty(
         self,
         mock_list_activity: MagicMock,
         _mock_stats: MagicMock,
     ) -> None:
         mock_list_activity.return_value = [
-            _import_log(f"log-{index:02d}") for index in range(45)
+            _import_log(f"log-{index:02d}") for index in range(20, 40)
         ]
 
         load_activity_page(ADMIN_USER, "all", page=2)
 
         assert mock_list_activity.call_count == 1
-        assert mock_list_activity.call_args.kwargs["limit"] == 120
+        assert mock_list_activity.call_args.kwargs["offset"] == ACTIVITY_PAGE_SIZE
+        assert mock_list_activity.call_args.kwargs["limit"] == ACTIVITY_PAGE_SIZE
 
     @patch("activity_feed.load_activity_stats_bounded", return_value={"offers": 0, "needs_review": 0, "ignored": 0})
     @patch("database.list_activity_import_logs")

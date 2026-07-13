@@ -26,6 +26,21 @@
 {% if bulk_saved %}
 <div class="alert alert-success" role="alert">Bulk action applied to selected rows.</div>
 {% endif %}
+{% if mapping_saved %}
+<div class="alert alert-info" role="alert">
+    Mapping saved. Matching rows will be updated by re-evaluate job.
+</div>
+{% endif %}
+{% if ref_reevaluated %}
+<div class="alert alert-success" role="alert">
+    Reference re-evaluate for <strong>{{ ref_reevaluate_reference }}</strong>:
+    {{ ref_reevaluate_checked }} row(s) checked,
+    {{ ref_reevaluate_updated }} row(s) updated.
+    {% if ref_reevaluate_has_more %}
+    More matching rows remain — run <strong>Apply mapping to matching rows</strong> again.
+    {% endif %}
+</div>
+{% endif %}
 
 <section class="card shadow-sm mb-4">
     <div class="card-body p-3">
@@ -118,6 +133,20 @@
                     <input class="form-check-input" type="checkbox" name="map_reference" value="{{ ref }}" form="bulk-action-form" checked>
                     {{ ref }}
                 </label>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="mt-3 border rounded p-2">
+            <div class="small text-muted mb-2">Apply saved reference-brand mappings to matching rows (50 per batch)</div>
+            <div class="d-flex flex-wrap gap-2">
+                {% for ref in unique_references %}
+                <form method="post" action="{{ reevaluate_reference_action_url }}" class="d-inline">
+                    <input type="hidden" name="reference" value="{{ ref }}">
+                    <input type="hidden" name="import_id" value="{{ import_log.id }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        Apply mapping to matching rows ({{ ref }})
+                    </button>
+                </form>
                 {% endfor %}
             </div>
         </div>

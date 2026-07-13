@@ -70,6 +70,7 @@ from parser_training_engine import (
     correct_training_row,
     re_evaluate_parser_training_import,
     re_evaluate_parser_training_imports,
+    re_evaluate_parser_training_reference_batch,
 )
 from parser_training_reprocess import teach_condition_and_reprocess
 from import_status import (
@@ -2926,12 +2927,36 @@ async def parser_training_debug_import(request: Request, import_log_id: str) -> 
     return JSONResponse(trace)
 
 
-def _parser_training_rows_url(import_id: str, *, saved: bool = False, bulk_saved: bool = False) -> str:
-    suffix = ""
+def _parser_training_rows_url(
+    import_id: str,
+    *,
+    saved: bool = False,
+    bulk_saved: bool = False,
+    mapping_saved: bool = False,
+    ref_reevaluated: bool = False,
+    reference: str = "",
+    rows_checked: int | None = None,
+    rows_updated: int | None = None,
+    has_more: bool = False,
+) -> str:
+    params: dict[str, str] = {}
     if saved:
-        suffix = "?saved=1"
-    elif bulk_saved:
-        suffix = "?bulk_saved=1"
+        params["saved"] = "1"
+    if bulk_saved:
+        params["bulk_saved"] = "1"
+    if mapping_saved:
+        params["mapping_saved"] = "1"
+    if ref_reevaluated:
+        params["ref_reevaluated"] = "1"
+    if reference.strip():
+        params["reference"] = reference.strip()
+    if rows_checked is not None:
+        params["checked"] = str(rows_checked)
+    if rows_updated is not None:
+        params["updated"] = str(rows_updated)
+    if has_more:
+        params["has_more"] = "1"
+    suffix = f"?{urlencode(params)}" if params else ""
     return f"/parser-training/{import_id}/rows{suffix}"
 
 
@@ -2968,6 +2993,15 @@ async def parser_training_rows_page(request: Request, import_id: str) -> HTMLRes
             "learning_enabled": parser_learning_rules_supported(),
             "saved": request.query_params.get("saved") == "1",
             "bulk_saved": request.query_params.get("bulk_saved") == "1",
+            "mapping_saved": request.query_params.get("mapping_saved") == "1",
+            "ref_reevaluated": request.query_params.get("ref_reevaluated") == "1",
+            "ref_reevaluate_reference": request.query_params.get("reference", ""),
+            "ref_reevaluate_checked": request.query_params.get("checked", ""),
+            "ref_reevaluate_updated": request.query_params.get("updated", ""),
+            "ref_reevaluate_has_more": request.query_params.get("has_more") == "1",
+            "reevaluate_reference_action_url": str(
+                request.url_for("parser_training_reevaluate_reference")
+            ),
         },
     )
 
@@ -3034,7 +3068,70 @@ async def parser_training_row_correct(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return RedirectResponse(url=_parser_training_rows_url(import_id, saved=True), status_code=303)
+    mapping_saved = (
+        learn_reference_brand.strip().lower() in {"1", "true", "on", "yes"}
+        and brand.strip()
+    )
+    return RedirectResponse(
+        url=_parser_training_rows_url(import_id, saved=True, mapping_saved=mapping_saved),
+        status_code=303,
+    )
+
+
+@app.post("/parser-training/re-evaluate-reference", name="parser_training_reevaluate_reference")
+async def parser_training_reevaluate_reference(
+    request: Request,
+    reference: str = Form(...),
+    import_id: str = Form(""),
+    limit: int = Form(50),
+    offset: int = Form(0),
+) -> RedirectResponse:
+    """Re-evaluate parser_training_rows for one reference in batches."""
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    cleaned_reference = reference.strip()
+    if not cleaned_reference:
+        raise HTTPException(status_code=400, detail="Reference is required")
+
+    message_type: str | None = None
+    if import_id.strip():
+        import_log = get_import_log(import_id.strip())
+        if import_log is None or not _can_access_import_log(user, import_log):
+            raise HTTPException(status_code=404, detail="Import not found")
+        message_type = (import_log.get("summary") or {}).get("message_type")
+
+    with parser_training_rows_write_guard():
+        result = re_evaluate_parser_training_reference_batch(
+            cleaned_reference,
+            limit=limit,
+            offset=offset,
+            message_type=message_type,
+        )
+
+    redirect_import_id = import_id.strip()
+    if redirect_import_id:
+        return RedirectResponse(
+            url=_parser_training_rows_url(
+                redirect_import_id,
+                ref_reevaluated=True,
+                reference=cleaned_reference,
+                rows_checked=int(result.get("rows_checked") or 0),
+                rows_updated=int(result.get("rows_updated") or 0),
+                has_more=bool(result.get("has_more")),
+            ),
+            status_code=303,
+        )
+
+    params = urlencode(
+        {
+            "ref_reevaluated": "1",
+            "reference": cleaned_reference,
+            "checked": str(result.get("rows_checked") or 0),
+            "updated": str(result.get("rows_updated") or 0),
+            **({"has_more": "1"} if result.get("has_more") else {}),
+        }
+    )
+    return RedirectResponse(url=f"/parser-training?{params}", status_code=303)
 
 
 @app.post("/parser-training/{import_id}/bulk-action")
@@ -3081,7 +3178,15 @@ async def parser_training_bulk_action(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return RedirectResponse(url=_parser_training_rows_url(import_id, bulk_saved=True), status_code=303)
+    mapping_saved = action in {"set_brand", "map_references"} and brand_name.strip()
+    return RedirectResponse(
+        url=_parser_training_rows_url(
+            import_id,
+            bulk_saved=True,
+            mapping_saved=bool(mapping_saved),
+        ),
+        status_code=303,
+    )
 
 
 @app.get("/ai-workbench-legacy", include_in_schema=False)
