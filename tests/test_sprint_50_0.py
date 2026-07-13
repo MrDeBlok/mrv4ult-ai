@@ -155,6 +155,7 @@ class TestSyncTrainingRowsAfterIngest:
 
 
 class TestRowCorrection:
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
     @patch("database.update_parser_training_row")
     @patch("parser_training_engine.create_offer_for_training_row")
     @patch("database.get_message_by_id")
@@ -167,6 +168,7 @@ class TestRowCorrection:
         mock_get_message: MagicMock,
         mock_create_offer: MagicMock,
         mock_update: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         mock_get_row.return_value = {
             "id": ROW_ID_INVALID,

@@ -642,6 +642,63 @@ def link_offer_to_import_source(
     get_client().table("offers").update(payload).eq("id", cleaned_offer_id).execute()
 
 
+def update_offer_from_training(
+    offer_id: str,
+    *,
+    watch: Record,
+    message_id: str | None = None,
+    line_index: int | None = None,
+) -> Record:
+    """Update an existing offer from a finalized parser-training payload."""
+    from condition_normalizer import normalize_condition_value
+
+    cleaned_offer_id = str(offer_id or "").strip()
+    if not _is_valid_uuid(cleaned_offer_id):
+        raise ValueError("Invalid offer id")
+
+    existing = get_offer_by_id(cleaned_offer_id)
+    if existing is None:
+        raise ValueError("Offer not found")
+
+    watch_row, _ = find_or_create_watch(
+        brand=watch.get("brand"),
+        reference=watch.get("reference"),
+        model=watch.get("model"),
+        dial=watch.get("dial"),
+        bracelet=watch.get("bracelet"),
+    )
+
+    production_year = watch.get("production_year")
+    if not isinstance(production_year, int):
+        production_year = None
+
+    payload: Record = {
+        "watch_id": watch_row["id"],
+        "condition": _storage_value(normalize_condition_value(watch.get("condition"))),
+        "production_year": production_year,
+        "card_date": _storage_value(watch.get("card_date")),
+        "notes": _storage_value(watch.get("notes")),
+        "original_price": watch.get("original_price") or watch.get("price"),
+        "original_currency": _storage_value(watch.get("original_currency") or watch.get("currency")),
+        "usd_price": watch.get("usd_price"),
+        "exchange_rate_to_usd": watch.get("exchange_rate_to_usd"),
+    }
+    if message_id and _is_valid_uuid(message_id.strip()):
+        payload["message_id"] = message_id.strip()
+    if line_index is not None:
+        payload["line_index"] = line_index
+
+    response = (
+        get_client()
+        .table("offers")
+        .update(payload)
+        .eq("id", cleaned_offer_id)
+        .execute()
+    )
+    updated = _first_row(response.data, "offers")
+    return updated or {**existing, **payload, "id": cleaned_offer_id}
+
+
 def link_import_log_to_summary_offers(
     import_log_id: str,
     message_id: str,
@@ -1409,7 +1466,11 @@ def query_active_offers_for_watch_ids(watch_ids: list[str]) -> list[Record]:
         if contact_type_column_supported()
         else "dealers(whatsapp_id)"
     )
-    select_fields = f"id, watch_id, usd_price, condition, {dealer_fields}"
+    select_fields = (
+        "id, watch_id, usd_price, condition, production_year, card_date, "
+        "original_price, original_currency, watches(brand, reference)"
+        f", {dealer_fields}"
+    )
     return _query_table_in_id_chunks(
         "offers",
         select_fields,
@@ -3160,6 +3221,88 @@ def create_reference_brand_mapping(
     else:
         response = get_client().table("reference_brand_mappings").insert(payload).execute()
     return _first_row(response.data, "reference_brand_mappings")
+
+
+def upsert_reference_brand_mapping(
+    *,
+    reference: str,
+    brand_name: str,
+    source: str = "manual",
+    source_confidence: str = "high",
+    dry_run: bool = True,
+) -> Record:
+    """Create or update a trusted reference-brand mapping with conflict reporting."""
+    from watch_knowledge import normalize_reference
+
+    reference_key = normalize_reference(reference)
+    if not reference_key:
+        raise ValueError("Reference is required")
+    cleaned_brand = brand_name.strip()
+    if not cleaned_brand:
+        raise ValueError("Brand name is required")
+
+    result: Record = {
+        "reference": reference.strip().upper(),
+        "reference_key": reference_key,
+        "brand_name": cleaned_brand,
+        "source": source,
+        "source_confidence": source_confidence,
+        "dry_run": dry_run,
+        "conflict": None,
+        "action": "skipped",
+    }
+
+    if not reference_brand_mappings_supported():
+        result["action"] = "unsupported"
+        return result
+
+    existing = (
+        get_client()
+        .table("reference_brand_mappings")
+        .select("id,brand_name,status,source")
+        .eq("reference_key", reference_key)
+        .limit(1)
+        .execute()
+    )
+    existing_row = (existing.data or [None])[0]
+    if existing_row:
+        current_brand = str(existing_row.get("brand_name") or "")
+        if current_brand and current_brand != cleaned_brand:
+            result["conflict"] = {
+                "reference_key": reference_key,
+                "existing_brand": current_brand,
+                "proposed_brand": cleaned_brand,
+                "existing_source": existing_row.get("source"),
+            }
+            if source_confidence not in {"high", "verified", "authority"}:
+                result["action"] = "conflict_blocked"
+                return result
+        if dry_run:
+            result["action"] = "would_update" if current_brand != cleaned_brand else "unchanged"
+            return result
+        return {
+            **result,
+            "action": "updated",
+            "row": create_reference_brand_mapping(
+                reference=reference,
+                brand_name=cleaned_brand,
+                source=source,
+            ),
+        }
+
+    if dry_run:
+        result["action"] = "would_insert"
+        return result
+
+    return {
+        **result,
+        "action": "inserted",
+        "row": create_reference_brand_mapping(
+            reference=reference,
+            brand_name=cleaned_brand,
+            source=source,
+        ),
+    }
 
 
 def list_pending_unknown_brands() -> list[Record]:

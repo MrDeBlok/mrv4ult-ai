@@ -102,7 +102,9 @@ def load_active_offer_pools_by_watch_ids(
     pools: dict[str, list[tuple[str, int, str | None]]] = {
         watch_id: [] for watch_id in unique_watch_ids
     }
-    for row in query_active_offers_for_watch_ids(unique_watch_ids):
+    from market_price_confidence import filter_market_eligible_offer_rows
+
+    for row in filter_market_eligible_offer_rows(query_active_offers_for_watch_ids(unique_watch_ids)):
         if not is_business_dealer_relation(row.get("dealers"), has_offers=True):
             continue
         watch_id = row.get("watch_id")
@@ -248,6 +250,10 @@ def _build_debug(
     same_condition_entries: list[tuple[str, int, str | None]],
     reason: str | None,
 ) -> Record:
+    from market_price_confidence import build_market_price_debug
+
+    merged_context = {**watch, **row}
+    market_debug = build_market_price_debug(merged_context)
     return {
         "watch_id": watch_id or "—",
         "brand": row.get("brand") or watch.get("brand") or "—",
@@ -263,6 +269,12 @@ def _build_debug(
             for entry in same_condition_entries
         ],
         "market_price_unknown_reason": reason or "—",
+        "parser_confidence": market_debug.get("parser_confidence"),
+        "market_price_confidence": market_debug.get("market_price_confidence"),
+        "market_price_eligible": market_debug.get("market_price_eligible"),
+        "market_price_exclusion_reasons": market_debug.get("market_price_exclusion_reasons"),
+        "market_price_threshold": market_debug.get("market_price_threshold"),
+        "market_price_component_scores": market_debug.get("market_price_component_scores"),
     }
 
 

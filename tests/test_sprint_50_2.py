@@ -140,6 +140,7 @@ class TestReferenceBrandLearning:
         assert mock_update.call_args.kwargs["status"] == "approved"
         assert mock_update.call_args.kwargs["normalized_brand"] == PATEK
 
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
     @patch("parser_training_engine.create_offer_for_training_row", return_value=({"id": "offer-1"}, True))
     @patch("parser_training_engine.re_evaluate_parser_training_rows")
     @patch("database.create_reference_brand_mapping")
@@ -158,6 +159,7 @@ class TestReferenceBrandLearning:
         mock_create_mapping: MagicMock,
         mock_re_eval: MagicMock,
         _mock_create_offer: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         mock_get_row.return_value = _training_db_row()
         mock_get_import.return_value = {

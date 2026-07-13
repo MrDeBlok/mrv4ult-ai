@@ -55,6 +55,18 @@ def _watch_to_detected_fields(watch: Record) -> Record:
     }
 
 
+def _watch_to_audit_detected_fields(watch: Record) -> Record:
+    return {
+        "brand": watch.get("brand"),
+        "reference": watch.get("reference"),
+        "condition": watch.get("condition"),
+        "year": str(watch.get("production_year") or "") or None,
+        "card_date": watch.get("card_date"),
+        "price": watch.get("original_price") or watch.get("price"),
+        "currency": watch.get("original_currency") or watch.get("currency"),
+    }
+
+
 def _normalized_fields_from_watch(watch: Record) -> Record:
     return {
         "normalized_brand": watch.get("brand"),
@@ -146,6 +158,9 @@ def enrich_watch_for_training_evaluation(
     """Apply reference mappings and confidence metadata before safety checks."""
     updated = apply_reference_brand_mapping_to_watch(dict(watch))
     attach_parser_confidence_metadata(updated, message_type=message_type)
+    from market_price_confidence import attach_market_price_metadata
+
+    attach_market_price_metadata(updated)
     return updated
 
 
@@ -174,24 +189,36 @@ def _training_row_update_fields(
     message_type: str | None = None,
     blocked: bool,
     issue_types: list[str],
+    preserve_parser_confidence: bool = False,
+    audit: Record | None = None,
 ) -> Record:
     field_confidences = compute_field_confidences(watch, message_type=message_type)
     status = _resolve_training_row_status(row, blocked=blocked, issue_types=issue_types)
-    return {
+    explanations = build_training_parser_explanation(watch, message_type=message_type)
+    if audit:
+        explanations = {**explanations, "audit": audit}
+
+    updates: Record = {
         "normalized_brand": watch.get("brand"),
         "normalized_reference": watch.get("reference"),
         "normalized_condition": watch.get("condition"),
         "usd_price": watch.get("usd_price"),
-        "confidence_overall": compute_training_overall_confidence(field_confidences),
-        "confidence_brand": field_confidences.get("brand_confidence"),
-        "confidence_reference": field_confidences.get("reference_confidence"),
-        "confidence_condition": optional_condition_confidence(watch),
-        "confidence_price": field_confidences.get("price_confidence"),
-        "confidence_intent": field_confidences.get("intent_confidence"),
-        "parser_explanation": build_training_parser_explanation(watch, message_type=message_type),
+        "parser_explanation": explanations,
         "status": status,
         "issue_types": issue_types,
     }
+    if not preserve_parser_confidence:
+        updates.update(
+            {
+                "confidence_overall": compute_training_overall_confidence(field_confidences),
+                "confidence_brand": field_confidences.get("brand_confidence"),
+                "confidence_reference": field_confidences.get("reference_confidence"),
+                "confidence_condition": optional_condition_confidence(watch),
+                "confidence_price": field_confidences.get("price_confidence"),
+                "confidence_intent": field_confidences.get("intent_confidence"),
+            }
+        )
+    return updates
 
 
 def compute_training_row_updates(
@@ -515,6 +542,13 @@ def build_training_row_payload(
     field_confidences = compute_field_confidences(enriched, message_type=message_type)
     overall_confidence = compute_training_overall_confidence(field_confidences)
     explanations = build_training_parser_explanation(enriched, message_type=message_type)
+    explanations["audit"] = {
+        "original_confidence_overall": overall_confidence,
+        "original_detected": _watch_to_audit_detected_fields(enriched),
+        "reviewed_by_human": False,
+        "corrected_fields": [],
+        "approval_status": "parsed",
+    }
 
     return {
         "import_log_id": import_log_id,
@@ -669,35 +703,31 @@ def backfill_parser_training_rows_for_recent_imports(
 
 
 def watch_from_training_row(row: Record) -> Record:
-    """Reconstruct a parsed watch dict from a training row."""
-    return {
-        "brand": row.get("normalized_brand") or row.get("detected_brand"),
-        "reference": row.get("normalized_reference") or row.get("detected_reference"),
-        "condition": row.get("normalized_condition") or row.get("detected_condition"),
-        "production_year": int(row["detected_year"]) if str(row.get("detected_year") or "").isdigit() else row.get("detected_year"),
-        "card_date": row.get("detected_card_date"),
-        "original_price": row.get("detected_price"),
-        "price": row.get("detected_price"),
-        "original_currency": row.get("detected_currency"),
-        "currency": row.get("detected_currency"),
-        "usd_price": row.get("usd_price"),
-        "source_line": row.get("raw_row_text"),
-    }
+    """Reconstruct the current final offer payload from a training row."""
+    from final_offer_payload import build_final_offer_payload
+
+    return build_final_offer_payload(row)
 
 
 def apply_corrections_to_watch(watch: Record, corrections: Record) -> Record:
     """Apply user corrections to a watch dict."""
-    from parser_workbench import apply_row_field_overrides
+    from final_offer_payload import build_final_offer_payload
 
-    updated = dict(watch)
-    apply_row_field_overrides(updated, corrections)
-    if corrections.get("year"):
-        year = str(corrections["year"]).strip()
-        if year.isdigit():
-            updated["production_year"] = int(year)
-    if corrections.get("card_date"):
-        updated["card_date"] = str(corrections["card_date"]).strip()
-    return updated
+    row = {
+        "detected_brand": watch.get("brand"),
+        "detected_reference": watch.get("reference"),
+        "detected_condition": watch.get("condition"),
+        "detected_year": watch.get("production_year"),
+        "detected_card_date": watch.get("card_date"),
+        "detected_price": watch.get("original_price") or watch.get("price"),
+        "detected_currency": watch.get("original_currency") or watch.get("currency"),
+        "normalized_brand": watch.get("brand"),
+        "normalized_reference": watch.get("reference"),
+        "normalized_condition": watch.get("condition"),
+        "usd_price": watch.get("usd_price"),
+        "raw_row_text": watch.get("source_line"),
+    }
+    return build_final_offer_payload(row, corrections)
 
 
 def create_offer_for_training_row(
@@ -707,12 +737,16 @@ def create_offer_for_training_row(
     message_id: str,
     dealer_id: str,
     line_index: int,
+    final_watch: Record | None = None,
 ) -> tuple[Record | None, bool]:
     """Create an active offer for one training row when it passes safety gates."""
     from database import find_or_create_watch, insert_offer, link_offer_to_import_source
+    from final_offer_payload import final_offer_training_context
 
-    watch = enrich_watch_for_training_evaluation(watch_from_training_row(row))
-    if should_block_active_offer(watch):
+    base_watch = dict(final_watch) if final_watch else watch_from_training_row(row)
+    watch = enrich_watch_for_training_evaluation(base_watch)
+    evaluation_context = final_offer_training_context(row, watch)
+    if should_block_active_offer(evaluation_context):
         return None, False
 
     watch_row, _ = find_or_create_watch(
@@ -766,6 +800,128 @@ def correct_training_row(
         )
 
 
+def sync_import_log_summary_for_training_row(
+    import_log: Record,
+    *,
+    row_index: int,
+    final_watch: Record,
+    offer_id: str | None,
+    market_price_debug: Record | None = None,
+) -> Record:
+    """Refresh import summary rows and offer_watches with corrected final values."""
+    from database import patch_import_log
+
+    summary = dict(import_log.get("summary") or {})
+    row_updates = {
+        "brand": final_watch.get("brand"),
+        "reference": final_watch.get("reference"),
+        "condition": final_watch.get("condition"),
+        "raw_condition": final_watch.get("raw_condition"),
+        "condition_source": final_watch.get("condition_source"),
+        "condition_confidence": final_watch.get("condition_confidence"),
+        "condition_explicit": final_watch.get("condition_explicit"),
+        "production_year": final_watch.get("production_year"),
+        "card_date": final_watch.get("card_date"),
+        "original_price": final_watch.get("original_price") or final_watch.get("price"),
+        "original_currency": final_watch.get("original_currency") or final_watch.get("currency"),
+        "usd_price": final_watch.get("usd_price"),
+        "offer_id": offer_id,
+        "reviewed_by_human": True,
+    }
+    if market_price_debug:
+        row_updates.update(
+            {
+                "parser_confidence": market_price_debug.get("parser_confidence"),
+                "market_price_confidence": market_price_debug.get("market_price_confidence"),
+                "market_price_eligible": market_price_debug.get("market_price_eligible"),
+                "market_price_exclusion_reasons": market_price_debug.get("market_price_exclusion_reasons"),
+                "market_price_threshold": market_price_debug.get("market_price_threshold"),
+            }
+        )
+
+    rows = list(summary.get("rows") or [])
+    if 0 <= row_index < len(rows) and isinstance(rows[row_index], dict):
+        rows[row_index] = {**rows[row_index], **row_updates}
+        summary["rows"] = rows
+
+    for key in ("offer_watches", "parsed_watches"):
+        watches = list(summary.get(key) or [])
+        if 0 <= row_index < len(watches) and isinstance(watches[row_index], dict):
+            watches[row_index] = {
+                **watches[row_index],
+                **final_watch,
+                "reviewed_by_human": True,
+            }
+            summary[key] = watches
+
+    return patch_import_log(str(import_log["id"]), summary=summary)
+
+
+def _persist_corrected_offer(
+    *,
+    row: Record,
+    final_watch: Record,
+    import_log: Record,
+    message: Record | None,
+    blocked: bool,
+) -> str | None:
+    """Create or update the live offer for a corrected training row."""
+    from database import (
+        get_offer_by_id,
+        is_valid_uuid,
+        link_offer_to_import_source,
+        update_offer_from_training,
+    )
+
+    offer_id = row.get("created_offer_id")
+    line_index = int(row.get("row_index") or 0)
+    message_id = str((message or {}).get("id") or import_log.get("message_id") or "")
+    import_log_id = str(import_log.get("id") or "")
+
+    if blocked:
+        return str(offer_id) if offer_id else None
+
+    if offer_id and is_valid_uuid(str(offer_id)):
+        existing = get_offer_by_id(str(offer_id))
+        if existing is None:
+            offer_id = None
+        else:
+            updated = update_offer_from_training(
+                str(offer_id),
+                watch=final_watch,
+                message_id=message_id or None,
+                line_index=line_index,
+            )
+            if message_id and import_log_id:
+                link_offer_to_import_source(
+                    str(offer_id),
+                    message_id=message_id,
+                    source_import_log_id=import_log_id,
+                )
+            return str(updated.get("id") or offer_id)
+
+    dealer_id = None
+    if message:
+        dealer_id = message.get("dealer_id")
+    if not dealer_id and offer_id:
+        existing = get_offer_by_id(str(offer_id))
+        if existing:
+            dealer_id = existing.get("dealer_id")
+
+    if dealer_id and message_id and import_log_id:
+        offer_row, _ = create_offer_for_training_row(
+            row,
+            import_log_id=import_log_id,
+            message_id=message_id,
+            dealer_id=str(dealer_id),
+            line_index=line_index,
+            final_watch=final_watch,
+        )
+        if offer_row:
+            return str(offer_row["id"])
+    return str(offer_id) if offer_id else None
+
+
 def _correct_training_row_impl(
     row_id: str,
     corrections: Record,
@@ -782,17 +938,30 @@ def _correct_training_row_impl(
         get_parser_training_row,
         update_parser_training_row,
     )
+    from final_offer_payload import (
+        apply_manual_review_trust,
+        build_final_offer_payload,
+        build_training_row_audit,
+        final_offer_training_context,
+    )
+    from market_price_confidence import build_market_price_debug
 
     row = get_parser_training_row(row_id)
     if row is None:
         raise ValueError("Training row not found")
 
     import_log = get_import_log(str(row.get("import_log_id") or ""))
-    message_type = None
-    if import_log:
-        message_type = (import_log.get("summary") or {}).get("message_type")
+    if import_log is None:
+        raise ValueError("Import log not found")
 
-    watch = apply_corrections_to_watch(watch_from_training_row(row), corrections)
+    message_type = (import_log.get("summary") or {}).get("message_type")
+    message = get_message_by_id(
+        str(row.get("source_message_id") or import_log.get("message_id") or "")
+    )
+
+    final_payload = build_final_offer_payload(row, corrections)
+    watch = enrich_watch_for_training_evaluation(dict(final_payload), message_type=message_type)
+    watch = apply_manual_review_trust(watch, corrections)
 
     if corrections.get("learn_reference_brand") and corrections.get("brand"):
         ref = str(
@@ -802,9 +971,8 @@ def _correct_training_row_impl(
             or ""
         )
         _save_reference_brand_mappings(str(corrections["brand"]), [ref])
-
-    watch = enrich_watch_for_training_evaluation(watch, message_type=message_type)
-    watch = _apply_manual_correction_trust(watch, corrections)
+        watch = enrich_watch_for_training_evaluation(dict(watch), message_type=message_type)
+        watch = apply_manual_review_trust(watch, corrections)
 
     if learn_mode != "row_only":
         _apply_learning_from_correction(
@@ -816,35 +984,39 @@ def _correct_training_row_impl(
             created_by_user_id=created_by_user_id,
         )
 
-    message = get_message_by_id(str(row.get("source_message_id") or import_log.get("message_id") or "")) if import_log else None
-    dealer = str((message or {}).get("dealer_id") or "") or None
+    evaluation_context = final_offer_training_context(row, watch)
+    blocked, issue_types = evaluate_offer_safety(evaluation_context, message_type=message_type)
+    market_price_debug = build_market_price_debug(evaluation_context)
+    audit = build_training_row_audit(
+        row,
+        corrections=corrections,
+        created_by_user_id=created_by_user_id,
+        final_watch=watch,
+        market_price_debug=market_price_debug,
+    )
 
-    blocked, issue_types = evaluate_offer_safety(watch, message_type=message_type)
-    offer_id = row.get("created_offer_id")
-    persisted_detected_fields = {
-        "detected_year": str(watch.get("production_year") or corrections.get("year") or "") or None,
-        "detected_card_date": watch.get("card_date"),
-        "detected_price": watch.get("original_price") or watch.get("price"),
-        "detected_currency": watch.get("original_currency") or watch.get("currency"),
-    }
-
-    if not blocked and dealer and import_log and message and not offer_id:
-        offer_row, _ = create_offer_for_training_row(
-            {
-                **row,
-                "normalized_brand": watch.get("brand"),
-                "normalized_reference": watch.get("reference"),
-                "normalized_condition": watch.get("condition"),
-                "usd_price": watch.get("usd_price"),
-                **persisted_detected_fields,
-            },
-            import_log_id=str(import_log["id"]),
-            message_id=str(message["id"]),
-            dealer_id=dealer,
-            line_index=int(row.get("row_index") or 0),
+    previous_offer_id = row.get("created_offer_id")
+    try:
+        offer_id = _persist_corrected_offer(
+            row=row,
+            final_watch=watch,
+            import_log=import_log,
+            message=message,
+            blocked=blocked,
         )
-        if offer_row:
-            offer_id = offer_row["id"]
+    except Exception:
+        if previous_offer_id and previous_offer_id != row.get("created_offer_id"):
+            raise
+        raise
+
+    row_index = int(row.get("row_index") or 0)
+    sync_import_log_summary_for_training_row(
+        import_log,
+        row_index=row_index,
+        final_watch=watch,
+        offer_id=offer_id,
+        market_price_debug=market_price_debug,
+    )
 
     updates = _training_row_update_fields(
         row,
@@ -852,13 +1024,14 @@ def _correct_training_row_impl(
         message_type=message_type,
         blocked=blocked,
         issue_types=issue_types,
+        preserve_parser_confidence=True,
+        audit=audit,
     )
     updates.update(
         {
-            **persisted_detected_fields,
             "status": "pending_review" if blocked else "corrected",
             "created_offer_id": offer_id,
-            "created_by_user_id": created_by_user_id,
+            "created_by_user_id": created_by_user_id or row.get("created_by_user_id"),
         }
     )
     return update_parser_training_row(row_id, **updates)

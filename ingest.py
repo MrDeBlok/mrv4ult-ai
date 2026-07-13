@@ -680,6 +680,9 @@ def ingest_message(
         offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
         for watch in offer_watches:
             attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
+            from market_price_confidence import attach_market_price_metadata
+
+            attach_market_price_metadata(watch)
 
     from parser_safety_gates import should_block_active_offer
 
@@ -973,7 +976,9 @@ def _normalize_whatsapp_number(value: str) -> str:
 
 
 def _get_active_offers(watch_id: str) -> list[tuple[str, int, str | None]]:
-    """Return active business-dealer offer ids, USD prices, and conditions."""
+    """Return market-eligible active business-dealer offer ids, USD prices, and conditions."""
+    from market_price_confidence import filter_market_eligible_offer_rows
+
     dealer_fields = (
         "dealers(contact_type)"
         if contact_type_column_supported()
@@ -982,15 +987,25 @@ def _get_active_offers(watch_id: str) -> list[tuple[str, int, str | None]]:
     response = (
         get_client()
         .table("offers")
-        .select(f"id, usd_price, condition, {dealer_fields}")
+        .select(
+            "id, usd_price, condition, production_year, card_date, original_price, "
+            f"original_currency, watches(brand, reference), {dealer_fields}"
+        )
         .eq("watch_id", watch_id)
         .eq("status", "active")
         .execute()
     )
-    offers: list[tuple[str, int, str | None]] = []
+    rows: list[dict[str, Any]] = []
     for row in response.data or []:
         if not is_business_dealer_relation(row.get("dealers"), has_offers=True):
             continue
+        offer_id = row.get("id")
+        usd_price = row.get("usd_price")
+        if offer_id and usd_price is not None:
+            rows.append(row)
+
+    offers: list[tuple[str, int, str | None]] = []
+    for row in filter_market_eligible_offer_rows(rows):
         offer_id = row.get("id")
         usd_price = row.get("usd_price")
         if offer_id and usd_price is not None:
@@ -1199,6 +1214,12 @@ def _build_watch_row(
         "market_condition": price_intelligence.get("market_condition"),
         "offer_id": offer_id,
         "request_matches": request_matches,
+        "parser_confidence": watch.get("confidence"),
+        "market_price_confidence": watch.get("market_price_confidence"),
+        "market_price_eligible": watch.get("market_price_eligible"),
+        "market_price_exclusion_reasons": watch.get("market_price_exclusion_reasons") or [],
+        "market_price_threshold": watch.get("market_price_threshold"),
+        "market_price_component_scores": watch.get("market_price_component_scores") or {},
     }
 
 

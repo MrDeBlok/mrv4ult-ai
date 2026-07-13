@@ -164,6 +164,16 @@
                             <dd class="col-sm-7">{{ deal.debug.comparable_conditions | join(", ") if deal.debug.comparable_conditions else "—" }}</dd>
                             <dt class="col-sm-5">market price unknown reason</dt>
                             <dd class="col-sm-7">{{ deal.debug.market_price_unknown_reason }}</dd>
+                            <dt class="col-sm-5">parser confidence</dt>
+                            <dd class="col-sm-7">{{ deal.debug.parser_confidence if deal.debug.parser_confidence is not none else "—" }}</dd>
+                            <dt class="col-sm-5">market price confidence</dt>
+                            <dd class="col-sm-7">{{ deal.debug.market_price_confidence if deal.debug.market_price_confidence is not none else "—" }}</dd>
+                            <dt class="col-sm-5">Market Price eligible</dt>
+                            <dd class="col-sm-7">{{ "yes" if deal.debug.market_price_eligible else "no" }}</dd>
+                            <dt class="col-sm-5">exclusion reasons</dt>
+                            <dd class="col-sm-7">{{ deal.debug.market_price_exclusion_reasons | join(", ") if deal.debug.market_price_exclusion_reasons else "—" }}</dd>
+                            <dt class="col-sm-5">configured threshold</dt>
+                            <dd class="col-sm-7">{{ deal.debug.market_price_threshold }}</dd>
                         </dl>
                     </div>
                     {% endif %}
@@ -238,6 +248,24 @@
                         <dd class="col-sm-8 col-md-9">{{ field.value }}</dd>
                         {% endfor %}
                     </dl>
+                    {% endif %}
+
+                    {% if detail.show_deal_debug and card.market_price_debug %}
+                    <div class="deal-analysis-debug mt-3">
+                        <div class="text-muted small fw-semibold mb-2">Market Price debug</div>
+                        <dl class="row mb-0 small">
+                            <dt class="col-sm-5">parser confidence</dt>
+                            <dd class="col-sm-7">{{ card.market_price_debug.parser_confidence if card.market_price_debug.parser_confidence is not none else "—" }}</dd>
+                            <dt class="col-sm-5">market price confidence</dt>
+                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_confidence }}</dd>
+                            <dt class="col-sm-5">Market Price eligible</dt>
+                            <dd class="col-sm-7">{{ "yes" if card.market_price_debug.market_price_eligible else "no" }}</dd>
+                            <dt class="col-sm-5">exclusion reasons</dt>
+                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_exclusion_reasons | join(", ") if card.market_price_debug.market_price_exclusion_reasons else "—" }}</dd>
+                            <dt class="col-sm-5">configured threshold</dt>
+                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_threshold }}</dd>
+                        </dl>
+                    </div>
                     {% endif %}
 
                     {% if card.price_label or card.results %}

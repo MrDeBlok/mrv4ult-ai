@@ -1372,7 +1372,13 @@ def _reference_card_value(row: dict[str, Any], watch: dict[str, Any]) -> str | N
     return None
 
 
-def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: int) -> dict[str, Any]:
+def _build_watch_offer_card(
+    row: dict[str, Any],
+    watch: dict[str, Any],
+    index: int,
+    *,
+    show_deal_debug: bool = False,
+) -> dict[str, Any]:
     enriched_watch = (
         watch
         if isinstance(watch.get("model_alias"), dict)
@@ -1429,6 +1435,13 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
     model_alias = enriched_watch.get("model_alias")
     alias_fields = alias_display_fields(model_alias) if isinstance(model_alias, dict) else []
 
+    market_price_debug: dict[str, Any] | None = None
+    if show_deal_debug:
+        from market_price_confidence import build_market_price_debug
+
+        merged_context = {**enriched_watch, **row}
+        market_price_debug = build_market_price_debug(merged_context)
+
     return {
         "title": title,
         "fields": fields,
@@ -1439,6 +1452,7 @@ def _build_watch_offer_card(row: dict[str, Any], watch: dict[str, Any], index: i
         "price_label_class": row.get("price_label_class"),
         "results": row.get("results") or [],
         "matched_requests": _matched_request_fields(row, enriched_watch),
+        "market_price_debug": market_price_debug,
     }
 
 
@@ -1695,19 +1709,26 @@ def build_deal_analysis_cards(
     return analyses
 
 
-def build_watch_offer_cards(summary: dict[str, Any]) -> list[dict[str, Any]]:
+def build_watch_offer_cards(
+    summary: dict[str, Any],
+    *,
+    show_deal_debug: bool = False,
+) -> list[dict[str, Any]]:
     """Build card view models from watches stored during import."""
     rows = summary.get("rows") or []
     if not rows:
         watches = _deal_analysis_watch_sources(summary)
-        return [_build_watch_offer_card({}, watch, index) for index, watch in enumerate(watches)]
+        return [
+            _build_watch_offer_card({}, watch, index, show_deal_debug=show_deal_debug)
+            for index, watch in enumerate(watches)
+        ]
 
     parsed_watches = _import_parsed_watches(summary)
     offer_watches = summary.get("offer_watches") or []
     cards: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         watch = _resolve_deal_analysis_watch(row, offer_watches, parsed_watches, index)
-        cards.append(_build_watch_offer_card(row, watch, index))
+        cards.append(_build_watch_offer_card(row, watch, index, show_deal_debug=show_deal_debug))
     return cards
 
 
@@ -2192,7 +2213,7 @@ def build_activity_detail(
         "status_reason": import_status_reason(import_log),
         "raw_message": raw_message,
         "deal_analyses": build_deal_analysis_cards(summary, include_debug=show_deal_debug),
-        "watch_cards": build_watch_offer_cards(summary),
+        "watch_cards": build_watch_offer_cards(summary, show_deal_debug=show_deal_debug),
         "rows": rows,
         "show_deal_debug": show_deal_debug,
         "match_notification": (

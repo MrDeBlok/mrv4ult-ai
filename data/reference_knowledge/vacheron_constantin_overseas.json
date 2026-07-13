@@ -1,0 +1,101 @@
+[
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "4300V",
+    "normalized_reference": "4300V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "4500V",
+    "normalized_reference": "4500V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "4520V",
+    "normalized_reference": "4520V",
+    "collection": "Overseas",
+    "model": "Overseas Chronograph",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "4600V",
+    "normalized_reference": "4600V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "5500V",
+    "normalized_reference": "5500V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "5520V",
+    "normalized_reference": "5520V",
+    "collection": "Overseas",
+    "model": "Overseas Chronograph",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "6000V",
+    "normalized_reference": "6000V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "7900V",
+    "normalized_reference": "7900V",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "7920V",
+    "normalized_reference": "7920V",
+    "collection": "Overseas",
+    "model": "Overseas Chronograph",
+    "reference_family": "overseas_v_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  }
+]

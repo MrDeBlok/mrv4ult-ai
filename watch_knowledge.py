@@ -88,12 +88,22 @@ def _load_reference_brand_mapping_index() -> dict[str, str]:
 def invalidate_reference_brand_mapping_cache() -> None:
     """Clear cached reference-to-brand mappings (for tests and admin updates)."""
     _load_reference_brand_mapping_index.cache_clear()
+    _load_knowledge_index.cache_clear()
+    from reference_knowledge import invalidate_authoritative_reference_cache
+
+    invalidate_authoritative_reference_cache()
 
 
 def resolve_reference_brand_identity(reference: str | None) -> tuple[str | None, bool]:
     """Return the canonical brand for a reference when confidently known."""
     if not reference or not isinstance(reference, str):
         return None, False
+
+    from reference_knowledge import resolve_authoritative_reference_brand
+
+    authoritative_brand, authoritative_confident = resolve_authoritative_reference_brand(reference)
+    if authoritative_confident and authoritative_brand:
+        return authoritative_brand, True
 
     knowledge = lookup_reference(reference)
     if knowledge and knowledge.get("brand"):
@@ -189,6 +199,18 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
         enriched["knowledge"] = knowledge
         if knowledge.get("model") and not enriched.get("model"):
             enriched["model"] = knowledge["model"]
+    else:
+        from reference_knowledge import lookup_authoritative_reference
+
+        authoritative = lookup_authoritative_reference(enriched.get("reference"))
+        if authoritative:
+            enriched["knowledge"] = {
+                key: authoritative[key]
+                for key in ("brand", "collection", "model", "reference_family")
+                if authoritative.get(key)
+            }
+            if authoritative.get("model") and not enriched.get("model"):
+                enriched["model"] = authoritative["model"]
     return enriched
 
 

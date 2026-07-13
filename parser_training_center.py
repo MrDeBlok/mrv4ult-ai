@@ -51,23 +51,29 @@ def _issue_labels(issue_types: list[str] | None) -> list[str]:
 
 def format_training_row_display(row: Record) -> Record:
     """Format a parser_training_rows DB record for the UI template."""
+    from final_offer_payload import build_final_offer_payload, original_parser_confidence, training_row_audit
+
     status = str(row.get("status") or "pending_review")
-    suggestions = (row.get("parser_explanation") or {}).get("suggestions") or {}
-    optional_notes = list((row.get("parser_explanation") or {}).get("optional_notes") or [])
-    field_details = list((row.get("parser_explanation") or {}).get("field_details") or [])
+    explanation = row.get("parser_explanation") or {}
+    suggestions = explanation.get("suggestions") or {}
+    optional_notes = list(explanation.get("optional_notes") or [])
+    field_details = list(explanation.get("field_details") or [])
+    audit = training_row_audit(row)
+    final_watch = build_final_offer_payload(row)
+    parser_confidence = original_parser_confidence(row)
     return {
         "id": row.get("id"),
         "row_index": int(row.get("row_index") or 0),
         "source_line": row.get("raw_row_text") or "",
-        "brand": row.get("normalized_brand") or row.get("detected_brand"),
-        "reference": row.get("normalized_reference") or row.get("detected_reference"),
-        "condition": row.get("normalized_condition") or row.get("detected_condition"),
-        "production_year": row.get("detected_year"),
-        "card_date": row.get("detected_card_date"),
-        "original_price": row.get("detected_price"),
-        "original_currency": row.get("detected_currency"),
-        "usd_price": row.get("usd_price"),
-        "overall_confidence": row.get("confidence_overall"),
+        "brand": final_watch.get("brand"),
+        "reference": final_watch.get("reference"),
+        "condition": final_watch.get("condition"),
+        "production_year": final_watch.get("production_year"),
+        "card_date": final_watch.get("card_date"),
+        "original_price": final_watch.get("original_price") or final_watch.get("price"),
+        "original_currency": final_watch.get("original_currency") or final_watch.get("currency"),
+        "usd_price": final_watch.get("usd_price"),
+        "overall_confidence": parser_confidence if parser_confidence is not None else row.get("confidence_overall"),
         "field_confidences": {
             "brand_confidence": row.get("confidence_brand"),
             "reference_confidence": row.get("confidence_reference"),
@@ -75,7 +81,7 @@ def format_training_row_display(row: Record) -> Record:
             "price_confidence": row.get("confidence_price"),
             "intent_confidence": row.get("confidence_intent"),
         },
-        "field_explanations": row.get("parser_explanation") or {},
+        "field_explanations": explanation,
         "field_details": field_details,
         "optional_notes": optional_notes,
         "suggestions": suggestions,
@@ -89,6 +95,10 @@ def format_training_row_display(row: Record) -> Record:
         "approved": status in {"approved", "valid", "corrected"},
         "created_offer_id": row.get("created_offer_id"),
         "failure_label": _issue_labels(row.get("issue_types"))[0] if row.get("issue_types") else "",
+        "reviewed_by_human": bool(audit.get("reviewed_by_human")),
+        "corrected_fields": list(audit.get("corrected_fields") or []),
+        "market_price_confidence": audit.get("market_price_confidence"),
+        "market_price_eligible": audit.get("market_price_eligible"),
     }
 
 

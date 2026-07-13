@@ -58,6 +58,7 @@ def _training_db_row(**overrides) -> dict:
 class TestLearnGloballyRowSave:
     @patch("parser_training_engine.create_offer_for_training_row", return_value=({"id": "offer-1"}, True))
     @patch("parser_training_engine.re_evaluate_parser_training_rows")
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
     @patch("database.update_parser_training_row")
     @patch("database.create_reference_brand_mapping")
     @patch("database.reference_brand_mappings_supported", return_value=True)
@@ -72,6 +73,7 @@ class TestLearnGloballyRowSave:
         _supported: MagicMock,
         mock_create_mapping: MagicMock,
         mock_update: MagicMock,
+        _mock_sync_summary: MagicMock,
         mock_re_eval: MagicMock,
         _mock_create_offer: MagicMock,
     ) -> None:
@@ -333,7 +335,7 @@ def _tudor_pending_row(**overrides) -> dict:
         "normalized_reference": None,
         "status": "pending_review",
         "issue_types": ["missing_reference", "reference_confidence_low"],
-        "created_offer_id": "offer-existing-1",
+        "created_offer_id": "11111111-1111-4111-8111-111111111111",
         "usd_price": 4536,
         "parser_explanation": {
             "reference": "No reference number was detected.",
@@ -345,16 +347,22 @@ def _tudor_pending_row(**overrides) -> dict:
 
 
 class TestSaveRowReviewIssueRecalculation:
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
+    @patch("database.update_offer_from_training")
     @patch("database.update_parser_training_row")
     @patch("database.get_message_by_id")
     @patch("database.get_import_log")
     @patch("database.get_parser_training_row")
+    @patch("database.get_offer_by_id")
     def test_save_row_clears_stale_reference_issues(
         self,
+        mock_get_offer: MagicMock,
         mock_get_row: MagicMock,
         mock_get_import: MagicMock,
         mock_get_message: MagicMock,
         mock_update: MagicMock,
+        _mock_update_offer: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         mock_get_row.return_value = _tudor_pending_row()
         mock_get_import.return_value = {
@@ -363,6 +371,11 @@ class TestSaveRowReviewIssueRecalculation:
             "summary": {"message_type": "offer"},
         }
         mock_get_message.return_value = {"id": MESSAGE_ID, "dealer_id": "dealer-1"}
+        mock_get_offer.return_value = {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "dealer_id": "dealer-1",
+            "message_id": MESSAGE_ID,
+        }
 
         def _capture_update(row_id: str, **fields: dict) -> dict:
             return {"id": row_id, **fields}
@@ -379,7 +392,7 @@ class TestSaveRowReviewIssueRecalculation:
         assert result["normalized_brand"] == TUDOR_BRAND
         assert result["normalized_reference"] == TUDOR_REFERENCE
         assert result["issue_types"] == []
-        assert result["confidence_reference"] >= 50
+        assert result["parser_explanation"]["audit"]["reviewed_by_human"] is True
         assert result["parser_explanation"]["reference"] != "No reference number was detected."
 
         display = format_training_row_display(result)
@@ -388,6 +401,7 @@ class TestSaveRowReviewIssueRecalculation:
         assert "Missing reference" not in ", ".join(display["issues"])
         assert "Reference confidence low" not in ", ".join(display["issues"])
 
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
     @patch("database.update_parser_training_row")
     @patch("database.get_message_by_id")
     @patch("database.get_import_log")
@@ -398,6 +412,7 @@ class TestSaveRowReviewIssueRecalculation:
         mock_get_import: MagicMock,
         mock_get_message: MagicMock,
         mock_update: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         mock_get_row.return_value = _tudor_pending_row(created_offer_id=None)
         mock_get_import.return_value = {
@@ -417,16 +432,22 @@ class TestSaveRowReviewIssueRecalculation:
         assert result["status"] == "corrected"
         assert result["issue_types"] == []
 
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
+    @patch("database.update_offer_from_training")
     @patch("database.update_parser_training_row")
     @patch("database.get_message_by_id")
     @patch("database.get_import_log")
     @patch("database.get_parser_training_row")
+    @patch("database.get_offer_by_id")
     def test_save_row_keeps_pending_review_when_unresolved_issue_remains(
         self,
+        mock_get_offer: MagicMock,
         mock_get_row: MagicMock,
         mock_get_import: MagicMock,
         mock_get_message: MagicMock,
         mock_update: MagicMock,
+        _mock_update_offer: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         mock_get_row.return_value = _tudor_pending_row(
             detected_price=2,
@@ -440,6 +461,11 @@ class TestSaveRowReviewIssueRecalculation:
             "summary": {"message_type": "offer"},
         }
         mock_get_message.return_value = {"id": MESSAGE_ID, "dealer_id": "dealer-1"}
+        mock_get_offer.return_value = {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "dealer_id": "dealer-1",
+            "message_id": MESSAGE_ID,
+        }
         mock_update.side_effect = lambda row_id, **fields: {"id": row_id, **fields}
 
         result = correct_training_row(
@@ -452,6 +478,7 @@ class TestSaveRowReviewIssueRecalculation:
         assert "missing_reference" not in result["issue_types"]
         assert "suspicious_price" in result["issue_types"]
 
+    @patch("parser_training_engine.sync_import_log_summary_for_training_row")
     @patch("parser_training_engine.create_offer_for_training_row", return_value=(None, False))
     @patch(
         "watch_knowledge._load_reference_brand_mapping_index",
@@ -469,6 +496,7 @@ class TestSaveRowReviewIssueRecalculation:
         mock_update: MagicMock,
         _mock_index: MagicMock,
         _mock_create_offer: MagicMock,
+        _mock_sync_summary: MagicMock,
     ) -> None:
         from watch_knowledge import invalidate_reference_brand_mapping_cache
 
@@ -499,4 +527,4 @@ class TestSaveRowReviewIssueRecalculation:
 
         assert result["status"] == "corrected"
         assert result["issue_types"] == []
-        assert result["confidence_reference"] >= 50
+        assert result["parser_explanation"]["audit"]["reviewed_by_human"] is True

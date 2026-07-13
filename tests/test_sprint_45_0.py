@@ -88,7 +88,7 @@ class TestGenericFallback:
         assert watch is not None
         assert watch["brand"] == "Vacheron Constantin"
         assert watch["reference"] == "4500V"
-        assert watch["reference_high_confidence"] is False
+        assert watch["reference_high_confidence"] is True
 
     def test_generic_reference_formats_unchanged(self) -> None:
         cases = [

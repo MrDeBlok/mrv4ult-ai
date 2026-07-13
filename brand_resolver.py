@@ -157,10 +157,23 @@ def resolve_brand_from_identification(identification_brand: str | None) -> Brand
 def infer_brand_from_reference_heuristic(reference: str) -> str | None:
     """Priority 6: heuristic reference-shape brand inference."""
     from brand_knowledge import extract_reference_from_brand_knowledge
+    from reference_knowledge import (
+        is_vacheron_overseas_reference,
+        record_generic_override_blocked,
+        resolve_authoritative_reference_brand,
+    )
+
+    authoritative_brand, authoritative_confident = resolve_authoritative_reference_brand(reference)
+    if authoritative_confident and authoritative_brand:
+        return authoritative_brand
 
     brand_match = extract_reference_from_brand_knowledge(reference)
     if brand_match:
-        return brand_match[1]
+        matched_brand = brand_match[1]
+        if is_vacheron_overseas_reference(reference) and matched_brand != "Vacheron Constantin":
+            record_generic_override_blocked(reference, matched_brand)
+            return "Vacheron Constantin"
+        return matched_brand
 
     normalized = reference.upper().replace(" ", "")
     if re.fullmatch(r"\d{3}\.\d{3}", reference):
@@ -173,9 +186,11 @@ def infer_brand_from_reference_heuristic(reference: str) -> str | None:
         return "Rolex"
     if re.fullmatch(r"[12]\d{4}", normalized):
         return "Rolex"
+    if is_vacheron_overseas_reference(reference):
+        return "Vacheron Constantin"
     if re.fullmatch(r"\d{5}[A-Z]{2,4}", normalized):
         return "Audemars Piguet"
-    if re.fullmatch(r"\d{4}[A-Z]", normalized):
+    if re.fullmatch(r"\d{4}(?![V])[A-Z]{1,4}", normalized):
         return "Audemars Piguet"
     if re.fullmatch(r"[3456]\d{3}", normalized):
         return "Patek Philippe"
@@ -369,7 +384,7 @@ def reference_confidently_conflicts_with_brand(
 
 
 def apply_reference_brand_safety(watch: Record) -> Record:
-    """Block confident cross-brand conflicts; review bare unknown references only."""
+    """Block confident cross-brand conflicts; prefer trusted reference mappings."""
     enriched = dict(watch)
     reference = enriched.get("reference")
     brand = enriched.get("brand")
@@ -379,11 +394,53 @@ def apply_reference_brand_safety(watch: Record) -> Record:
     if not reference or not isinstance(reference, str):
         return enriched
 
+    from reference_knowledge import record_reference_brand_conflict
+    from watch_knowledge import resolve_reference_brand_identity
+
+    trusted_brand, trusted_confident = resolve_reference_brand_identity(reference)
+
     if source == BRAND_SOURCE_REFERENCE and enriched.get("reference_high_confidence"):
+        if (
+            trusted_confident
+            and trusted_brand
+            and brand
+            and trusted_brand != brand
+        ):
+            record_reference_brand_conflict(
+                reference=reference,
+                trusted_brand=trusted_brand,
+                rejected_brand=brand,
+                source=str(source or "reference"),
+            )
+            enriched["brand"] = trusted_brand
+            enriched["brand_source"] = BRAND_SOURCE_REFERENCE
+            enriched["reference_high_confidence"] = True
+            enriched.pop("reference_needs_review", None)
+            enriched.pop("reference_status", None)
         return enriched
 
     if brand:
         if reference_confidently_belongs_to_brand(reference, brand):
+            return enriched
+        if trusted_confident and trusted_brand and trusted_brand != brand:
+            record_reference_brand_conflict(
+                reference=reference,
+                trusted_brand=trusted_brand,
+                rejected_brand=brand,
+                source=str(source or conflict or "trusted_reference_mapping"),
+            )
+            enriched["reference_brand_conflict"] = {
+                "reference": reference,
+                "rejected_brand": brand,
+                "resolved_brand": trusted_brand,
+                "brand_source": source,
+                **(conflict if isinstance(conflict, dict) else {}),
+            }
+            enriched["brand"] = trusted_brand
+            enriched["brand_source"] = BRAND_SOURCE_REFERENCE
+            enriched["reference_high_confidence"] = True
+            enriched.pop("reference_needs_review", None)
+            enriched.pop("reference_status", None)
             return enriched
         if reference_confidently_conflicts_with_brand(reference, brand, conflict=conflict):
             enriched["reference_brand_mismatch"] = {
@@ -399,11 +456,8 @@ def apply_reference_brand_safety(watch: Record) -> Record:
             enriched["reference_high_confidence"] = False
         return enriched
 
-    from watch_knowledge import resolve_reference_brand_identity
-
-    known_brand, confident = resolve_reference_brand_identity(reference)
     heuristic_brand = infer_brand_from_reference_heuristic(reference)
-    if not confident and not known_brand and not heuristic_brand:
+    if not trusted_confident and not trusted_brand and not heuristic_brand:
         enriched["reference_status"] = "Unknown"
         enriched["reference_needs_review"] = True
     return enriched
