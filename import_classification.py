@@ -175,6 +175,17 @@ def is_buyer_request_message(text: str, parsed: Record) -> bool:
     return False
 
 
+def _is_informational_brand_watch(watch: Record) -> bool:
+    """Brand-only lines with watch-like year/condition signals need evidence review."""
+    if not watch.get("brand") or watch_has_substantive_identity(watch):
+        return False
+    return bool(
+        watch.get("condition")
+        or watch.get("production_year")
+        or watch.get("card_date")
+    )
+
+
 def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tuple[list[Record], str | None]:
     """Split parsed watches into offer candidates and optional classification."""
     if is_sold_order_message(text) or is_buyer_request_message(text, parsed):
@@ -194,7 +205,11 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
     ]
 
     if not substantive_watches:
-        if brand_only_watches or any(is_noise_watch(watch) for watch in watches):
+        if any(is_noise_watch(watch) for watch in watches):
+            return [], "noise"
+        if brand_only_watches and not any(
+            _is_informational_brand_watch(watch) for watch in watches
+        ):
             return [], "noise"
         return [], None
 
@@ -202,7 +217,9 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
     if offer_watches:
         return offer_watches, None
 
-    if brand_only_watches or any(is_noise_watch(watch) for watch in watches):
+    if any(is_noise_watch(watch) for watch in watches):
+        return [], "noise"
+    if brand_only_watches and not any(_is_informational_brand_watch(watch) for watch in watches):
         return [], "noise"
 
     return [], None

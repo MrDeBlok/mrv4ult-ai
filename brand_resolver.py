@@ -157,11 +157,15 @@ def resolve_brand_from_identification(identification_brand: str | None) -> Brand
 def infer_brand_from_reference_heuristic(reference: str) -> str | None:
     """Priority 6: heuristic reference-shape brand inference."""
     from brand_knowledge import extract_reference_from_brand_knowledge
+    from fpj_model_knowledge import is_blocked_year_reference
     from reference_knowledge import (
         is_vacheron_overseas_reference,
         record_generic_override_blocked,
         resolve_authoritative_reference_brand,
     )
+
+    if is_blocked_year_reference(reference):
+        return None
 
     authoritative_brand, authoritative_confident = resolve_authoritative_reference_brand(reference)
     if authoritative_confident and authoritative_brand:
@@ -315,6 +319,22 @@ def resolve_watch_brand(
     )
     if inference_candidate:
         candidates.append(inference_candidate)
+
+    from fpj_model_knowledge import FPJ_CANONICAL_BRAND, has_strong_fpj_brand_text, is_blocked_year_reference
+
+    if has_strong_fpj_brand_text(text):
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.source != BRAND_SOURCE_REFERENCE_INFERENCE
+            or candidate.brand == FPJ_CANONICAL_BRAND
+        ]
+        if is_blocked_year_reference(reference):
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.source != BRAND_SOURCE_REFERENCE
+            ]
 
     if not candidates:
         _append_trace(trace, step="final", brand=None, source=None)

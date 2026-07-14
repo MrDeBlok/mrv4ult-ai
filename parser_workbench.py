@@ -383,18 +383,32 @@ def reprocess_import_log(
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
         if import_classification is None and offer_watches:
             from condition_normalizer import apply_inferred_pre_owned_defaults
+            from dealer_currency_resolution import apply_dealer_currency_resolution
             from parser_confidence import attach_parser_confidence_metadata
             from parser_learning import prepare_watch_for_ingest
 
             message = get_message_by_id(str(message_id))
             dealer_id = str((message or {}).get("dealer_id") or "") or None
             group_id = str((message or {}).get("group_id") or "") or None
+            dealer_record = None
+            dealer_whatsapp = (
+                old_summary.get("dealer_whatsapp") or import_log.get("dealer_whatsapp")
+            )
+            if dealer_id:
+                from dealer_currency_resolution import load_dealer_record_for_currency_resolution
+
+                dealer_record = load_dealer_record_for_currency_resolution(dealer_id)
             for watch in offer_watches:
                 prepare_watch_for_ingest(
                     watch,
                     message_text=text,
                     dealer_id=dealer_id,
                     group_id=group_id,
+                )
+                apply_dealer_currency_resolution(
+                    watch,
+                    dealer=dealer_record,
+                    dealer_whatsapp=dealer_whatsapp,
                 )
             offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
             for watch in offer_watches:

@@ -194,6 +194,10 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     )
     enriched = apply_reference_brand_safety(enriched)
 
+    from fpj_model_knowledge import apply_fpj_enrichment
+
+    enriched = apply_fpj_enrichment(enriched, source_line)
+
     knowledge = lookup_reference(enriched.get("reference"))
     if knowledge:
         enriched["knowledge"] = knowledge

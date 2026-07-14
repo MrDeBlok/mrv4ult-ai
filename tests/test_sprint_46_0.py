@@ -226,6 +226,50 @@ class TestConditionAwareDealAnalysis:
         assert analysis["show_no_matching_market"] is True
         assert analysis["market_price"] == "Unknown"
 
+    def test_deal_analysis_recognizes_compact_n7_as_explicit_new(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from condition_normalizer import (
+            apply_inferred_pre_owned_default,
+            mark_explicit_condition_metadata,
+            normalize_watch_condition,
+        )
+        from watch_parser import parse_watch_line
+
+        with patch("watch_parser._current_calendar_year", return_value=2026):
+            watch = parse_watch_line("124270 N7 HKD 77k")
+        normalize_watch_condition(watch)
+        watch = mark_explicit_condition_metadata(apply_inferred_pre_owned_default(watch))
+
+        row = {
+            "brand": "Rolex",
+            "reference": "124270",
+            "condition": watch["condition"],
+            "raw_condition": watch["raw_condition"],
+            "usd_price": 77_000,
+            "card_date": watch["card_date"],
+            "production_year": watch["production_year"],
+        }
+
+        with patch("deal_market_lookup.resolve_deal_market_context") as mock_resolve:
+            mock_resolve.return_value = MagicMock(
+                effective_row={**row, "price_label": "No comparables"},
+                comparison_safe=False,
+                market_usd=None,
+                offer_condition=NEW_CONDITION,
+                market_condition=NEW_CONDITION,
+                needs_review=False,
+                insufficient_market_data=True,
+                market_status_message="No same-condition comparables found yet.",
+                debug={},
+            )
+            analysis = _build_deal_analysis(row, watch, 0)
+
+        assert analysis["condition_label"] == NEW_CONDITION
+        assert analysis["condition_is_known"] is True
+        assert analysis["condition_is_inferred"] is False
+        assert analysis["show_condition_warning"] is False
+
     def test_excellent_buy_requires_high_confidence(self) -> None:
         analysis = _build_deal_analysis(
             {

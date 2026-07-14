@@ -167,6 +167,12 @@ def _duplicate_offer_cache_key(
     )
 
 
+def _watch_identity_from_parsed(watch: dict[str, Any]) -> dict[str, Any]:
+    from fpj_model_knowledge import fpj_storage_identity_fields
+
+    return fpj_storage_identity_fields(watch)
+
+
 def _cached_find_or_create_watch(
     watch_cache: dict[tuple[str | None, str | None, str | None, str | None], dict[str, Any]],
     *,
@@ -527,10 +533,36 @@ def ingest_message(
         offer_watches, import_classification = split_offer_watches(text, parsed, parsed_watches)
         reference_review_watches_list = reference_review_watches(parsed_watches)
     insufficient_evidence_watches: list[dict[str, Any]] = []
-    if import_classification is None and offer_watches:
-        offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(offer_watches)
-        if not offer_watches and insufficient_evidence_watches:
-            import_classification = "insufficient_evidence"
+    if import_classification is None:
+        evidence_candidates = offer_watches or parsed_watches
+        if evidence_candidates:
+            offer_watches, insufficient_evidence_watches = partition_watches_by_evidence(
+                evidence_candidates
+            )
+            if not offer_watches and insufficient_evidence_watches:
+                import_classification = "insufficient_evidence"
+        if offer_watches and parsed_watches:
+            from watch_evidence import has_sufficient_watch_evidence
+
+            offered_lines = {
+                str(watch.get("source_line"))
+                for watch in offer_watches
+                if watch.get("source_line")
+            }
+            seen_insufficient_lines = {
+                str(watch.get("source_line"))
+                for watch in insufficient_evidence_watches
+                if watch.get("source_line")
+            }
+            for watch in parsed_watches:
+                source_line = watch.get("source_line")
+                if not source_line or str(source_line) in offered_lines:
+                    continue
+                if str(source_line) in seen_insufficient_lines:
+                    continue
+                if not has_sufficient_watch_evidence(watch):
+                    insufficient_evidence_watches.append(watch)
+                    seen_insufficient_lines.add(str(source_line))
     bulk_mode = is_dealer_list_bulk_import(offer_watches)
     parse_elapsed_ms = int((time.perf_counter() - parse_started_at) * 1000)
     if bulk_mode:
@@ -666,15 +698,27 @@ def ingest_message(
     duplicate_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     if offer_watches and import_classification is None:
+        from dealer_currency_resolution import (
+            apply_dealer_currency_resolution,
+            load_dealer_record_for_currency_resolution,
+        )
         from parser_confidence import attach_parser_confidence_metadata
         from parser_learning import prepare_watch_for_ingest
 
+        dealer_record = load_dealer_record_for_currency_resolution(
+            str(dealer_id) if dealer_id else None
+        )
         for watch in offer_watches:
             prepare_watch_for_ingest(
                 watch,
                 message_text=text,
                 dealer_id=str(dealer_id),
                 group_id=str(group_id),
+            )
+            apply_dealer_currency_resolution(
+                watch,
+                dealer=dealer_record,
+                dealer_whatsapp=summary_whatsapp,
             )
             attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
         offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
@@ -688,22 +732,23 @@ def ingest_message(
 
     for line_index, watch in enumerate(offer_watches):
         summary["watches_parsed"] += 1
+        identity = _watch_identity_from_parsed(watch)
         if bulk_mode:
             watch_row, watch_created = _cached_find_or_create_watch(
                 watch_cache,
-                brand=watch.get("brand"),
-                reference=watch.get("reference"),
-                model=watch.get("model"),
-                dial=watch.get("dial"),
-                bracelet=watch.get("bracelet"),
+                brand=identity.get("brand"),
+                reference=identity.get("reference"),
+                model=identity.get("model"),
+                dial=identity.get("dial"),
+                bracelet=identity.get("bracelet"),
             )
         else:
             watch_row, watch_created = find_or_create_watch(
-                brand=watch.get("brand"),
-                reference=watch.get("reference"),
-                model=watch.get("model"),
-                dial=watch.get("dial"),
-                bracelet=watch.get("bracelet"),
+                brand=identity.get("brand"),
+                reference=identity.get("reference"),
+                model=identity.get("model"),
+                dial=identity.get("dial"),
+                bracelet=identity.get("bracelet"),
             )
         if watch_created:
             summary["new_watches"] += 1

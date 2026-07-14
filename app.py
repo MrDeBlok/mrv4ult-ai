@@ -3861,7 +3861,7 @@ async def dealer_detail(request: Request, dealer_id: str) -> HTMLResponse:
         request,
         "dealer_detail.html",
         {
-            "dealer": build_dealer_profile(dealer),
+            "dealer": build_dealer_profile(dealer, offer_rows=active_offers),
             "stats": format_dealer_stats(compute_dealer_stats(offer_rows)),
             "offers": build_dealer_offer_rows(active_offers),
         },

@@ -32,8 +32,8 @@ BRAND_ALIASES: dict[str, str] = {
     "audemars": "Audemars Piguet",
     "rm": "Richard Mille",
     "richard": "Richard Mille",
-    "fpj": "FP Journe",
-    "fp": "FP Journe",
+    "fpj": "F.P. Journe",
+    "fp": "F.P. Journe",
 }
 
 PRICE_FILTER_WORDS = frozenset({"under", "below", "max"})

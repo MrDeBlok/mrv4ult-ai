@@ -23,13 +23,13 @@ PLAIN_MULTILINE_MESSAGE = (
 
 
 class TestImplicitEurPriceDetection:
-    def test_european_price_without_currency_defaults_to_eur(self) -> None:
+    def test_european_price_without_currency_leaves_currency_unknown_at_parse(self) -> None:
         watch = parse_watch_line("126500LN 12.700 full set")
 
         assert watch is not None
         assert watch["original_price"] == 12_700
-        assert watch["original_currency"] == "EUR"
-        assert watch["usd_price"] == 13_716
+        assert watch["original_currency"] is None
+        assert watch["usd_price"] is None
 
     @pytest.mark.parametrize(
         ("line", "expected_price"),
@@ -43,7 +43,7 @@ class TestImplicitEurPriceDetection:
             ("126500LN 12700 + label", 12_700),
         ],
     )
-    def test_common_dealer_price_formats_default_to_eur(
+    def test_common_dealer_price_formats_leave_currency_unknown_without_context(
         self,
         line: str,
         expected_price: int,
@@ -52,7 +52,7 @@ class TestImplicitEurPriceDetection:
 
         assert watch is not None
         assert watch["original_price"] == expected_price
-        assert watch["original_currency"] == "EUR"
+        assert watch["original_currency"] is None
 
     def test_multiline_offer_with_label_suffix_becomes_success(self) -> None:
         parsed = parse_message(EXAMPLE_MESSAGE)
@@ -67,9 +67,9 @@ class TestImplicitEurPriceDetection:
         assert watch["brand"] == "Rolex"
         assert watch["reference"] == "126610LN"
         assert watch["original_price"] == 12_700
-        assert watch["original_currency"] == "EUR"
-        assert watch["usd_price"] == 13_716
-        assert status == "success"
+        assert watch["original_currency"] is None
+        assert watch["usd_price"] is None
+        assert status == "warning"
 
     def test_multiline_plain_price_line_becomes_success(self) -> None:
         parsed = parse_message(PLAIN_MULTILINE_MESSAGE)
@@ -86,9 +86,9 @@ class TestImplicitEurPriceDetection:
         assert watch["production_year"] == 2025
         assert watch["full_set"] is True
         assert watch["original_price"] == 12_700
-        assert watch["original_currency"] == "EUR"
-        assert watch["usd_price"] == 13_716
-        assert status == "success"
+        assert watch["original_currency"] is None
+        assert watch["usd_price"] is None
+        assert status == "warning"
 
 
 class TestExplicitCurrencyUnchanged:

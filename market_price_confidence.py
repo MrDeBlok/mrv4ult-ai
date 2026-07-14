@@ -27,6 +27,17 @@ MARKET_PRICE_WEIGHTS: dict[str, int] = {
 }
 
 SUPPORTED_MARKET_CURRENCIES = frozenset({"USD", "HKD", "EUR", "CHF", "GBP", "SGD", "AED", "JPY"})
+FIAT_MARKET_CURRENCIES = SUPPORTED_MARKET_CURRENCIES
+
+FPJ_MARKET_PRICE_CONFIDENCE_THRESHOLD = 80
+FPJ_MARKET_PRICE_WEIGHTS: dict[str, int] = {
+    "explicit_brand": 15,
+    "canonical_model": 30,
+    "year": 15,
+    "explicit_condition": 15,
+    "valid_price": 15,
+    "supported_currency": 10,
+}
 
 MARKET_PRICE_APPROVED_STATUSES = frozenset({"approved", "valid", "corrected"})
 MARKET_PRICE_BLOCKED_STATUSES = frozenset(
@@ -140,7 +151,10 @@ def _has_supported_market_currency(context: Record) -> bool:
     currency = context.get("original_currency") or context.get("currency")
     if not currency:
         return isinstance(context.get("usd_price"), (int, float)) and int(context.get("usd_price")) > 0
-    return str(currency).strip().upper() in SUPPORTED_MARKET_CURRENCIES
+    normalized = str(currency).strip().upper()
+    if normalized == "USDT":
+        return False
+    return normalized in FIAT_MARKET_CURRENCIES
 
 
 def _has_normalized_comparison_price(context: Record) -> bool:
@@ -184,8 +198,63 @@ def has_reference_brand_conflict(context: Record) -> bool:
     return reference_confidently_conflicts_with_brand(reference, str(brand).strip())
 
 
+def _is_fpj_context(context: Record) -> bool:
+    from fpj_model_knowledge import FPJ_CANONICAL_BRAND
+
+    brand = context.get("brand")
+    return isinstance(brand, str) and brand.strip() == FPJ_CANONICAL_BRAND
+
+
+def _has_fpj_canonical_model(context: Record) -> bool:
+    model = context.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return False
+    if context.get("model_identity_complete") is False:
+        return False
+    if context.get("ambiguous_model"):
+        return False
+    return True
+
+
+def _fpj_market_threshold(context: Record) -> int:
+    return FPJ_MARKET_PRICE_CONFIDENCE_THRESHOLD if _is_fpj_context(context) else MARKET_PRICE_CONFIDENCE_THRESHOLD
+
+
+def compute_fpj_market_price_confidence(context: Record) -> tuple[int, dict[str, int]]:
+    from fpj_model_knowledge import FPJ_CANONICAL_BRAND
+
+    brand = context.get("brand")
+    component_scores = {
+        "explicit_brand": (
+            FPJ_MARKET_PRICE_WEIGHTS["explicit_brand"]
+            if isinstance(brand, str) and brand.strip() == FPJ_CANONICAL_BRAND
+            else 0
+        ),
+        "canonical_model": (
+            FPJ_MARKET_PRICE_WEIGHTS["canonical_model"]
+            if _has_fpj_canonical_model(context)
+            else 0
+        ),
+        "year": FPJ_MARKET_PRICE_WEIGHTS["year"] if _has_market_year(context) else 0,
+        "explicit_condition": (
+            FPJ_MARKET_PRICE_WEIGHTS["explicit_condition"]
+            if has_explicit_market_condition(context)
+            else 0
+        ),
+        "valid_price": FPJ_MARKET_PRICE_WEIGHTS["valid_price"] if _has_valid_market_price(context) else 0,
+        "supported_currency": (
+            FPJ_MARKET_PRICE_WEIGHTS["supported_currency"]
+            if _has_supported_market_currency(context)
+            else 0
+        ),
+    }
+    return _clamp_score(sum(component_scores.values())), component_scores
+
+
 def compute_market_price_confidence(context: Record) -> tuple[int, dict[str, int]]:
     """Compute Market Price confidence from core market fields only."""
+    if _is_fpj_context(context):
+        return compute_fpj_market_price_confidence(context)
     component_scores = {
         "trusted_reference": (
             MARKET_PRICE_WEIGHTS["trusted_reference"]
@@ -213,10 +282,11 @@ def evaluate_market_price_eligibility(
     watch_or_row: Record,
     *,
     extra_context: Record | None = None,
-    threshold: int = MARKET_PRICE_CONFIDENCE_THRESHOLD,
+    threshold: int | None = None,
 ) -> MarketPriceEligibility:
     """Evaluate whether an offer may be used as a Market Price comparable."""
     context = _merge_market_context(watch_or_row, extra_context)
+    effective_threshold = threshold if threshold is not None else _fpj_market_threshold(context)
     confidence, component_scores = compute_market_price_confidence(context)
     parser_confidence = context.get("confidence")
     if not isinstance(parser_confidence, int):
@@ -235,16 +305,22 @@ def evaluate_market_price_eligibility(
     elif context.get("status") in MARKET_PRICE_BLOCKED_STATUSES:
         reasons.append(f"status_{context.get('status')}")
 
-    if not _reference_value(context):
-        reasons.append("reference_missing")
-    elif not is_reference_trusted_for_market_price(context):
-        reasons.append("reference_not_trusted")
+    if _is_fpj_context(context):
+        if not _has_fpj_canonical_model(context):
+            reasons.append("fpj_model_missing_or_ambiguous")
+        if context.get("ambiguous_model"):
+            reasons.append("fpj_model_ambiguous")
+    else:
+        if not _reference_value(context):
+            reasons.append("reference_missing")
+        elif not is_reference_trusted_for_market_price(context):
+            reasons.append("reference_not_trusted")
 
-    if context.get("reference_needs_review") or context.get("reference_status") == "Unknown":
-        reasons.append("reference_pending_review")
+        if context.get("reference_needs_review") or context.get("reference_status") == "Unknown":
+            reasons.append("reference_pending_review")
 
-    if has_reference_brand_conflict(context):
-        reasons.append("reference_brand_conflict")
+        if has_reference_brand_conflict(context):
+            reasons.append("reference_brand_conflict")
 
     if not has_explicit_market_condition(context):
         condition = resolve_offer_wear_condition(
@@ -275,8 +351,8 @@ def evaluate_market_price_eligibility(
     if not _has_normalized_comparison_price(context):
         reasons.append("normalized_usd_price_missing")
 
-    if confidence < threshold:
-        reasons.append(f"market_price_confidence_below_threshold:{confidence}<{threshold}")
+    if confidence < effective_threshold:
+        reasons.append(f"market_price_confidence_below_threshold:{confidence}<{effective_threshold}")
 
     eligible = not reasons
     return MarketPriceEligibility(
@@ -285,7 +361,7 @@ def evaluate_market_price_eligibility(
         exclusion_reasons=tuple(reasons),
         component_scores=component_scores,
         parser_confidence=parser_confidence,
-        threshold=threshold,
+        threshold=effective_threshold,
     )
 
 
@@ -350,6 +426,13 @@ def offer_record_to_market_context(offer: Record) -> Record:
         "original_currency": offer.get("original_currency"),
         "usd_price": offer.get("usd_price"),
         "offer_id": offer.get("id"),
+        "case_material": watch.get("case_material") or offer.get("case_material"),
+        "edition": watch.get("edition") or offer.get("edition"),
+        "dial_variant": watch.get("dial_variant") or offer.get("dial_variant"),
+        "size_mm": watch.get("size_mm") or offer.get("size_mm"),
+        "model_identity_key": watch.get("model_identity_key") or offer.get("model_identity_key"),
+        "model_identity_complete": watch.get("model_identity_complete") or offer.get("model_identity_complete"),
+        "ambiguous_model": watch.get("ambiguous_model") or offer.get("ambiguous_model"),
     }
     return context
 

@@ -158,6 +158,7 @@ def get_client() -> Client:
 
 
 _contact_type_column_supported: bool | None = None
+_dealer_default_currency_columns_supported: bool | None = None
 _source_import_log_id_column_supported: bool | None = None
 _users_table_supported: bool | None = None
 _user_ownership_columns_supported: bool | None = None
@@ -174,8 +175,10 @@ _parser_training_rows_supported: bool | None = None
 def reset_contact_type_column_cache() -> None:
     """Reset cached contact_type column detection (for tests)."""
     global _contact_type_column_supported, _source_import_log_id_column_supported
+    global _dealer_default_currency_columns_supported
     _contact_type_column_supported = None
     _source_import_log_id_column_supported = None
+    _dealer_default_currency_columns_supported = None
 
 
 def reset_user_columns_cache() -> None:
@@ -235,6 +238,32 @@ def contact_type_column_supported() -> bool:
         else:
             raise
     return _contact_type_column_supported
+
+
+def dealer_default_currency_columns_supported() -> bool:
+    """Return True when dealers.default_currency exists in the connected database."""
+    global _dealer_default_currency_columns_supported
+    if _dealer_default_currency_columns_supported is not None:
+        return _dealer_default_currency_columns_supported
+
+    try:
+        get_client().table("dealers").select(
+            "default_currency, default_currency_confidence, inferred_from_phone_country, "
+            "inferred_from_offer_history"
+        ).limit(1).execute()
+        _dealer_default_currency_columns_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "default_currency" in message:
+            _dealer_default_currency_columns_supported = False
+            logger.warning(
+                "dealers.default_currency columns missing; apply "
+                "docs/migrations/sprint_50_5_dealer_default_currency.sql"
+            )
+        else:
+            raise
+    return _dealer_default_currency_columns_supported
 
 
 def source_import_log_id_column_supported() -> bool:
@@ -660,12 +689,17 @@ def update_offer_from_training(
     if existing is None:
         raise ValueError("Offer not found")
 
+    from fpj_model_knowledge import apply_fpj_enrichment, fpj_storage_identity_fields
+
+    enriched_watch = apply_fpj_enrichment(dict(watch), str(watch.get("source_line") or ""))
+    identity = fpj_storage_identity_fields(enriched_watch)
+
     watch_row, _ = find_or_create_watch(
-        brand=watch.get("brand"),
-        reference=watch.get("reference"),
-        model=watch.get("model"),
-        dial=watch.get("dial"),
-        bracelet=watch.get("bracelet"),
+        brand=identity.get("brand"),
+        reference=identity.get("reference"),
+        model=identity.get("model"),
+        dial=identity.get("dial"),
+        bracelet=identity.get("bracelet"),
     )
 
     production_year = watch.get("production_year")

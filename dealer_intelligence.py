@@ -473,8 +473,23 @@ def paginate_dealer_list_rows(
     )
 
 
-def build_dealer_profile(dealer: Record) -> Record:
+def _display_currency(value: str | None) -> str:
+    if not value:
+        return "N/A"
+    return str(value).strip().upper()
+
+
+def build_dealer_profile(
+    dealer: Record,
+    *,
+    offer_rows: list[Record] | None = None,
+) -> Record:
+    from dealer_currency_resolution import build_dealer_currency_intelligence
+
     contact = dealer.get("phone_number") or dealer.get("whatsapp_id") or "N/A"
+    currency_intel = build_dealer_currency_intelligence(dealer, offer_rows=offer_rows or [])
+    stored_confidence = currency_intel.get("default_currency_confidence")
+    recommended_confidence = currency_intel.get("recommended_default_currency_confidence")
     return {
         "name": dealer_display_name(dealer),
         "whatsapp_id": dealer.get("whatsapp_id") or "N/A",
@@ -486,6 +501,20 @@ def build_dealer_profile(dealer: Record) -> Record:
         "is_active_class": "success" if dealer.get("is_active", True) else "secondary",
         "created_at": format_activity_timestamp(dealer.get("created_at")),
         "updated_at": format_activity_timestamp(dealer.get("updated_at")),
+        "default_currency": _display_currency(currency_intel.get("default_currency")),
+        "default_currency_confidence": (
+            stored_confidence if isinstance(stored_confidence, int) else "N/A"
+        ),
+        "recommended_default_currency": _display_currency(
+            currency_intel.get("recommended_default_currency")
+        ),
+        "recommended_default_currency_confidence": (
+            recommended_confidence if isinstance(recommended_confidence, int) else "N/A"
+        ),
+        "inferred_from_phone_country": currency_intel.get("inferred_from_phone_country"),
+        "phone_country_currency": _display_currency(currency_intel.get("phone_country_currency")),
+        "inferred_from_offer_history": currency_intel.get("inferred_from_offer_history"),
+        "currency_history_counts": currency_intel.get("currency_history_counts") or {},
     }
 
 

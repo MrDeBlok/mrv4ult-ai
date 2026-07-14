@@ -204,6 +204,72 @@ class TestPriceRecognition:
             assert watch["original_currency"] == expected_currency
 
 
+class TestFullNumberPriceParsing:
+    @pytest.mark.parametrize(
+        ("line", "expected_price", "expected_currency"),
+        [
+            ("126334 1,168,000 HK$", 1_168_000, "HKD"),
+            ("126334 HK$1,168,000", 1_168_000, "HKD"),
+            ("126334 1,168,000HK$", 1_168_000, "HKD"),
+            ("126334 HKD 1,168,000", 1_168_000, "HKD"),
+            ("126334 149,700 US$", 149_700, "USD"),
+            ("126334 77,000 HKD", 77_000, "HKD"),
+            ("126334 820,000 HKD", 820_000, "HKD"),
+            ("126334 1,530,000 HKD", 1_530_000, "HKD"),
+            ("126334 1.53m HKD", 1_530_000, "HKD"),
+            ("126334 145k USD", 145_000, "USD"),
+        ],
+    )
+    def test_full_number_and_compact_price_formats(
+        self,
+        line: str,
+        expected_price: int,
+        expected_currency: str,
+    ) -> None:
+        watch = parse_watch_line(line)
+        assert watch is not None
+        assert watch["original_price"] == expected_price
+        assert watch["original_currency"] == expected_currency
+
+    @pytest.mark.parametrize(
+        ("compact_line", "expected_price"),
+        [
+            ("126334 1.53m", 1_530_000),
+            ("126334 145k", 145_000),
+            ("126334 822m", 822_000_000),
+            ("126334 18.3m", 18_300_000),
+        ],
+    )
+    def test_compact_notation_still_parses(
+        self,
+        compact_line: str,
+        expected_price: int,
+    ) -> None:
+        watch = parse_watch_line(compact_line)
+        assert watch is not None
+        assert watch["original_price"] == expected_price
+
+    def test_dual_currency_offer_prefers_hkd_primary(self) -> None:
+        watch = parse_watch_line("126539TBR 1,168,000 HK$ / 149,700 US$")
+        assert watch is not None
+        assert watch["original_price"] == 1_168_000
+        assert watch["original_currency"] == "HKD"
+
+    def test_dual_currency_glued_hkd_offer_prefers_hkd_primary(self) -> None:
+        watch = parse_watch_line("126539TBR 1,168,000HK$ / 149,700 US$")
+        assert watch is not None
+        assert watch["original_price"] == 1_168_000
+        assert watch["original_currency"] == "HKD"
+
+    def test_dual_currency_multiline_offer_prefers_hkd_primary(self) -> None:
+        result = parse_message("126539TBR 01/2026 New\n1,168,000 HK$ / 149,700 US$")
+        assert result["message_type"] == "offer"
+        assert len(result["watches"]) == 1
+        watch = result["watches"][0]
+        assert watch["original_price"] == 1_168_000
+        assert watch["original_currency"] == "HKD"
+
+
 class TestConditionAndAccessories:
     def test_full_set_and_year(self) -> None:
         watch = parse_watch_line("AP 15500ST blue 2023 full set €52k")
@@ -598,6 +664,8 @@ class TestNewPrefixCardDateNotation:
             ("5711/1A N12/2025 145k USD", "12/2025", "N12/2025"),
             ("26510OR N 7/2026 HKD 1.424m", "07/2026", "N 7/2026"),
             ("126200 green jub n6/26 74000usd", "06/2026", "n6/26"),
+            ("N7/2025", "07/2025", "N7/2025"),
+            ("N07/2027", "07/2027", "N07/2027"),
         ],
     )
     def test_n_prefix_card_date_sets_explicit_new_condition(
@@ -611,6 +679,32 @@ class TestNewPrefixCardDateNotation:
         assert watch["condition"] == "New"
         assert watch["card_date"] == expected_card_date
         assert watch["production_year"] == int(expected_card_date.split("/")[1])
+        assert watch["raw_condition"] == expected_raw
+
+    @pytest.mark.parametrize(
+        ("line", "expected_month", "expected_raw"),
+        [
+            ("N7", "07", "N7"),
+            ("N07", "07", "N07"),
+            ("N1", "01", "N1"),
+            ("N12", "12", "N12"),
+            ("124270 N7 HKD 77k", "07", "N7"),
+            ("4300V N7 1.53m HKD", "07", "N7"),
+        ],
+    )
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_compact_n_month_uses_current_calendar_year(
+        self,
+        _mock_year: object,
+        line: str,
+        expected_month: str,
+        expected_raw: str,
+    ) -> None:
+        watch = parse_watch_line(line)
+        assert watch is not None
+        assert watch["condition"] == "New"
+        assert watch["card_date"] == f"{expected_month}/2026"
+        assert watch["production_year"] == 2026
         assert watch["raw_condition"] == expected_raw
 
     def test_patek_7128_full_pipeline(self) -> None:
@@ -633,65 +727,34 @@ class TestNewPrefixCardDateNotation:
         assert metadata["inference_note"] is None
         assert metadata["label"] == NEW_CONDITION
 
-    @pytest.mark.parametrize(
-        "line",
-        [
-            "M79030N-0001 145k USD",
-            "Nautilus 5711/1A 145k USD",
-            "7128/1R full set 1.53m hkd",
-            "126610LN 305k usd",
-        ],
-    )
-    def test_standalone_n_is_not_treated_as_new_without_date(self, line: str) -> None:
-        watch = parse_watch_line(line)
-        assert watch is not None
-        assert watch.get("condition") != "New"
-        assert watch.get("card_date") is None
-
-
-class TestNewPrefixCardDateNotation:
-    @pytest.mark.parametrize(
-        ("line", "expected_card_date", "expected_raw"),
-        [
-            ("7128/1R N7/2026 1.53m hkd", "07/2026", "N7/2026"),
-            ("7128/1R N07/2026 1.53m HKD", "07/2026", "N07/2026"),
-            ("5711/1A N12/2025 145k USD", "12/2025", "N12/2025"),
-            ("26510OR N 7/2026 HKD 1.424m", "07/2026", "N 7/2026"),
-            ("126200 green jub n6/26 74000usd", "06/2026", "n6/26"),
-        ],
-    )
-    def test_n_prefix_card_date_sets_explicit_new_condition(
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_compact_n7_full_pipeline_recognized_as_new_for_deal_analysis(
         self,
-        line: str,
-        expected_card_date: str,
-        expected_raw: str,
+        _mock_year: object,
     ) -> None:
-        watch = parse_watch_line(line)
-        assert watch is not None
-        assert watch["condition"] == "New"
-        assert watch["card_date"] == expected_card_date
-        assert watch["production_year"] == int(expected_card_date.split("/")[1])
-        assert watch["raw_condition"] == expected_raw
-
-    def test_patek_7128_full_pipeline(self) -> None:
-        watch = _parse_normalized_message("7128/1R N7/2026 1.53m hkd")
-
-        assert watch["brand"] == "Patek Philippe"
-        assert watch["reference"] == "7128/1R"
-        assert watch["condition"] == NEW_CONDITION
-        assert watch["raw_condition"] == "N7/2026"
-        assert watch["card_date"] == "07/2026"
-        assert watch["production_year"] == 2026
-        assert watch["original_price"] == 1_530_000
-        assert watch["original_currency"] == "HKD"
-
+        watch = _parse_normalized_message("124270 N7 HKD 77k")
         watch = mark_explicit_condition_metadata(
             apply_inferred_pre_owned_default(watch)
         )
+
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["card_date"] == "07/2026"
+        assert watch["production_year"] == 2026
+        assert watch.get("condition_source") != "inferred_default"
+
         metadata = condition_display_metadata({}, watch)
-        assert metadata["is_inferred"] is False
-        assert metadata["inference_note"] is None
         assert metadata["label"] == NEW_CONDITION
+        assert metadata["is_inferred"] is False
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_vacheron_compact_n7_full_pipeline(self, _mock_year: object) -> None:
+        watch = _parse_normalized_message("4300V N7 1.53m HKD")
+
+        assert watch["reference"] == "4300V"
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["card_date"] == "07/2026"
+        assert watch["production_year"] == 2026
+        assert watch["original_price"] == 1_530_000
 
     @pytest.mark.parametrize(
         "line",
@@ -700,10 +763,13 @@ class TestNewPrefixCardDateNotation:
             "Nautilus 5711/1A 145k USD",
             "7128/1R full set 1.53m hkd",
             "126610LN 305k usd",
+            "Panerai PAM01312 145k USD",
+            "NEW OLD STOCK 145k USD",
         ],
     )
-    def test_standalone_n_is_not_treated_as_new_without_date(self, line: str) -> None:
+    def test_n_inside_references_or_words_is_ignored(self, line: str) -> None:
         watch = parse_watch_line(line)
         assert watch is not None
-        assert watch.get("condition") != "New"
         assert watch.get("card_date") is None
+        if watch.get("raw_condition") is not None:
+            assert not str(watch["raw_condition"]).upper().startswith("N")

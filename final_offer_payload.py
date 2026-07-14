@@ -17,6 +17,11 @@ AUDIT_KEY = "audit"
 CORRECTABLE_FIELDS = (
     "brand",
     "reference",
+    "model",
+    "case_material",
+    "edition",
+    "dial_variant",
+    "size_mm",
     "condition",
     "production_year",
     "year",
@@ -143,6 +148,19 @@ def build_final_offer_payload(
                 payload["production_year"] = int(year)
         if corrections.get("card_date"):
             payload["card_date"] = str(corrections["card_date"]).strip()
+        for field in ("model", "case_material", "edition", "dial_variant"):
+            if corrections.get(field) not in (None, ""):
+                payload[field] = str(corrections[field]).strip()
+        if str(corrections.get("size_mm") or "").strip().isdigit():
+            payload["size_mm"] = int(str(corrections["size_mm"]).strip())
+
+    from fpj_model_knowledge import apply_fpj_enrichment, build_model_identity_key, fpj_storage_identity_fields
+
+    source_text = str(payload.get("source_line") or row.get("raw_row_text") or "")
+    payload = apply_fpj_enrichment(payload, source_text)
+    payload["model_identity_key"] = build_model_identity_key(payload)
+    identity = fpj_storage_identity_fields(payload)
+    payload["dial"] = identity.get("dial") or payload.get("dial")
 
     recalculate_offer_usd_price(payload)
     return payload
@@ -290,6 +308,12 @@ def build_training_row_audit(
         "final_offer_snapshot": {
             "brand": final_watch.get("brand"),
             "reference": final_watch.get("reference"),
+            "model": final_watch.get("model"),
+            "case_material": final_watch.get("case_material"),
+            "edition": final_watch.get("edition"),
+            "dial_variant": final_watch.get("dial_variant"),
+            "size_mm": final_watch.get("size_mm"),
+            "model_identity_key": final_watch.get("model_identity_key"),
             "condition": final_watch.get("condition"),
             "production_year": final_watch.get("production_year"),
             "card_date": final_watch.get("card_date"),

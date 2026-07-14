@@ -29,6 +29,10 @@ CREATE TABLE dealers (
     notes           TEXT,
     is_active       BOOLEAN     NOT NULL DEFAULT true,
     contact_type    TEXT        NOT NULL DEFAULT 'unknown',
+    default_currency TEXT,
+    default_currency_confidence INTEGER,
+    inferred_from_phone_country BOOLEAN NOT NULL DEFAULT false,
+    inferred_from_offer_history BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
