@@ -878,17 +878,32 @@ async def match_detail_page(request: Request, match_id: str) -> HTMLResponse:
 
 
 def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    previews = load_message_previews_by_import_log_id(notifications)
+    previews, preview_load_failed = load_message_previews_by_import_log_id(notifications)
+
     needs_review_import_ids = [
-        str(notification["related_import_log_id"])
+        str(notification["related_import_log_id"]).strip()
         for notification in notifications
         if notification.get("type") == "needs_review" and notification.get("related_import_log_id")
     ]
-    import_logs_by_id = (
-        get_import_logs_by_ids(list(dict.fromkeys(needs_review_import_ids)))
-        if needs_review_import_ids
-        else {}
-    )
+    import_logs_by_id: dict[str, Any] = {}
+    if needs_review_import_ids:
+        try:
+            from database import IMPORT_LOG_QUICK_FIX_COLUMNS, get_import_logs_by_ids
+
+            import_logs_by_id = get_import_logs_by_ids(
+                list(dict.fromkeys(needs_review_import_ids)),
+                select_fields=IMPORT_LOG_QUICK_FIX_COLUMNS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to load import logs for notification quick-fix prefills; "
+                "continuing without prefills (needs_review_count=%s): %s",
+                len(needs_review_import_ids),
+                exc,
+                exc_info=True,
+            )
+            import_logs_by_id = {}
+
     quick_fix_prefills = build_quick_fix_prefills(
         notifications,
         import_logs_by_id=import_logs_by_id,
@@ -903,6 +918,8 @@ def build_notification_rows(notifications: list[dict[str, Any]]) -> list[dict[st
             preview = previews.get(str(import_log_id))
             if preview:
                 row["message_preview"] = preview
+            elif preview_load_failed:
+                row["message_preview_unavailable"] = True
         if notification.get("type") == "needs_review":
             row["show_quick_fix"] = True
             prefill = quick_fix_prefills.get(str(notification["id"]))

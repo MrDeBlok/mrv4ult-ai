@@ -13,6 +13,7 @@ from condition_normalizer import (
     condition_display_metadata,
     mark_explicit_condition_metadata,
     normalize_watch_condition,
+    resolve_offer_wear_condition,
 )
 from ingest import enrich_parsed_watch
 from parser_learning import detect_condition_training_term, prepare_watch_for_ingest
@@ -656,6 +657,82 @@ class TestTudorReferenceAndConditionParsing:
 
 
 class TestNewPrefixCardDateNotation:
+    USER_EXAMPLE = "4946G blue N6/26 - HKD 355,000"
+
+    @pytest.mark.parametrize(
+        ("notation", "expected_card_date", "expected_year"),
+        [
+            ("N6", "06/2026", 2026),
+            ("N06", "06/2026", 2026),
+            ("N6/26", "06/2026", 2026),
+            ("N06/26", "06/2026", 2026),
+            ("N6/2026", "06/2026", 2026),
+            ("N06/2026", "06/2026", 2026),
+            ("N12", "12/2026", 2026),
+            ("N12/26", "12/2026", 2026),
+            ("N12/2026", "12/2026", 2026),
+        ],
+    )
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_supported_compact_new_notations_behave_identically(
+        self,
+        _mock_year: object,
+        notation: str,
+        expected_card_date: str,
+        expected_year: int,
+    ) -> None:
+        line = f"4946G blue {notation} - HKD 355,000"
+        watch = parse_watch_line(line)
+
+        assert watch is not None
+        assert watch["condition"] == "New"
+        assert watch["raw_condition"] == notation
+        assert watch["card_date"] == expected_card_date
+        assert watch["production_year"] == expected_year
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_user_example_parses_new_card_date_and_year(self, _mock_year: object) -> None:
+        watch = parse_watch_line(self.USER_EXAMPLE)
+
+        assert watch is not None
+        assert watch["reference"] == "4946G"
+        assert watch["dial"] == "Blue"
+        assert watch["condition"] == "New"
+        assert watch["raw_condition"] == "N6/26"
+        assert watch["card_date"] == "06/2026"
+        assert watch["production_year"] == 2026
+        assert watch["original_price"] == 355_000
+        assert watch["original_currency"] == "HKD"
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_glued_color_before_n_notation_is_recognized(self, _mock_year: object) -> None:
+        watch = parse_watch_line("4946G blueN6/26 - HKD 355,000")
+
+        assert watch is not None
+        assert watch["condition"] == "New"
+        assert watch["raw_condition"] == "N6/26"
+        assert watch["card_date"] == "06/2026"
+        assert watch["production_year"] == 2026
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_user_example_full_pipeline_classifies_as_new_for_deal_analysis(
+        self,
+        _mock_year: object,
+    ) -> None:
+        watch = _parse_normalized_message(self.USER_EXAMPLE)
+        watch = mark_explicit_condition_metadata(apply_inferred_pre_owned_default(watch))
+
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "N6/26"
+        assert watch["card_date"] == "06/2026"
+        assert watch["production_year"] == 2026
+        assert resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")) == NEW_CONDITION
+        assert resolve_offer_wear_condition(None, "N6/26") == NEW_CONDITION
+
+        metadata = condition_display_metadata({}, watch)
+        assert metadata["label"] == NEW_CONDITION
+        assert metadata["is_inferred"] is False
+
     @pytest.mark.parametrize(
         ("line", "expected_card_date", "expected_raw"),
         [

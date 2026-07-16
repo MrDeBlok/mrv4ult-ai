@@ -9,13 +9,58 @@ import pytest
 from contact_classification import CONTACT_TYPE_DEALER
 from dealer_currency_resolution import (
     analyze_dealer_currency_history,
+    analyze_message_currency_context,
     apply_dealer_currency_resolution,
     build_dealer_currency_intelligence,
     infer_currency_from_phone,
     resolve_implicit_offer_currency,
 )
 from ingest import ingest_message
-from watch_parser import parse_watch_line
+from watch_parser import parse_message, parse_watch_line
+
+HK_DEALER_PHONE = "+85291234567"
+
+HK_FULL_DEALER_MESSAGE = """🇭🇰 New 🇭🇰
+Rolex 126619LB $618k
+PP 5711 $180K
+AP 15500 $231K
+Omega 210.30.42.20.01.001 $1.128m
+Patek 5167A 183k
+VC 4500V 183k EUR
+Rolex 126334 US$183k
+Patek 5711 510k USDT
+Tudor M79000 $545k U
+5980/1400G 2024 Nos 600k U / 4.68M hkd
+5990/1R 2025 Nos 319k U / 2.47M hkd
+RM65-01 MCL 6/26 450000U
+RM65-01 Wht 5/26 $3.61m
+5296G 4.68M hkd
+PP 5711/1A EUR 183k full set
+"""
+
+
+def _resolve_row(
+    line: str,
+    *,
+    phone: str | None = HK_DEALER_PHONE,
+    dealer: dict | None = None,
+    message_text: str | None = None,
+) -> dict:
+    watch = parse_watch_line(line)
+    assert watch is not None
+    return apply_dealer_currency_resolution(
+        watch,
+        dealer=dealer,
+        dealer_whatsapp=phone,
+        message_text=message_text,
+    )
+
+
+def _legacy_currency_from_watch(watch: dict) -> str | None:
+    """Simulate pre-fix behavior where bare $ was stored as explicit USD."""
+    if watch.get("currency_evidence") == "ambiguous_dollar_symbol":
+        return "USD"
+    return watch.get("original_currency")
 
 
 class TestPhoneCountryCurrencyMapping:
@@ -30,7 +75,7 @@ class TestPhoneCountryCurrencyMapping:
             ("+8613800138000", "CNY"),
             ("+821012345678", "KRW"),
             ("+31612345678", None),
-            ("+14155550123", None),
+            ("+14155550123", "USD"),
         ],
     )
     def test_phone_country_mapping(self, phone: str, expected: str | None) -> None:
@@ -45,6 +90,156 @@ class TestParserLeavesCurrencyUnknownWithoutExplicitMarker:
         assert watch["original_currency"] is None
         assert watch["currency_explicit"] is False
         assert watch["usd_price"] is None
+
+    @pytest.mark.parametrize(
+        ("line", "expected_evidence"),
+        [
+            ("Rolex 126619LB $618k", "ambiguous_dollar_symbol"),
+            ("4936J 183k USD", "explicit_code"),
+            ("Rolex US$183k", "explicit_unambiguous_symbol"),
+            ("RM65-01 MCL 6/26 450000U", "usd_shorthand_u"),
+            ("Patek 510k USDT", "explicit_code"),
+        ],
+    )
+    def test_currency_evidence_classification(self, line: str, expected_evidence: str) -> None:
+        watch = parse_watch_line(line)
+        assert watch is not None
+        assert watch["currency_evidence"] == expected_evidence
+        assert watch["currency_explicit"] == (expected_evidence in {
+            "explicit_code",
+            "explicit_unambiguous_symbol",
+            "usd_shorthand_u",
+        })
+
+
+class TestHongKongBareDollarResolution:
+    @pytest.mark.parametrize(
+        ("line", "expected_currency", "expected_price"),
+        [
+            ("Rolex 126619LB $618k", "HKD", 618_000),
+            ("PP 5711 $180K", "HKD", 180_000),
+            ("Omega $1.128m", "HKD", 1_128_000),
+            ("RM65-01 Wht 5/26 $3.61m", "HKD", 3_610_000),
+            ("Patek 183k", "HKD", 183_000),
+            ("5980/1400G 2024 Nos 600k U / 4.68M hkd", "HKD", 4_680_000),
+            ("Tudor $545k U", "USD", 545_000),
+            ("RM65-01 MCL 6/26 450000U", "USD", 450_000),
+            ("Patek 510k USDT", "USDT", 510_000),
+            ("5296G 4.68M hkd", "HKD", 4_680_000),
+            ("VC 183k EUR", "EUR", 183_000),
+            ("Rolex US$183k", "USD", 183_000),
+            ("PP 5711/1A EUR 183k full set", "EUR", 183_000),
+        ],
+    )
+    def test_hk_dealer_row_resolution(
+        self,
+        line: str,
+        expected_currency: str,
+        expected_price: int,
+    ) -> None:
+        resolved = _resolve_row(line)
+        assert resolved["original_currency"] == expected_currency
+        assert resolved["original_price"] == expected_price
+
+
+class TestCurrencyContextAndPriority:
+    def test_hk_flag_header_supports_bare_dollar_without_phone(self) -> None:
+        resolved = _resolve_row(
+            "Rolex 126619LB $618k",
+            phone=None,
+            message_text="🇭🇰 New 🇭🇰",
+        )
+        assert resolved["original_currency"] == "HKD"
+        assert resolved["currency_resolution"]["source"] == "message_context"
+
+    def test_explicit_usd_inside_hk_message_stays_usd(self) -> None:
+        resolved = _resolve_row(
+            "Tudor $545k U",
+            message_text=HK_FULL_DEALER_MESSAGE,
+        )
+        assert resolved["original_currency"] == "USD"
+        assert resolved["currency_resolution"]["source"] == "explicit"
+
+    def test_explicit_eur_inside_hk_message_stays_eur(self) -> None:
+        resolved = _resolve_row(
+            "VC 183k EUR",
+            message_text=HK_FULL_DEALER_MESSAGE,
+        )
+        assert resolved["original_currency"] == "EUR"
+
+    def test_us_dealer_bare_dollar_resolves_usd(self) -> None:
+        resolved = _resolve_row("Rolex 126619LB $618k", phone="+14155550123")
+        assert resolved["original_currency"] == "USD"
+
+    def test_singapore_dealer_bare_dollar_resolves_sgd(self) -> None:
+        resolved = _resolve_row("Rolex 126619LB $618k", phone="+6591234567")
+        assert resolved["original_currency"] == "SGD"
+
+    def test_unknown_dealer_bare_dollar_does_not_become_eur(self) -> None:
+        resolved = _resolve_row("Rolex 126619LB $618k", phone="+31612345678")
+        assert resolved["original_currency"] is None
+        assert resolved["currency_resolution"]["source"] == "unknown"
+
+    def test_dealer_default_overrides_phone_country(self) -> None:
+        resolved = _resolve_row(
+            "Rolex 126619LB $618k",
+            dealer={
+                "phone_number": "+85291234567",
+                "default_currency": "USD",
+                "default_currency_confidence": 95,
+            },
+        )
+        assert resolved["original_currency"] == "USD"
+        assert resolved["currency_resolution"]["source"] == "dealer_default"
+
+    def test_message_context_detects_hk_header(self) -> None:
+        context = analyze_message_currency_context(HK_FULL_DEALER_MESSAGE)
+        assert context["hk_flag_present"] is True
+        assert context["trusted_hkd_context"] is True
+        assert context["recommended_currency"] == "HKD"
+
+
+class TestFullHongKongMessageRegression:
+    def test_full_message_currency_counts_and_corrections(self) -> None:
+        parsed = parse_message(HK_FULL_DEALER_MESSAGE)
+        watches = parsed["watches"]
+        resolved_rows: list[dict] = []
+        corrections: list[dict] = []
+
+        for watch in watches:
+            parsed_watch = dict(watch)
+            legacy_currency = _legacy_currency_from_watch(parsed_watch)
+            resolved = apply_dealer_currency_resolution(
+                parsed_watch,
+                dealer_whatsapp=HK_DEALER_PHONE,
+                message_text=HK_FULL_DEALER_MESSAGE,
+            )
+            resolved_rows.append(resolved)
+            if legacy_currency != resolved.get("original_currency"):
+                corrections.append(
+                    {
+                        "source_line": resolved.get("source_line"),
+                        "legacy_currency": legacy_currency,
+                        "resolved_currency": resolved.get("original_currency"),
+                        "price": resolved.get("original_price"),
+                    }
+                )
+
+        currency_counts: dict[str | None, int] = {}
+        for row in resolved_rows:
+            currency = row.get("original_currency")
+            currency_counts[currency] = currency_counts.get(currency, 0) + 1
+
+        assert len(resolved_rows) >= 10
+        assert currency_counts.get("HKD", 0) >= 6
+        assert currency_counts.get("USD", 0) >= 2
+        assert currency_counts.get("USDT", 0) >= 1
+        assert currency_counts.get("EUR", 0) >= 1
+        assert currency_counts.get(None, 0) == 0
+        assert len(corrections) >= 4
+        usd_corrections = [item for item in corrections if item["legacy_currency"] == "USD"]
+        assert len(usd_corrections) >= 4
+        assert all(item["resolved_currency"] == "HKD" for item in usd_corrections)
 
 
 class TestDealerCurrencyResolution:

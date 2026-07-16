@@ -191,6 +191,82 @@ def _partition_comparables(
     return same_condition, excluded_missing_condition + excluded_other_condition
 
 
+def _filter_rm_variant_comparables(
+    entries: list[tuple[str, int, str | None]],
+    *,
+    watch: Record,
+) -> tuple[list[tuple[str, int, str | None]], Record]:
+    """Exclude Richard Mille offers that do not match the target variant identity."""
+    from market_price_confidence import offer_record_to_market_context
+    from rm_model_knowledge import (
+        build_rm_identity_key,
+        evaluate_rm_variant_comparability,
+        is_rm_brand,
+    )
+
+    if not is_rm_brand(watch.get("brand")):
+        return entries, {}
+
+    offer_ids = [entry[0] for entry in entries]
+    if not offer_ids:
+        return entries, {
+            "rm_identity_key": build_rm_identity_key(watch),
+            "variant_match_type": "unknown_variant",
+            "exact_comparable_count": 0,
+            "excluded_due_to_material": 0,
+            "excluded_due_to_gem_setting": 0,
+            "excluded_due_to_edition_nickname": 0,
+        }
+
+    offers_by_id = get_offers_by_ids(offer_ids)
+    exact_entries: list[tuple[str, int, str | None]] = []
+    excluded_material = 0
+    excluded_gem = 0
+    excluded_edition = 0
+    variant_fields_matched: list[str] = []
+    variant_mismatch_reasons: list[str] = []
+    variant_match_type = "unknown_variant"
+
+    for entry in entries:
+        offer = offers_by_id.get(entry[0])
+        if not offer:
+            continue
+        comparison = evaluate_rm_variant_comparability(
+            watch,
+            offer_record_to_market_context(offer),
+        )
+        if comparison.get("exact_match"):
+            exact_entries.append(entry)
+            variant_match_type = "exact_variant"
+            variant_fields_matched = comparison.get("variant_fields_matched") or []
+            continue
+
+        reasons = comparison.get("variant_mismatch_reasons") or []
+        variant_mismatch_reasons.extend(reason for reason in reasons if reason not in variant_mismatch_reasons)
+        if "material_mismatch" in reasons:
+            excluded_material += 1
+        if "gem_setting_mismatch" in reasons:
+            excluded_gem += 1
+        if "edition_nickname_mismatch" in reasons:
+            excluded_edition += 1
+
+    if not exact_entries and variant_mismatch_reasons:
+        variant_match_type = "variant_mismatch"
+    elif not exact_entries:
+        variant_match_type = "unknown_variant"
+
+    return exact_entries, {
+        "rm_identity_key": build_rm_identity_key(watch),
+        "variant_match_type": variant_match_type,
+        "variant_fields_matched": variant_fields_matched,
+        "variant_mismatch_reasons": variant_mismatch_reasons,
+        "exact_comparable_count": len(exact_entries),
+        "excluded_due_to_material": excluded_material,
+        "excluded_due_to_gem_setting": excluded_gem,
+        "excluded_due_to_edition_nickname": excluded_edition,
+    }
+
+
 def _stored_market_usd(row: Record, *, offer_condition: str | None) -> int | None:
     if row.get("price_label") == "No comparables":
         return None
@@ -249,12 +325,13 @@ def _build_debug(
     after_count: int,
     same_condition_entries: list[tuple[str, int, str | None]],
     reason: str | None,
+    rm_variant_debug: Record | None = None,
 ) -> Record:
     from market_price_confidence import build_market_price_debug
 
     merged_context = {**watch, **row}
     market_debug = build_market_price_debug(merged_context)
-    return {
+    debug = {
         "watch_id": watch_id or "—",
         "brand": row.get("brand") or watch.get("brand") or "—",
         "reference": row.get("reference") or watch.get("reference") or "—",
@@ -276,6 +353,9 @@ def _build_debug(
         "market_price_threshold": market_debug.get("market_price_threshold"),
         "market_price_component_scores": market_debug.get("market_price_component_scores"),
     }
+    if rm_variant_debug:
+        debug.update(rm_variant_debug)
+    return debug
 
 
 def resolve_deal_market_context(
@@ -369,6 +449,22 @@ def resolve_deal_market_context(
         pool,
         offer_condition=offer_condition,
     )
+    condition_filtered_count = len(same_condition_entries)
+    rm_variant_debug: Record = {}
+    from rm_model_knowledge import apply_rm_enrichment, is_rm_brand
+
+    if is_rm_brand(watch.get("brand")):
+        source_line = str(
+            watch.get("source_line")
+            or row.get("source_line")
+            or row.get("raw_row_text")
+            or ""
+        )
+        watch = apply_rm_enrichment(watch, source_line)
+        same_condition_entries, rm_variant_debug = _filter_rm_variant_comparables(
+            same_condition_entries,
+            watch=watch,
+        )
     comparable_prices = [price for _offer_id, price, _condition in same_condition_entries if price > 0]
     after_count = len(comparable_prices)
 
@@ -402,6 +498,10 @@ def resolve_deal_market_context(
             after_count=after_count,
             same_condition_entries=same_condition_entries,
             reason=None if comparison_safe else "market_price_unavailable",
+            rm_variant_debug={
+                **rm_variant_debug,
+                "active_comparables_after_condition_filter": condition_filtered_count,
+            },
         ) if include_debug else {}
         return DealMarketContext(
             effective_row=effective_row,

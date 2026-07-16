@@ -13,6 +13,7 @@ PHONE_COUNTRY_CURRENCY_MAP: dict[str, str] = {
     "81": "JPY",
     "86": "CNY",
     "82": "KRW",
+    "1": "USD",
 }
 
 STRONG_HISTORY_MIN_OFFERS = 5
@@ -24,6 +25,24 @@ CURRENCY_ALIASES = {
     "USDT": "USDT",
     "USTD": "USDT",
 }
+
+HK_FLAG_PATTERN = re.compile(r"🇭🇰")
+EXPLICIT_HKD_PATTERN = re.compile(r"\bHKD\b", re.I)
+EXPLICIT_HKD_SYMBOL_PATTERN = re.compile(r"HK\$", re.I)
+EXPLICIT_USD_CODE_PATTERN = re.compile(r"\bUSD\b", re.I)
+EXPLICIT_USD_SYMBOL_PATTERN = re.compile(r"US\$", re.I)
+USD_SHORTHAND_U_PATTERN = re.compile(
+    r"([\d.,]+)\s*(?:k|K|m|M)?\s*U\b(?!(?:SDT?|ST))|[\d.,]+U\b(?!(?:SDT?|ST))",
+    re.I,
+)
+
+EXPLICIT_CURRENCY_EVIDENCE = frozenset(
+    {
+        "explicit_code",
+        "explicit_unambiguous_symbol",
+        "usd_shorthand_u",
+    }
+)
 
 
 def normalize_currency_code(currency: str | None) -> str | None:
@@ -72,6 +91,41 @@ def analyze_dealer_currency_history(
     return currency, int(round(share * 100)), counts
 
 
+def analyze_message_currency_context(message_text: str | None) -> Record:
+    """Infer trusted message-level currency context from headers and explicit rows."""
+    if not message_text:
+        return {
+            "trusted_hkd_context": False,
+            "recommended_currency": None,
+            "hk_flag_present": False,
+            "explicit_hkd_count": 0,
+            "explicit_usd_count": 0,
+        }
+
+    hk_flag_present = bool(HK_FLAG_PATTERN.search(message_text))
+    explicit_hkd_count = len(EXPLICIT_HKD_PATTERN.findall(message_text)) + len(
+        EXPLICIT_HKD_SYMBOL_PATTERN.findall(message_text)
+    )
+    explicit_usd_count = (
+        len(EXPLICIT_USD_CODE_PATTERN.findall(message_text))
+        + len(EXPLICIT_USD_SYMBOL_PATTERN.findall(message_text))
+        + len(USD_SHORTHAND_U_PATTERN.findall(message_text))
+    )
+
+    trusted_hkd_context = hk_flag_present or (
+        explicit_hkd_count >= 2 and explicit_hkd_count > explicit_usd_count
+    )
+    recommended_currency = "HKD" if trusted_hkd_context else None
+
+    return {
+        "trusted_hkd_context": trusted_hkd_context,
+        "recommended_currency": recommended_currency,
+        "hk_flag_present": hk_flag_present,
+        "explicit_hkd_count": explicit_hkd_count,
+        "explicit_usd_count": explicit_usd_count,
+    }
+
+
 def build_dealer_currency_intelligence(
     dealer: Record | None,
     *,
@@ -104,18 +158,30 @@ def build_dealer_currency_intelligence(
     }
 
 
+def _is_explicit_currency_watch(watch: Record) -> bool:
+    evidence = watch.get("currency_evidence")
+    if evidence in EXPLICIT_CURRENCY_EVIDENCE:
+        return True
+    return bool(watch.get("currency_explicit"))
+
+
 def resolve_implicit_offer_currency(
     watch: Record,
     *,
     dealer: Record | None = None,
     dealer_whatsapp: str | None = None,
+    message_text: str | None = None,
 ) -> tuple[str | None, Record]:
     """Resolve currency for an offer without explicit currency in the message."""
-    if watch.get("currency_explicit"):
+    if _is_explicit_currency_watch(watch):
         currency = normalize_currency_code(
             watch.get("original_currency") or watch.get("currency")
         )
-        return currency, {"source": "explicit", "currency": currency}
+        return currency, {
+            "source": "explicit",
+            "currency": currency,
+            "evidence": watch.get("currency_evidence"),
+        }
 
     dealer = dealer or {}
     phone = dealer_whatsapp or dealer.get("phone_number") or dealer.get("whatsapp_id")
@@ -126,6 +192,7 @@ def resolve_implicit_offer_currency(
             "source": "dealer_default",
             "currency": stored_default,
             "confidence": dealer.get("default_currency_confidence"),
+            "evidence": watch.get("currency_evidence"),
         }
 
     phone_currency = infer_currency_from_phone(str(phone) if phone else None)
@@ -134,9 +201,24 @@ def resolve_implicit_offer_currency(
             "source": "phone_country",
             "currency": phone_currency,
             "phone": phone,
+            "evidence": watch.get("currency_evidence"),
         }
 
-    return None, {"source": "unknown", "currency": None}
+    message_context = analyze_message_currency_context(message_text)
+    message_currency = normalize_currency_code(message_context.get("recommended_currency"))
+    if message_currency:
+        return message_currency, {
+            "source": "message_context",
+            "currency": message_currency,
+            "message_context": message_context,
+            "evidence": watch.get("currency_evidence"),
+        }
+
+    return None, {
+        "source": "unknown",
+        "currency": None,
+        "evidence": watch.get("currency_evidence"),
+    }
 
 
 def apply_dealer_currency_resolution(
@@ -144,25 +226,31 @@ def apply_dealer_currency_resolution(
     *,
     dealer: Record | None = None,
     dealer_whatsapp: str | None = None,
+    message_text: str | None = None,
 ) -> Record:
     """Apply dealer-aware currency resolution without overriding explicit currency."""
     if not watch.get("original_price") and not watch.get("price"):
         return watch
 
-    if watch.get("currency_explicit"):
+    if _is_explicit_currency_watch(watch):
         currency = normalize_currency_code(
             watch.get("original_currency") or watch.get("currency")
         )
         if currency:
             watch["original_currency"] = currency
             watch["currency"] = currency
-        watch["currency_resolution"] = {"source": "explicit", "currency": currency}
+        watch["currency_resolution"] = {
+            "source": "explicit",
+            "currency": currency,
+            "evidence": watch.get("currency_evidence"),
+        }
         return _recalculate_usd_fields(watch)
 
     resolved_currency, resolution = resolve_implicit_offer_currency(
         watch,
         dealer=dealer,
         dealer_whatsapp=dealer_whatsapp,
+        message_text=message_text,
     )
     if resolved_currency:
         watch["original_currency"] = resolved_currency
@@ -218,12 +306,14 @@ def apply_dealer_currency_resolution_batch(
     *,
     dealer: Record | None = None,
     dealer_whatsapp: str | None = None,
+    message_text: str | None = None,
 ) -> list[Record]:
     return [
         apply_dealer_currency_resolution(
             watch,
             dealer=dealer,
             dealer_whatsapp=dealer_whatsapp,
+            message_text=message_text,
         )
         for watch in watches
     ]

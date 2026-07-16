@@ -12,7 +12,9 @@ PRE_OWNED_CONDITION = "Pre-Owned"
 UNKNOWN_CONDITION = "Unknown"
 
 CONDITION_SOURCE_EXPLICIT = "explicit"
+CONDITION_SOURCE_INHERITED_SECTION = "inherited_section_header"
 CONDITION_SOURCE_INFERRED_DEFAULT = "inferred_default"
+CONDITION_SOURCE_INFERRED_FALLBACK = "inferred_fallback"
 CONDITION_CONFIDENCE_HIGH = "high"
 CONDITION_CONFIDENCE_MEDIUM = "medium"
 CONDITION_INFERENCE_NOTE = (
@@ -25,7 +27,37 @@ CONDITION_METADATA_FIELDS = (
     "condition_source",
     "condition_confidence",
     "condition_explicit",
+    "section_condition_header",
 )
+
+SECTION_HEADER_DECORATION_PATTERN = re.compile(
+    r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\uFE0F]+|[\u2600-\u27BF]|✅|✔️|❤️|♥️|🦄",
+)
+
+NEW_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
+    (re.compile(r"\b(?:bnib|unworn)\b", re.I), "Unworn"),
+    (re.compile(r"\bnew\s+arrivals?\b", re.I), "New Arrivals"),
+    (re.compile(r"\bnew\s+stock\b", re.I), "New Stock"),
+    (
+        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+new(?:\s|$)", re.I),
+        "Richard Mille NEW",
+    ),
+    (re.compile(r"(?:^|\s)rm\s+new(?:\s|$)", re.I), "RM NEW"),
+    (re.compile(r"(?:^|\s)new(?:\s|$)", re.I), "NEW"),
+]
+
+PRE_OWNED_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bpre[-\s]?owned\b", re.I), "Pre-Owned"),
+    (re.compile(r"\bpreowned\b", re.I), "Preowned"),
+    (re.compile(r"\bsecond\s+hand\b", re.I), "Second Hand"),
+    (
+        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+used(?:\s|$)", re.I),
+        "Richard Mille Used",
+    ),
+    (re.compile(r"(?:^|\s)rm\s+used(?:\s|$)", re.I), "RM Used"),
+    (re.compile(r"(?:^|\s)used(?:\s|$)", re.I), "Used"),
+]
 
 MESSAGE_ALL_BATCH_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\ball\s+new\b", re.I), "All new"),
@@ -98,6 +130,13 @@ def normalize_wear_condition(value: str | None) -> tuple[str | None, str | None]
     raw = str(value).strip()
     if not raw:
         return None, None
+
+    from watch_parser import parse_new_card_notation_value
+
+    notation = parse_new_card_notation_value(raw)
+    if notation:
+        _card_date, _production_year, raw_notation = notation
+        return NEW_CONDITION, raw_notation
 
     key = _condition_key(raw)
     normalized = NEW_ALIASES.get(key) or PRE_OWNED_ALIASES.get(key)
@@ -277,7 +316,10 @@ def watch_has_explicit_wear_condition(watch: Record) -> bool:
     """Return True when a parsed watch already has a dealer-confirmed wear condition."""
     if watch.get("condition_explicit") is True:
         return True
-    if watch.get("condition_source") == CONDITION_SOURCE_EXPLICIT:
+    if watch.get("condition_source") in {
+        CONDITION_SOURCE_EXPLICIT,
+        CONDITION_SOURCE_INHERITED_SECTION,
+    }:
         return True
     if watch.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
         return False
@@ -297,6 +339,10 @@ def mark_explicit_condition_metadata(watch: Record) -> Record:
     """Mark parsed condition metadata when wear condition came from explicit dealer text."""
     if watch.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
         return watch
+    if watch.get("condition_source") == CONDITION_SOURCE_INHERITED_SECTION:
+        watch["condition_explicit"] = True
+        watch["condition_confidence"] = CONDITION_CONFIDENCE_HIGH
+        return watch
     if resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")):
         watch["condition_source"] = CONDITION_SOURCE_EXPLICIT
         watch["condition_confidence"] = CONDITION_CONFIDENCE_HIGH
@@ -309,7 +355,10 @@ def apply_inferred_pre_owned_default(watch: Record) -> Record:
     if watch.get("condition_needs_training"):
         return watch
     updated = dict(watch)
-    if updated.get("condition_explicit") or updated.get("condition_source") == CONDITION_SOURCE_EXPLICIT:
+    if updated.get("condition_explicit") or updated.get("condition_source") in {
+        CONDITION_SOURCE_EXPLICIT,
+        CONDITION_SOURCE_INHERITED_SECTION,
+    }:
         return updated
     if resolve_offer_wear_condition(updated.get("condition"), updated.get("raw_condition")):
         return mark_explicit_condition_metadata(updated)
@@ -405,6 +454,154 @@ def _line_is_watch_offer_line(line: str) -> bool:
     return bool(_extract_reference(cleaned)[0] and _extract_price(cleaned)[0] is not None)
 
 
+def _clean_section_header_line(line: str) -> str:
+    cleaned = SECTION_HEADER_DECORATION_PATTERN.sub(" ", line)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .:-")
+    return cleaned
+
+
+def _line_has_product_row_signals(line: str) -> bool:
+    """Return True when a line contains offer-row signals beyond a bare condition banner."""
+    try:
+        from watch_parser import (
+            CARD_MMYyyy_PATTERN,
+            USED_YEAR_PATTERN,
+            _extract_price,
+            _extract_reference,
+        )
+    except ImportError:  # pragma: no cover
+        return False
+
+    if _extract_price(line)[0] is not None:
+        return True
+    if _extract_reference(line)[0]:
+        return True
+    if USED_YEAR_PATTERN.search(line):
+        return True
+    if re.search(r"\b(?:19|20)\d{2}y\b", line, re.I):
+        return True
+    if CARD_MMYyyy_PATTERN.search(line):
+        return True
+    if re.search(r"\b\d{1,2}/(?:\d{2}|\d{4})\b", line):
+        return True
+    return False
+
+
+def detect_section_condition_header(line: str) -> tuple[str | None, str | None]:
+    """Return normalized section condition and raw header text when a line is a section header."""
+    if _line_is_watch_offer_line(line):
+        return None, None
+
+    if _line_has_product_row_signals(line):
+        return None, None
+
+    try:
+        from watch_parser import _extract_price
+    except ImportError:  # pragma: no cover
+        return None, None
+
+    if _extract_price(line)[0] is not None:
+        return None, None
+
+    cleaned = _clean_section_header_line(line)
+    if not cleaned:
+        return None, None
+
+    for pattern, raw_label in NEW_SECTION_HEADER_PATTERNS:
+        if pattern.search(cleaned):
+            return NEW_CONDITION, raw_label
+
+    for pattern, raw_label in PRE_OWNED_SECTION_HEADER_PATTERNS:
+        if pattern.search(cleaned):
+            return PRE_OWNED_CONDITION, raw_label
+
+    return None, None
+
+
+def is_section_condition_header_line(line: str) -> bool:
+    return detect_section_condition_header(line)[0] is not None
+
+
+def _line_section_lookup_key(line: str) -> str:
+    from dealer_list_splitter import clean_dealer_list_line
+
+    return clean_dealer_list_line(line).casefold()
+
+
+def _active_section_for_source_line(
+    source_line: str,
+    *,
+    line_sections: dict[str, tuple[str | None, str | None]],
+    ordered_lines: list[str],
+) -> tuple[str | None, str | None]:
+    if not source_line:
+        return None, None
+
+    source_parts = [part.strip() for part in str(source_line).splitlines() if part.strip()]
+    if not source_parts:
+        source_parts = [str(source_line).strip()]
+
+    for part in source_parts:
+        key = _line_section_lookup_key(part)
+        if key in line_sections:
+            return line_sections[key]
+
+    source_key = _line_section_lookup_key(source_parts[0])
+    for line in ordered_lines:
+        key = _line_section_lookup_key(line)
+        if key == source_key:
+            return line_sections.get(key, (None, None))
+    return None, None
+
+
+def propagate_section_condition_context(message: str, watches: list[Record]) -> list[Record]:
+    """Apply sequential section-header condition inheritance to parsed watches."""
+    from watch_parser import iter_content_lines
+
+    lines = iter_content_lines(message)
+    if not lines or not watches:
+        return watches
+
+    active_condition: str | None = None
+    active_raw: str | None = None
+    line_sections: dict[str, tuple[str | None, str | None]] = {}
+
+    for line in lines:
+        header_condition, header_raw = detect_section_condition_header(line)
+        if header_condition:
+            active_condition = header_condition
+            active_raw = header_raw
+            continue
+        if not _line_is_watch_offer_line(line):
+            continue
+        line_sections[_line_section_lookup_key(line)] = (active_condition, active_raw)
+
+    updated: list[Record] = []
+    for watch in watches:
+        row = dict(watch)
+        if watch_has_explicit_wear_condition(row):
+            updated.append(row)
+            continue
+
+        section_condition, section_raw = _active_section_for_source_line(
+            str(row.get("source_line") or ""),
+            line_sections=line_sections,
+            ordered_lines=lines,
+        )
+        if section_condition is None:
+            updated.append(row)
+            continue
+
+        row["condition"] = section_condition
+        row["raw_condition"] = section_raw or section_condition
+        row["condition_source"] = CONDITION_SOURCE_INHERITED_SECTION
+        row["condition_confidence"] = CONDITION_CONFIDENCE_HIGH
+        row["condition_explicit"] = True
+        row["section_condition_header"] = section_raw
+        updated.append(row)
+    return updated
+
+
 def detect_message_batch_condition(message: str) -> tuple[str | None, str | None]:
     """Detect a shared wear condition declared once for a multi-watch message."""
     text = message.strip()
@@ -440,7 +637,8 @@ def detect_message_batch_condition(message: str) -> tuple[str | None, str | None
 
 
 def propagate_message_batch_condition(message: str, watches: list[Record]) -> list[Record]:
-    """Apply a message-level wear condition to watches missing their own condition."""
+    """Apply section headers first, then message-level wear condition to remaining watches."""
+    watches = propagate_section_condition_context(message, watches)
     batch_condition, batch_raw = detect_message_batch_condition(message)
     if batch_condition is None or not watches:
         return watches
@@ -449,6 +647,9 @@ def propagate_message_batch_condition(message: str, watches: list[Record]) -> li
     for watch in watches:
         row = dict(watch)
         if watch_has_explicit_wear_condition(row):
+            updated.append(row)
+            continue
+        if row.get("condition_source") == CONDITION_SOURCE_INHERITED_SECTION:
             updated.append(row)
             continue
         row["condition"] = batch_condition
@@ -477,7 +678,7 @@ def sync_summary_row_conditions(rows: list[Record], watches: list[Record]) -> li
         updated["condition"] = watch.get("condition")
         if watch.get("raw_condition"):
             updated["raw_condition"] = watch.get("raw_condition")
-        for key in ("condition_source", "condition_confidence", "condition_explicit"):
+        for key in ("condition_source", "condition_confidence", "condition_explicit", "section_condition_header"):
             if watch.get(key) is not None:
                 updated[key] = watch.get(key)
         synced.append(updated)

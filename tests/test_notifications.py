@@ -11,6 +11,7 @@ from app import app, build_notification_rows
 from notifications import (
     NOTIFICATION_TYPE_LABELS,
     build_notification_display,
+    load_message_previews_by_import_log_id,
     notify_excellent_buy,
     notify_needs_review,
     notify_new_lowest_price,
@@ -18,6 +19,11 @@ from notifications import (
     record_import_notifications,
 )
 from tests.notification_mocks import patch_notification_import_queries
+
+IMPORT_LOG_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+IMPORT_LOG_ID_2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+MESSAGE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+NOTIFICATION_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
 
 class TestNotificationCreation:
@@ -163,6 +169,174 @@ class TestNotificationDisplay:
 
         assert rows[0]["title"] == "Excellent Buy"
         assert "2026" in rows[0]["created_at"]
+
+
+class TestNotificationPreviewResilience:
+    @patch("database.get_messages_by_ids")
+    @patch("database.get_import_logs_by_ids")
+    def test_load_message_previews_uses_lightweight_import_log_projection(
+        self,
+        mock_get_import_logs: MagicMock,
+        mock_get_messages: MagicMock,
+    ) -> None:
+        from database import IMPORT_LOG_PREVIEW_COLUMNS
+
+        mock_get_import_logs.return_value = {
+            IMPORT_LOG_ID: {"id": IMPORT_LOG_ID, "message_id": MESSAGE_ID}
+        }
+        mock_get_messages.return_value = {
+            MESSAGE_ID: {"id": MESSAGE_ID, "raw_text": "Rolex 126610LN New 2024 USD14500"}
+        }
+
+        previews, failed = load_message_previews_by_import_log_id(
+            [
+                {
+                    "id": NOTIFICATION_ID,
+                    "related_import_log_id": IMPORT_LOG_ID,
+                }
+            ]
+        )
+
+        assert failed is False
+        assert "Rolex" in previews[IMPORT_LOG_ID]
+        mock_get_import_logs.assert_called_once_with(
+            [IMPORT_LOG_ID],
+            select_fields=IMPORT_LOG_PREVIEW_COLUMNS,
+        )
+
+    @patch(
+        "notifications._load_message_previews_by_import_log_id",
+        side_effect=RuntimeError("PostgREST APIError"),
+    )
+    def test_preview_loader_failure_returns_empty_without_raising(
+        self,
+        _mock_load: MagicMock,
+    ) -> None:
+        previews, failed = load_message_previews_by_import_log_id(
+            [{"id": NOTIFICATION_ID, "related_import_log_id": IMPORT_LOG_ID}]
+        )
+
+        assert previews == {}
+        assert failed is True
+
+    @patch(
+        "app.load_message_previews_by_import_log_id",
+        return_value=({}, True),
+    )
+    def test_build_notification_rows_marks_preview_unavailable_on_failure(
+        self,
+        _mock_previews: MagicMock,
+    ) -> None:
+        rows = build_notification_rows(
+            [
+                {
+                    "id": NOTIFICATION_ID,
+                    "type": "needs_review",
+                    "title": "Needs review",
+                    "message": "Missing fields",
+                    "related_import_log_id": IMPORT_LOG_ID,
+                    "is_read": False,
+                    "created_at": "2026-06-27T12:00:00+00:00",
+                }
+            ]
+        )
+
+        assert rows[0]["message_preview_unavailable"] is True
+        assert "message_preview" not in rows[0]
+
+    @patch("app.get_import_logs_by_ids", return_value={})
+    @patch(
+        "app.load_message_previews_by_import_log_id",
+        return_value=({}, False),
+    )
+    def test_missing_import_log_still_renders_notification_row(
+        self,
+        _mock_previews: MagicMock,
+        _mock_import_logs: MagicMock,
+    ) -> None:
+        rows = build_notification_rows(
+            [
+                {
+                    "id": NOTIFICATION_ID,
+                    "type": "excellent_buy",
+                    "title": "Excellent Buy",
+                    "message": "Deal alert",
+                    "related_import_log_id": IMPORT_LOG_ID,
+                    "is_read": False,
+                    "created_at": "2026-06-27T12:00:00+00:00",
+                }
+            ]
+        )
+
+        assert rows[0]["title"] == "Excellent Buy"
+        assert "message_preview" not in rows[0]
+
+    @patch("app.build_notification_rows")
+    @patch("app.list_notifications")
+    def test_notifications_page_returns_200_when_preview_enrichment_fails(
+        self,
+        mock_list: MagicMock,
+        mock_build_rows: MagicMock,
+    ) -> None:
+        mock_list.return_value = [
+            {
+                "id": NOTIFICATION_ID,
+                "type": "needs_review",
+                "title": "Needs review",
+                "message": "Missing fields",
+                "related_import_log_id": IMPORT_LOG_ID,
+                "is_read": False,
+                "created_at": "2026-06-27T12:00:00+00:00",
+            }
+        ]
+        mock_build_rows.return_value = [
+            {
+                "id": NOTIFICATION_ID,
+                "type": "needs_review",
+                "type_label": "Needs review",
+                "type_class": "warning",
+                "title": "Needs review",
+                "message": "Missing fields",
+                "created_at": "2026-06-27T12:00:00+00:00",
+                "is_read": False,
+                "link_url": f"/activity/{IMPORT_LOG_ID}",
+                "link_label": "View import",
+                "message_preview_unavailable": True,
+                "show_quick_fix": True,
+            }
+        ]
+
+        client = TestClient(app)
+        response = client.get("/notifications")
+
+        assert response.status_code == 200
+        assert "Message preview unavailable." in response.text
+
+    @patch("database._query_table_in_id_chunks", side_effect=RuntimeError("PostgREST APIError"))
+    @patch("app.list_notifications")
+    def test_notifications_page_survives_import_log_lookup_failure(
+        self,
+        mock_list: MagicMock,
+        _mock_chunk_lookup: MagicMock,
+    ) -> None:
+        mock_list.return_value = [
+            {
+                "id": NOTIFICATION_ID,
+                "type": "needs_review",
+                "title": "Needs review",
+                "message": "Missing fields",
+                "related_import_log_id": IMPORT_LOG_ID,
+                "is_read": False,
+                "created_at": "2026-06-27T12:00:00+00:00",
+            }
+        ]
+
+        client = TestClient(app)
+        response = client.get("/notifications")
+
+        assert response.status_code == 200
+        assert "Needs review" in response.text
+        assert "Message preview unavailable." in response.text
 
 
 class TestNotificationsPage:

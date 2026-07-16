@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from database import create_notification
 from condition_normalizer import import_row_has_safe_price_comparison
+
+logger = logging.getLogger(__name__)
 
 Record = dict[str, Any]
 
@@ -251,19 +254,54 @@ def format_message_preview(
     return f"{truncated}{suffix}"
 
 
-def load_message_previews_by_import_log_id(notifications: list[Record]) -> dict[str, str]:
-    """Load WhatsApp message previews for notifications linked to import logs."""
-    from database import get_import_logs_by_ids, get_messages_by_ids
+def _related_import_log_ids(notifications: list[Record]) -> list[str]:
+    """Collect deduplicated related import log ids from notifications."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for notification in notifications:
+        raw_id = notification.get("related_import_log_id")
+        if raw_id is None:
+            continue
+        cleaned = str(raw_id).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        ordered.append(cleaned)
+    return ordered
 
-    import_log_ids = [
-        str(notification["related_import_log_id"])
-        for notification in notifications
-        if notification.get("related_import_log_id")
-    ]
+
+def load_message_previews_by_import_log_id(
+    notifications: list[Record],
+) -> tuple[dict[str, str], bool]:
+    """Load WhatsApp message previews. Returns (previews, load_failed)."""
+    try:
+        return _load_message_previews_by_import_log_id(notifications), False
+    except Exception as exc:
+        logger.warning(
+            "Failed to load notification message previews; continuing without previews "
+            "(notification_count=%s): %s",
+            len(notifications),
+            exc,
+            exc_info=True,
+        )
+        return {}, True
+
+
+def _load_message_previews_by_import_log_id(notifications: list[Record]) -> dict[str, str]:
+    from database import (
+        IMPORT_LOG_PREVIEW_COLUMNS,
+        get_import_logs_by_ids,
+        get_messages_by_ids,
+    )
+
+    import_log_ids = _related_import_log_ids(notifications)
     if not import_log_ids:
         return {}
 
-    import_logs = get_import_logs_by_ids(list(dict.fromkeys(import_log_ids)))
+    import_logs = get_import_logs_by_ids(
+        import_log_ids,
+        select_fields=IMPORT_LOG_PREVIEW_COLUMNS,
+    )
     message_ids = [
         str(import_log["message_id"])
         for import_log in import_logs.values()
@@ -272,7 +310,7 @@ def load_message_previews_by_import_log_id(notifications: list[Record]) -> dict[
     if not message_ids:
         return {}
 
-    messages = get_messages_by_ids(list(dict.fromkeys(message_ids)))
+    messages = get_messages_by_ids(message_ids)
     previews: dict[str, str] = {}
     for import_log_id, import_log in import_logs.items():
         message_id = import_log.get("message_id")

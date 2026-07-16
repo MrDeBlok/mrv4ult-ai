@@ -155,12 +155,17 @@ def build_final_offer_payload(
             payload["size_mm"] = int(str(corrections["size_mm"]).strip())
 
     from fpj_model_knowledge import apply_fpj_enrichment, build_model_identity_key, fpj_storage_identity_fields
+    from rm_model_knowledge import apply_rm_enrichment, build_rm_identity_key, rm_storage_identity_fields
 
     source_text = str(payload.get("source_line") or row.get("raw_row_text") or "")
     payload = apply_fpj_enrichment(payload, source_text)
-    payload["model_identity_key"] = build_model_identity_key(payload)
+    payload = apply_rm_enrichment(payload, source_text)
+    payload["model_identity_key"] = build_model_identity_key(payload) or build_rm_identity_key(payload)
     identity = fpj_storage_identity_fields(payload)
+    if payload.get("brand") == "Richard Mille":
+        identity = rm_storage_identity_fields(payload)
     payload["dial"] = identity.get("dial") or payload.get("dial")
+    payload["rm_identity_key"] = build_rm_identity_key(payload)
 
     recalculate_offer_usd_price(payload)
     return payload

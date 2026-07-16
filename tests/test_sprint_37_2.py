@@ -122,8 +122,13 @@ class TestViewerReadOnlyRestrictions:
 
         assert response.status_code == 403
 
+    @patch("database.list_activity_import_logs", return_value=[])
     @patch("app.get_current_user", return_value=VIEWER_USER)
-    def test_viewer_can_access_search_and_activity(self, _mock_user: MagicMock) -> None:
+    def test_viewer_can_access_search_and_activity(
+        self,
+        _mock_user: MagicMock,
+        _mock_activity_logs: MagicMock,
+    ) -> None:
         client = _client()
 
         search_response = client.get("/")

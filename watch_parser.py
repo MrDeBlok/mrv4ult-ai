@@ -147,7 +147,7 @@ OFFER_PATTERN = re.compile(
 HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*$", re.I)
 
 NEW_CARD_DATE_PATTERN = re.compile(
-    r"\b[Nn]\s*(\d{1,2})(?:/(\d{2}|\d{4}))?\b",
+    r"(?:\b[Nn]\s*|(?<=[a-z])[Nn])(\d{1,2})(?:/(\d{2}|\d{4}))?\b",
 )
 NEW_CARD_DATE_MMYyyy_PATTERN = re.compile(r"\bnew\s+(\d{1,2})/(\d{4})\b", re.I)
 FROM_CARD_DATE_PATTERN = re.compile(r"\bfrom\s+(\d{1,2})-(\d{4})\b", re.I)
@@ -310,16 +310,33 @@ NICKNAME_STOP_WORDS = frozenset(
     )
 )
 
+USD_SHORTHAND_U_SUFFIX_PATTERN = re.compile(
+    r"([\d.,]+)\s*(k|K|m|M)?\s*U\b(?!(?:SDT?|ST))",
+    re.I,
+)
+USD_SHORTHAND_U_GLUED_PATTERN = re.compile(
+    r"([\d.,]+)U\b(?!(?:SDT?|ST))",
+    re.I,
+)
+
+EXPLICIT_CURRENCY_EVIDENCE = frozenset(
+    {
+        "explicit_code",
+        "explicit_unambiguous_symbol",
+        "usd_shorthand_u",
+    }
+)
+
 CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"HK\$", re.I), "HKD"),
-    (re.compile(r"S\$", re.I), "SGD"),
+    (re.compile(r"US\$", re.I), "USD"),
+    (re.compile(r"(?<![A-Z])S\$", re.I), "SGD"),
     (re.compile(r"¥"), "JPY"),
     (re.compile(r"€"), "EUR"),
     (re.compile(r"\beur\b", re.I), "EUR"),
     (re.compile(r"\beuro\b", re.I), "EUR"),
     (re.compile(r"\busdt\b", re.I), "USDT"),
     (re.compile(r"\bustd\b", re.I), "USDT"),
-    (re.compile(r"\$"), "USD"),
     (re.compile(r"\busd\b", re.I), "USD"),
     (re.compile(r"£"), "GBP"),
     (re.compile(r"\bgbp\b", re.I), "GBP"),
@@ -335,16 +352,20 @@ CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"HK\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "HKD"),
-    (re.compile(r"S\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "SGD"),
+    (re.compile(r"US\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "USD"),
+    (re.compile(r"(?<![A-Z])S\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "SGD"),
     (re.compile(r"€\s*([\d.,]+)\s*(k|K|m|M)?"), "EUR"),
     (re.compile(r"£\s*([\d.,]+)\s*(k|K|m|M)?"), "GBP"),
     (re.compile(r"¥\s*([\d.,]+)\s*(k|K|m|M)?"), "JPY"),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*HK\$", re.I), "HKD"),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*US\$", re.I), "USD"),
-    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*S\$", re.I), "SGD"),
-    (re.compile(r"\$\s*([\d.,]+)\s*(k|K|m|M)?"), "USD"),
+    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*(?<![A-Z])S\$", re.I), "SGD"),
+    (USD_SHORTHAND_U_SUFFIX_PATTERN, "USD"),
+    (USD_SHORTHAND_U_GLUED_PATTERN, "USD"),
+    (re.compile(r"\$\s*([\d.,]+)\s*(k|K|m|M)?\s*U\b(?!(?:SDT?|ST))", re.I), "USD"),
+    (re.compile(r"\$\s*([\d.,]+)\s*(k|K|m|M)?"), None),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*€"), "EUR"),
-    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*\$"), "USD"),
+    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*\$"), None),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*£"), "GBP"),
     (
         re.compile(
@@ -382,7 +403,12 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{4,7})\b"), None),
 ]
 
-EXPLICIT_CURRENCY_PRICE_PATTERNS = PRICE_WITH_CURRENCY_PATTERNS[:15]
+SYMBOL_CURRENCY_PRICE_PATTERNS = [
+    (pattern, default_currency)
+    for pattern, default_currency in PRICE_WITH_CURRENCY_PATTERNS
+    if default_currency is not None
+]
+EXPLICIT_CURRENCY_PRICE_PATTERNS = SYMBOL_CURRENCY_PRICE_PATTERNS
 
 CURRENCY_BEFORE_AMOUNT_PATTERN = re.compile(
     rf"\b({CURRENCY_CODE_PATTERN})\s*([\d.,]+)\s*(k|K|m|M)?\b",
@@ -489,6 +515,7 @@ def empty_watch() -> WatchDict:
         "model_identity_key": None,
         "model_identity_complete": None,
         "currency_explicit": False,
+        "currency_evidence": None,
         "currency_resolution": None,
     }
 
@@ -538,7 +565,11 @@ def parse_message(message: str) -> ParseResult:
 
     blocks, header_brand = _group_offer_lines(iter_content_lines(text))
 
+    from condition_normalizer import is_section_condition_header_line
+
     for line, context_brand in blocks:
+        if is_section_condition_header_line(line):
+            continue
         if watch := parse_watch_line(line, current_brand=context_brand):
             watch["source_line"] = line
             watches.append(watch)
@@ -794,6 +825,12 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
     from fpj_model_knowledge import apply_fpj_enrichment
 
     watch = apply_fpj_enrichment(watch, text)
+    brand = watch.get("brand")
+    reference = watch.get("reference")
+
+    from rm_model_knowledge import apply_rm_enrichment
+
+    watch = apply_rm_enrichment(watch, text)
     brand = watch.get("brand")
     reference = watch.get("reference")
 
@@ -1164,10 +1201,8 @@ def _extract_explicit_prices_from_segment(segment: str) -> list[tuple[int, str]]
     prices: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
 
-    for pattern, default_currency in EXPLICIT_CURRENCY_PRICE_PATTERNS[:9]:
+    for pattern, default_currency in SYMBOL_CURRENCY_PRICE_PATTERNS:
         for match in pattern.finditer(segment):
-            if default_currency == "USD" and _is_prefixed_dollar_match(segment, match):
-                continue
             amount, currency = _price_from_pattern_match(segment, match, default_currency)
             _append_explicit_price(prices, seen, amount, currency or default_currency)
 
@@ -1251,7 +1286,12 @@ def _select_offer_price(
     offer_prices: list[tuple[int, str | None]],
 ) -> tuple[int | None, str | None, bool]:
     if offer_prices:
-        return (*offer_prices[-1], False)
+        amount, currency = offer_prices[-1]
+        if currency is None and retail_prices:
+            retail_currency = retail_prices[-1][1]
+            if retail_currency:
+                currency = retail_currency
+        return amount, currency, False
 
     if not retail_prices:
         alternative_prices = _extract_all_explicit_currency_prices(text)
@@ -1293,6 +1333,57 @@ def _select_offer_price(
     return None, None, True
 
 
+def _has_explicit_currency_code(text: str) -> bool:
+    return bool(re.search(rf"\b({CURRENCY_CODE_PATTERN})\b", text, re.I))
+
+
+def _has_explicit_unambiguous_currency_symbol(text: str) -> bool:
+    return bool(re.search(r"HK\$|US\$|S\$|€|£|¥", text, re.I))
+
+
+def _has_usd_shorthand_u(text: str) -> bool:
+    return bool(
+        USD_SHORTHAND_U_SUFFIX_PATTERN.search(text)
+        or USD_SHORTHAND_U_GLUED_PATTERN.search(text)
+        or re.search(r"\$\s*[\d.,]+\s*(?:k|K|m|M)?\s*U\b(?!(?:SDT?|ST))", text, re.I)
+    )
+
+
+def _has_ambiguous_dollar_amount(text: str) -> bool:
+    for match in re.finditer(r"\$", text):
+        start = match.start()
+        if start >= 2 and text[start - 2 : start + 1].upper() == "HK$":
+            continue
+        if start >= 2 and text[start - 2 : start + 1].upper() == "US$":
+            continue
+        if start >= 1 and text[start - 1 : start + 1].upper() == "S$":
+            continue
+        if re.search(r"[\d.,]+", text[start : start + 24]):
+            return True
+    return False
+
+
+def infer_currency_evidence(text: str, currency: str | None) -> str:
+    """Classify how currency was inferred for one offer row."""
+    if currency is not None:
+        if _has_explicit_currency_code(text):
+            return "explicit_code"
+        if _has_usd_shorthand_u(text) and currency == "USD":
+            return "usd_shorthand_u"
+        if _has_explicit_unambiguous_currency_symbol(text):
+            return "explicit_unambiguous_symbol"
+        if _has_ambiguous_dollar_amount(text):
+            return "ambiguous_dollar_symbol"
+        return "explicit_code"
+    if _has_ambiguous_dollar_amount(text):
+        return "ambiguous_dollar_symbol"
+    return "missing"
+
+
+def is_explicit_currency_evidence(evidence: str | None) -> bool:
+    return evidence in EXPLICIT_CURRENCY_EVIDENCE
+
+
 def _apply_price_fields(watch: WatchDict, text: str) -> None:
     retail_prices, offer_prices = _extract_labeled_prices(text)
     original_price, original_currency, retail_only = _select_offer_price(
@@ -1310,7 +1401,9 @@ def _apply_price_fields(watch: WatchDict, text: str) -> None:
         watch["retail_currency"] = None
 
     watch["retail_price_only"] = retail_only
-    watch["currency_explicit"] = original_currency is not None
+    evidence = infer_currency_evidence(text, original_currency)
+    watch["currency_evidence"] = evidence
+    watch["currency_explicit"] = is_explicit_currency_evidence(evidence)
     watch["original_price"] = original_price
     watch["original_currency"] = _resolve_implicit_currency(
         original_price,
@@ -1522,6 +1615,42 @@ def _resolve_new_card_year(year_token: str | None) -> int | None:
     return year
 
 
+def _card_date_from_new_notation_match(
+    match: re.Match[str],
+) -> tuple[str, str, str] | None:
+    """Return card_date, New condition, and raw notation from an N-notation match."""
+    month = int(match.group(1))
+    if month < 1 or month > 12:
+        return None
+    year = _resolve_new_card_year(match.group(2))
+    if year is None:
+        return None
+    return f"{month:02d}/{year}", "New", match.group(0).strip()
+
+
+def parse_new_card_notation_value(value: str | None) -> tuple[str, int, str] | None:
+    """Parse compact N-notation from a token or text fragment."""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    match = NEW_CARD_DATE_PATTERN.fullmatch(cleaned)
+    if match is None:
+        match = NEW_CARD_DATE_PATTERN.search(cleaned)
+    if match is None:
+        return None
+    parsed = _card_date_from_new_notation_match(match)
+    if parsed is None:
+        return None
+    card_date, _condition, raw_notation = parsed
+    year_match = re.search(r"/(\d{4})\b", card_date)
+    production_year = int(year_match.group(1)) if year_match else None
+    if production_year is None:
+        return None
+    return card_date, production_year, raw_notation
+
+
 def _extract_card_date(text: str) -> tuple[str | None, str | None, str | None]:
     match = FROM_CARD_DATE_PATTERN.search(text)
     if match:
@@ -1532,13 +1661,9 @@ def _extract_card_date(text: str) -> tuple[str | None, str | None, str | None]:
 
     match = NEW_CARD_DATE_PATTERN.search(text)
     if match:
-        month = int(match.group(1))
-        if month < 1 or month > 12:
-            return None, None, None
-        year = _resolve_new_card_year(match.group(2))
-        if year is None:
-            return None, None, None
-        return f"{month:02d}/{year}", "New", match.group(0).strip()
+        parsed = _card_date_from_new_notation_match(match)
+        if parsed:
+            return parsed[0], parsed[1], parsed[2]
 
     match = NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
     if match:

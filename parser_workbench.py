@@ -409,6 +409,7 @@ def reprocess_import_log(
                     watch,
                     dealer=dealer_record,
                     dealer_whatsapp=dealer_whatsapp,
+                    message_text=text,
                 )
             offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
             for watch in offer_watches:

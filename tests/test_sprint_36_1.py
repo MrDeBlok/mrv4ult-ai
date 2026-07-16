@@ -96,7 +96,7 @@ class TestExplicitCurrencyUnchanged:
         ("line", "expected_price", "expected_currency"),
         [
             ("126500LN 305k usd", 305_000, "USD"),
-            ("126500LN $305k full set", 305_000, "USD"),
+            ("126500LN $305k usd", 305_000, "USD"),
             ("5980R CHF 220k", 220_000, "CHF"),
             ("5711/1A HK$1,880,000 full set", 1_880_000, "HKD"),
             ("15500ST €52k full set", 52_000, "EUR"),

@@ -62,6 +62,12 @@ PARSER_TRAINING_REFERENCE_ROW_COLUMNS = (
     "detected_year, detected_card_date, detected_price, detected_currency, "
     "normalized_brand, normalized_reference, normalized_condition, usd_price"
 )
+IMPORT_LOG_LOOKUP_COLUMNS_DEFAULT = (
+    "id, import_time, group_name, dealer_alias, dealer_whatsapp, message_id, summary"
+)
+IMPORT_LOG_PREVIEW_COLUMNS = "id, message_id"
+IMPORT_LOG_QUICK_FIX_COLUMNS = "id, message_id, summary"
+MESSAGE_PREVIEW_COLUMNS = "id, raw_text"
 IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
 IMPORT_LOG_SUMMARY_MAX_RETRIES = 3
 IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS = 0.5
@@ -690,9 +696,14 @@ def update_offer_from_training(
         raise ValueError("Offer not found")
 
     from fpj_model_knowledge import apply_fpj_enrichment, fpj_storage_identity_fields
+    from rm_model_knowledge import apply_rm_enrichment, rm_storage_identity_fields
 
-    enriched_watch = apply_fpj_enrichment(dict(watch), str(watch.get("source_line") or ""))
+    source_text = str(watch.get("source_line") or "")
+    enriched_watch = apply_fpj_enrichment(dict(watch), source_text)
+    enriched_watch = apply_rm_enrichment(enriched_watch, source_text)
     identity = fpj_storage_identity_fields(enriched_watch)
+    if enriched_watch.get("brand") == "Richard Mille":
+        identity = rm_storage_identity_fields(enriched_watch)
 
     watch_row, _ = find_or_create_watch(
         brand=identity.get("brand"),
@@ -1428,10 +1439,14 @@ def _normalize_lookup_ids(raw_ids: list[str], *, require_uuid: bool = False) -> 
         if raw is None:
             continue
         cleaned = str(raw).strip()
-        if not cleaned or cleaned in seen:
+        if not cleaned:
             continue
-        if require_uuid and not _is_valid_uuid(cleaned):
-            skipped_invalid += 1
+        if require_uuid:
+            if not _is_valid_uuid(cleaned):
+                skipped_invalid += 1
+                continue
+            cleaned = cleaned.lower()
+        if cleaned in seen:
             continue
         seen.add(cleaned)
         normalized.append(cleaned)
@@ -1525,19 +1540,32 @@ def get_watches_by_ids(watch_ids: list[str]) -> dict[str, Record]:
     return {str(row["id"]): row for row in rows if row.get("id")}
 
 
-def get_import_logs_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
-    """Return import logs keyed by id."""
-    if not import_log_ids:
-        return {}
-
-    response = (
-        get_client()
-        .table("import_logs")
-        .select("id, import_time, group_name, dealer_alias, dealer_whatsapp, message_id, summary")
-        .in_("id", import_log_ids)
-        .execute()
+def get_import_logs_by_ids(
+    import_log_ids: list[str],
+    *,
+    select_fields: str = IMPORT_LOG_LOOKUP_COLUMNS_DEFAULT,
+) -> dict[str, Record]:
+    """Return import logs keyed by id using normalized UUID batches."""
+    rows = _query_table_in_id_chunks(
+        "import_logs",
+        select_fields,
+        import_log_ids,
+        id_column="id",
+        require_uuid=True,
     )
-    return {str(row["id"]): row for row in response.data or []}
+    return {str(row["id"]): row for row in rows if row.get("id")}
+
+
+def get_messages_by_ids(message_ids: list[str]) -> dict[str, Record]:
+    """Return messages keyed by id using normalized UUID batches."""
+    rows = _query_table_in_id_chunks(
+        "messages",
+        MESSAGE_PREVIEW_COLUMNS,
+        message_ids,
+        id_column="id",
+        require_uuid=True,
+    )
+    return {str(row["id"]): row for row in rows if row.get("id")}
 
 
 def get_notification_by_id(notification_id: str) -> Record | None:
@@ -1556,21 +1584,6 @@ def get_notification_by_id(notification_id: str) -> Record | None:
     if not response.data:
         return None
     return response.data[0]
-
-
-def get_messages_by_ids(message_ids: list[str]) -> dict[str, Record]:
-    """Return messages keyed by id."""
-    if not message_ids:
-        return {}
-
-    response = (
-        get_client()
-        .table("messages")
-        .select("id, raw_text")
-        .in_("id", message_ids)
-        .execute()
-    )
-    return {str(row["id"]): row for row in response.data or []}
 
 
 def combine_request_match_records(

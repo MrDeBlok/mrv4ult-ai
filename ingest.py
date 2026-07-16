@@ -168,9 +168,20 @@ def _duplicate_offer_cache_key(
 
 
 def _watch_identity_from_parsed(watch: dict[str, Any]) -> dict[str, Any]:
-    from fpj_model_knowledge import fpj_storage_identity_fields
+    from fpj_model_knowledge import fpj_storage_identity_fields, is_fpj_brand
+    from rm_model_knowledge import is_rm_brand, rm_storage_identity_fields
 
-    return fpj_storage_identity_fields(watch)
+    if is_fpj_brand(watch.get("brand")):
+        return fpj_storage_identity_fields(watch)
+    if is_rm_brand(watch.get("brand")):
+        return rm_storage_identity_fields(watch)
+    return {
+        "brand": watch.get("brand"),
+        "reference": watch.get("reference"),
+        "model": watch.get("model"),
+        "dial": watch.get("dial"),
+        "bracelet": watch.get("bracelet"),
+    }
 
 
 def _cached_find_or_create_watch(
@@ -719,6 +730,7 @@ def ingest_message(
                 watch,
                 dealer=dealer_record,
                 dealer_whatsapp=summary_whatsapp,
+                message_text=text,
             )
             attach_parser_confidence_metadata(watch, message_type=parsed.get("message_type"))
         offer_watches = apply_inferred_pre_owned_defaults(offer_watches)
@@ -1241,6 +1253,12 @@ def _build_watch_row(
         "condition_source": watch.get("condition_source"),
         "condition_confidence": watch.get("condition_confidence"),
         "condition_explicit": watch.get("condition_explicit"),
+        "section_condition_header": watch.get("section_condition_header"),
+        "rm_identity_key": watch.get("rm_identity_key"),
+        "canonical_variant": watch.get("canonical_variant"),
+        "case_material": watch.get("case_material"),
+        "gem_setting": watch.get("gem_setting"),
+        "edition": watch.get("edition"),
         "card_date": watch.get("card_date"),
         "original_price": watch.get("original_price") or watch.get("price"),
         "original_currency": watch.get("original_currency") or watch.get("currency"),

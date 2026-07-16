@@ -493,8 +493,13 @@ class TestDownstreamConsumers:
         assert watch["reference"] == "126610LN"
         assert watch["production_year"] == 2024
 
+    @patch("search._load_active_offers_for_search", return_value=([], 0))
     @patch("search._filter_search_offers")
-    def test_search_receives_corrected_offer_values(self, mock_filter: MagicMock) -> None:
+    def test_search_receives_corrected_offer_values(
+        self,
+        mock_filter: MagicMock,
+        _mock_load: MagicMock,
+    ) -> None:
         from search import search_offers
 
         mock_filter.return_value = [

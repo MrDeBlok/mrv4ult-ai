@@ -8,6 +8,7 @@ from typing import Any
 from condition_normalizer import (
     CONDITION_CONFIDENCE_HIGH,
     CONDITION_SOURCE_EXPLICIT,
+    CONDITION_SOURCE_INHERITED_SECTION,
     CONDITION_SOURCE_INFERRED_DEFAULT,
     NEW_CONDITION,
     PRE_OWNED_CONDITION,
@@ -33,6 +34,16 @@ FPJ_MARKET_PRICE_CONFIDENCE_THRESHOLD = 80
 FPJ_MARKET_PRICE_WEIGHTS: dict[str, int] = {
     "explicit_brand": 15,
     "canonical_model": 30,
+    "year": 15,
+    "explicit_condition": 15,
+    "valid_price": 15,
+    "supported_currency": 10,
+}
+
+RM_MARKET_PRICE_CONFIDENCE_THRESHOLD = 80
+RM_MARKET_PRICE_WEIGHTS: dict[str, int] = {
+    "explicit_brand": 15,
+    "canonical_variant": 30,
     "year": 15,
     "explicit_condition": 15,
     "valid_price": 15,
@@ -121,6 +132,8 @@ def has_explicit_market_condition(context: Record) -> bool:
         return True
     if context.get("condition_source") == CONDITION_SOURCE_INFERRED_DEFAULT:
         return False
+    if context.get("condition_source") == CONDITION_SOURCE_INHERITED_SECTION:
+        return True
     if context.get("condition_explicit") is True:
         return True
     if context.get("condition_confidence") == CONDITION_CONFIDENCE_HIGH:
@@ -205,6 +218,20 @@ def _is_fpj_context(context: Record) -> bool:
     return isinstance(brand, str) and brand.strip() == FPJ_CANONICAL_BRAND
 
 
+def _is_rm_context(context: Record) -> bool:
+    from rm_model_knowledge import RM_CANONICAL_BRAND
+
+    brand = context.get("brand")
+    return isinstance(brand, str) and brand.strip() == RM_CANONICAL_BRAND
+
+
+def _has_rm_canonical_variant(context: Record) -> bool:
+    if context.get("rm_identity_key") or context.get("model_identity_key"):
+        return True
+    variant = context.get("canonical_variant") or context.get("model")
+    return isinstance(variant, str) and bool(variant.strip())
+
+
 def _has_fpj_canonical_model(context: Record) -> bool:
     model = context.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -217,7 +244,42 @@ def _has_fpj_canonical_model(context: Record) -> bool:
 
 
 def _fpj_market_threshold(context: Record) -> int:
-    return FPJ_MARKET_PRICE_CONFIDENCE_THRESHOLD if _is_fpj_context(context) else MARKET_PRICE_CONFIDENCE_THRESHOLD
+    if _is_fpj_context(context):
+        return FPJ_MARKET_PRICE_CONFIDENCE_THRESHOLD
+    if _is_rm_context(context):
+        return RM_MARKET_PRICE_CONFIDENCE_THRESHOLD
+    return MARKET_PRICE_CONFIDENCE_THRESHOLD
+
+
+def compute_rm_market_price_confidence(context: Record) -> tuple[int, dict[str, int]]:
+    from rm_model_knowledge import RM_CANONICAL_BRAND
+
+    brand = context.get("brand")
+    component_scores = {
+        "explicit_brand": (
+            RM_MARKET_PRICE_WEIGHTS["explicit_brand"]
+            if isinstance(brand, str) and brand.strip() == RM_CANONICAL_BRAND
+            else 0
+        ),
+        "canonical_variant": (
+            RM_MARKET_PRICE_WEIGHTS["canonical_variant"]
+            if _has_rm_canonical_variant(context)
+            else 0
+        ),
+        "year": RM_MARKET_PRICE_WEIGHTS["year"] if _has_market_year(context) else 0,
+        "explicit_condition": (
+            RM_MARKET_PRICE_WEIGHTS["explicit_condition"]
+            if has_explicit_market_condition(context)
+            else 0
+        ),
+        "valid_price": RM_MARKET_PRICE_WEIGHTS["valid_price"] if _has_valid_market_price(context) else 0,
+        "supported_currency": (
+            RM_MARKET_PRICE_WEIGHTS["supported_currency"]
+            if _has_supported_market_currency(context)
+            else 0
+        ),
+    }
+    return _clamp_score(sum(component_scores.values())), component_scores
 
 
 def compute_fpj_market_price_confidence(context: Record) -> tuple[int, dict[str, int]]:
@@ -255,6 +317,8 @@ def compute_market_price_confidence(context: Record) -> tuple[int, dict[str, int
     """Compute Market Price confidence from core market fields only."""
     if _is_fpj_context(context):
         return compute_fpj_market_price_confidence(context)
+    if _is_rm_context(context):
+        return compute_rm_market_price_confidence(context)
     component_scores = {
         "trusted_reference": (
             MARKET_PRICE_WEIGHTS["trusted_reference"]
@@ -310,6 +374,9 @@ def evaluate_market_price_eligibility(
             reasons.append("fpj_model_missing_or_ambiguous")
         if context.get("ambiguous_model"):
             reasons.append("fpj_model_ambiguous")
+    elif _is_rm_context(context):
+        if not _has_rm_canonical_variant(context):
+            reasons.append("rm_variant_missing_or_ambiguous")
     else:
         if not _reference_value(context):
             reasons.append("reference_missing")
@@ -431,6 +498,10 @@ def offer_record_to_market_context(offer: Record) -> Record:
         "dial_variant": watch.get("dial_variant") or offer.get("dial_variant"),
         "size_mm": watch.get("size_mm") or offer.get("size_mm"),
         "model_identity_key": watch.get("model_identity_key") or offer.get("model_identity_key"),
+        "rm_identity_key": watch.get("rm_identity_key") or offer.get("rm_identity_key"),
+        "canonical_variant": watch.get("canonical_variant") or offer.get("canonical_variant"),
+        "gem_setting": watch.get("gem_setting") or offer.get("gem_setting"),
+        "bracelet_variant": watch.get("bracelet_variant") or offer.get("bracelet_variant"),
         "model_identity_complete": watch.get("model_identity_complete") or offer.get("model_identity_complete"),
         "ambiguous_model": watch.get("ambiguous_model") or offer.get("ambiguous_model"),
     }

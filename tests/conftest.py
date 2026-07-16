@@ -49,6 +49,14 @@ VIEWER_USER = {
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "no_auto_login: disable shared admin auto-login fixture")
+    config.addinivalue_line("markers", "unit: fast isolated unit tests")
+    config.addinivalue_line("markers", "integration: tests that exercise multi-module workflows")
+    config.addinivalue_line("markers", "database: tests that validate database helpers or schema probes")
+    config.addinivalue_line("markers", "performance: performance and profiling regression tests")
+    config.addinivalue_line(
+        "markers",
+        "allow_live_supabase: permit live Supabase network access for this test",
+    )
 
 
 @pytest.fixture(autouse=True)
