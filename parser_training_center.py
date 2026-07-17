@@ -125,6 +125,126 @@ def _summary_row_count(import_log: Record) -> int:
     return int(import_log.get("watches_parsed") or 0)
 
 
+def _summary_offer_watches(import_log: Record) -> list[Record]:
+    summary = import_log.get("summary") or {}
+    return list(summary.get("offer_watches") or summary.get("parsed_watches") or [])
+
+
+def _format_parser_review_status_text(stats: Record) -> str:
+    total = int(stats.get("total_rows") or 0)
+    if total <= 0:
+        return ""
+    pending = int(stats.get("pending_review_rows") or 0)
+    approved = int(stats.get("approved_rows") or 0)
+    row_label = "parsed row" if total == 1 else "parsed rows"
+    return f"{total} {row_label} · {pending} pending · {approved} approved"
+
+
+def build_activity_parser_review_action(
+    import_log: Record,
+    message: Record | None = None,
+    *,
+    show_parser_review: bool = False,
+) -> Record:
+    """Build Parser Review action metadata for the Activity Import Detail page."""
+    base: Record = {
+        "show": False,
+        "action": None,
+        "label": "",
+        "url": "",
+        "status_text": "",
+        "reason": "",
+    }
+    if not show_parser_review:
+        return base
+
+    import_id = str(import_log.get("id") or "")
+    if not import_id:
+        return base
+
+    if not import_log_has_offer_rows(import_log):
+        return {
+            **base,
+            "show": True,
+            "action": "unavailable",
+            "reason": "This import has no parsed offer rows to review.",
+        }
+
+    review_url = f"/parser-training/{import_id}/rows"
+    prepare_url = f"/parser-training/{import_id}/prepare-rows"
+    summary_count = _summary_row_count(import_log)
+    raw_message = str((message or {}).get("raw_text") or "").strip()
+    summary_watches = _summary_offer_watches(import_log)
+
+    from database import is_valid_uuid, list_parser_training_rows_for_import, parser_training_rows_supported
+    from parser_training_engine import build_container_summary_for_import
+
+    if parser_training_rows_supported() and is_valid_uuid(import_id):
+        training_rows = list_parser_training_rows_for_import(import_id)
+    elif parser_training_rows_supported():
+        training_rows = []
+    else:
+        training_rows = None
+
+    if training_rows is not None:
+        if training_rows:
+            stats = build_container_summary_for_import(training_rows, import_log_id=import_id)
+            return {
+                "show": True,
+                "action": "review",
+                "label": "Review parsed rows",
+                "url": review_url,
+                "status_text": _format_parser_review_status_text(stats),
+                "reason": "",
+            }
+
+        if summary_watches or summary_count > 0:
+            status_text = (
+                f"{summary_count} parsed row" if summary_count == 1 else f"{summary_count} parsed rows"
+            )
+            if not raw_message and not summary_watches:
+                return {
+                    **base,
+                    "show": True,
+                    "action": "unavailable",
+                    "reason": "Original message and stored row data are unavailable for review.",
+                }
+            return {
+                "show": True,
+                "action": "prepare",
+                "label": "Prepare rows for review",
+                "url": prepare_url,
+                "status_text": status_text,
+                "reason": "",
+            }
+
+        return {
+            **base,
+            "show": True,
+            "action": "unavailable",
+            "reason": "This import has no stored offer rows to prepare for review.",
+        }
+
+    if raw_message or summary_watches or summary_count > 0:
+        return {
+            "show": True,
+            "action": "review",
+            "label": "Review parsed rows",
+            "url": review_url,
+            "status_text": (
+                f"{summary_count} parsed row" if summary_count == 1 else f"{summary_count} parsed rows"
+            ),
+            "reason": "",
+        }
+
+    return {
+        **base,
+        "show": True,
+        "action": "unavailable",
+        "reason": "Original message is unavailable and no stored row data exists for review.",
+    }
+
+
 def _training_row_status_counts(rows: list[Record]) -> dict[str, int]:
     counts = {
         "pending_review": 0,

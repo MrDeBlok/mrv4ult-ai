@@ -24,6 +24,7 @@ from watch_parser import (
     parse_compact_price_amount,
     parse_message,
     parse_watch_line,
+    trace_card_condition_parsing,
 )
 
 
@@ -850,3 +851,73 @@ class TestNewPrefixCardDateNotation:
         assert watch.get("card_date") is None
         if watch.get("raw_condition") is not None:
             assert not str(watch["raw_condition"]).upper().startswith("N")
+
+
+ROLEX_126200_OMBRE_N7_EMOJI_LINE = "126200 Ombre Green Jub N7/26 🏷️ 🪵$84000"
+
+
+class TestRolex126200OmbreN7EmojiRegression:
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_exact_emoji_line_parses_new_with_card_date(self, _mock_year: object) -> None:
+        watch = parse_watch_line(ROLEX_126200_OMBRE_N7_EMOJI_LINE)
+
+        assert watch is not None
+        assert watch["reference"] == "126200"
+        assert watch["dial"] == "Green"
+        assert watch["bracelet"] == "jubilee"
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "N7/26"
+        assert watch["card_date"] == "07/2026"
+        assert watch["production_year"] == 2026
+        assert watch["original_price"] == 84_000
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_condition_trace_shows_n_notation_survives_all_stages(
+        self,
+        _mock_year: object,
+    ) -> None:
+        trace = trace_card_condition_parsing(ROLEX_126200_OMBRE_N7_EMOJI_LINE)
+
+        assert trace["n_notation_pattern_match"] == "N7/26"
+        assert trace["extract_card_date_result"] == {
+            "card_date": "07/2026",
+            "condition": NEW_CONDITION,
+            "raw_notation": "N7/26",
+        }
+        assert trace["parse_new_card_notation_value_N7_26"] == ("07/2026", 2026, "N7/26")
+        assert trace["parse_watch_line"]["condition"] == NEW_CONDITION
+        assert trace["parse_watch_line"]["raw_condition"] == "N7/26"
+        assert trace["normalized_condition"] == NEW_CONDITION
+        assert trace["raw_condition"] == "N7/26"
+        assert trace["condition_source"] == "explicit"
+        assert "N7/26" in trace["text_passed_into_extract_card_date"]
+        assert "N7/26" in trace["text_after_price_mask"]
+
+    @patch("watch_parser._current_calendar_year", return_value=2026)
+    def test_full_pipeline_has_no_offer_condition_unknown(
+        self,
+        _mock_year: object,
+    ) -> None:
+        from deal_market_lookup import resolve_deal_market_context
+
+        watch = _parse_normalized_message(ROLEX_126200_OMBRE_N7_EMOJI_LINE)
+        watch = mark_explicit_condition_metadata(apply_inferred_pre_owned_default(watch))
+
+        assert watch["condition"] == NEW_CONDITION
+        assert resolve_offer_wear_condition(watch.get("condition"), watch.get("raw_condition")) == NEW_CONDITION
+
+        row = {
+            "brand": watch.get("brand"),
+            "reference": watch.get("reference"),
+            "condition": watch.get("condition"),
+            "raw_condition": watch.get("raw_condition"),
+            "condition_source": watch.get("condition_source"),
+            "usd_price": watch.get("usd_price"),
+        }
+        market = resolve_deal_market_context(row, watch, include_debug=True)
+        assert market.debug.get("normalized_condition") == NEW_CONDITION
+        assert market.debug.get("market_price_unknown_reason") != "offer_condition_unknown"
+
+        metadata = condition_display_metadata(row, watch)
+        assert metadata["label"] == NEW_CONDITION
+        assert metadata["is_known"] is True

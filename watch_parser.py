@@ -1651,6 +1651,72 @@ def parse_new_card_notation_value(value: str | None) -> tuple[str, int, str] | N
     return card_date, production_year, raw_notation
 
 
+def trace_card_condition_parsing(line: str) -> dict[str, Any]:
+    """Return stage-by-stage diagnostics for card-date / condition parsing."""
+    from condition_normalizer import (
+        apply_inferred_pre_owned_default,
+        mark_explicit_condition_metadata,
+        normalize_watch_condition,
+    )
+    from dealer_list_splitter import clean_dealer_list_line
+
+    raw_input = line
+    after_markdown = _strip_markdown(line.strip())
+    after_preprocessing = _normalize_parser_text(after_markdown)
+    after_emoji_normalization = clean_dealer_list_line(after_preprocessing)
+
+    price_amount, price_currency = _extract_price(after_preprocessing)
+    text_after_price_mask = _mask_price_spans(after_preprocessing)
+    text_passed_into_extract_card_date = after_preprocessing
+
+    card_date, new_condition, raw_notation = _extract_card_date(text_passed_into_extract_card_date)
+    parsed_watch = parse_watch_line(line) or {}
+    normalized_watch: dict[str, Any] = {}
+    if parsed_watch:
+        normalized_watch = mark_explicit_condition_metadata(
+            apply_inferred_pre_owned_default(
+                normalize_watch_condition(dict(parsed_watch))
+            )
+        )
+
+    return {
+        "raw_input": raw_input,
+        "text_after_markdown": after_markdown,
+        "text_after_preprocessing": after_preprocessing,
+        "text_after_emoji_normalization": after_emoji_normalization,
+        "price_extraction": {
+            "amount": price_amount,
+            "currency": price_currency,
+        },
+        "text_after_price_mask": text_after_price_mask,
+        "text_passed_into_extract_card_date": text_passed_into_extract_card_date,
+        "extract_card_date_result": {
+            "card_date": card_date,
+            "condition": new_condition,
+            "raw_notation": raw_notation,
+        },
+        "parse_new_card_notation_value_N7_26": parse_new_card_notation_value("N7/26"),
+        "parse_new_card_notation_value_full_text": parse_new_card_notation_value(
+            after_preprocessing
+        ),
+        "n_notation_pattern_match": (
+            NEW_CARD_DATE_PATTERN.search(after_preprocessing).group(0)
+            if NEW_CARD_DATE_PATTERN.search(after_preprocessing)
+            else None
+        ),
+        "parse_watch_line": {
+            "condition": parsed_watch.get("condition"),
+            "raw_condition": parsed_watch.get("raw_condition"),
+            "card_date": parsed_watch.get("card_date"),
+            "production_year": parsed_watch.get("production_year"),
+            "original_price": parsed_watch.get("original_price"),
+        },
+        "raw_condition": normalized_watch.get("raw_condition"),
+        "normalized_condition": normalized_watch.get("condition"),
+        "condition_source": normalized_watch.get("condition_source"),
+    }
+
+
 def _extract_card_date(text: str) -> tuple[str | None, str | None, str | None]:
     match = FROM_CARD_DATE_PATTERN.search(text)
     if match:

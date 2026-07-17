@@ -55,6 +55,7 @@ from parser_workbench import (
 )
 from parser_training_center import (
     PARSER_TRAINING_FILTERS,
+    build_activity_parser_review_action,
     load_parser_training_containers,
     load_parser_training_overview_page,
     load_parser_training_rows_for_import,
@@ -68,6 +69,7 @@ from parser_training_engine import (
     backfill_parser_training_rows_for_recent_imports,
     bulk_training_row_action,
     correct_training_row,
+    prepare_parser_training_rows_for_import,
     re_evaluate_parser_training_import,
     re_evaluate_parser_training_imports,
     re_evaluate_parser_training_reference_batch,
@@ -147,6 +149,7 @@ from database import (
     list_pending_unknown_nicknames,
     mark_unknown_brand_ignored,
     mark_unknown_nickname_ignored,
+    OfferSourceIdentityConflictError,
     resolve_unknown_brand_with_alias,
     resolve_unknown_nickname_with_alias,
     watch_knowledge_supported,
@@ -2204,6 +2207,7 @@ def build_activity_detail(
     message: dict[str, Any] | None,
     *,
     show_deal_debug: bool = False,
+    show_parser_review: bool = False,
 ) -> dict[str, Any]:
     """Format one import log for the detail page."""
     summary = import_log.get("summary") or {}
@@ -2212,6 +2216,11 @@ def build_activity_detail(
     rows = summary.get("rows") or []
     raw_message = message.get("raw_text") or ""
     sender_redacted = should_redact_import_sender(import_log)
+    parser_review = build_activity_parser_review_action(
+        import_log,
+        message,
+        show_parser_review=show_parser_review,
+    )
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
@@ -2233,6 +2242,7 @@ def build_activity_detail(
         "watch_cards": build_watch_offer_cards(summary, show_deal_debug=show_deal_debug),
         "rows": rows,
         "show_deal_debug": show_deal_debug,
+        "parser_review": parser_review,
         "match_notification": (
             f"{import_log.get('matched_requests', 0)} client request(s) matched this import."
             if import_log.get("matched_requests", 0)
@@ -2976,6 +2986,7 @@ def _parser_training_rows_url(
     rows_checked: int | None = None,
     rows_updated: int | None = None,
     has_more: bool = False,
+    save_error: str = "",
 ) -> str:
     params: dict[str, str] = {}
     if saved:
@@ -2994,8 +3005,30 @@ def _parser_training_rows_url(
         params["updated"] = str(rows_updated)
     if has_more:
         params["has_more"] = "1"
+    if save_error.strip():
+        params["save_error"] = save_error.strip()
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/parser-training/{import_id}/rows{suffix}"
+
+
+@app.post("/parser-training/{import_id}/prepare-rows", name="parser_training_prepare_rows")
+async def parser_training_prepare_rows(request: Request, import_id: str) -> RedirectResponse:
+    """Create parser_training_rows from stored import summary without re-ingesting."""
+    _require_admin_workbench(request)
+    user = get_current_user(request)
+    import_log = get_import_log(import_id)
+    if import_log is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not _can_access_import_log(user, import_log):
+        raise HTTPException(status_code=403, detail="Import not accessible")
+
+    with parser_training_rows_write_guard():
+        prepare_parser_training_rows_for_import(import_log)
+
+    return RedirectResponse(
+        url=_parser_training_rows_url(import_id),
+        status_code=303,
+    )
 
 
 @app.get("/parser-training/{import_id}/rows", response_class=HTMLResponse, name="parser_training_rows")
@@ -3022,6 +3055,7 @@ async def parser_training_rows_page(request: Request, import_id: str) -> HTMLRes
             "dealer": format_dealer_label(import_log),
             "group_name": import_log.get("group_name") or "N/A",
             "original_message": (message or {}).get("raw_text") or "",
+            "activity_detail_url": str(request.url_for("activity_detail", import_id=import_id)),
             "training_rows": training_rows,
             "stats": stats,
             "unique_references": unique_references_from_rows(training_rows),
@@ -3037,6 +3071,7 @@ async def parser_training_rows_page(request: Request, import_id: str) -> HTMLRes
             "ref_reevaluate_checked": request.query_params.get("checked", ""),
             "ref_reevaluate_updated": request.query_params.get("updated", ""),
             "ref_reevaluate_has_more": request.query_params.get("has_more") == "1",
+            "save_error": request.query_params.get("save_error", ""),
             "reevaluate_reference_action_url": str(
                 request.url_for("parser_training_reevaluate_reference")
             ),
@@ -3103,6 +3138,11 @@ async def parser_training_row_correct(
                 dealer_id=str((message or {}).get("dealer_id") or "") or None,
                 group_id=str((message or {}).get("group_id") or "") or None,
             )
+    except OfferSourceIdentityConflictError as exc:
+        return RedirectResponse(
+            url=_parser_training_rows_url(import_id, save_error=str(exc)),
+            status_code=303,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3481,6 +3521,7 @@ async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
                 import_log,
                 message,
                 show_deal_debug=can_access_admin_tools(user),
+                show_parser_review=can_access_admin_tools(user),
             )
         },
     )

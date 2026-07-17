@@ -3,8 +3,24 @@
 {% block title %}Import detail · MRV4ULT AI{% endblock %}
 
 {% block content %}
-<div class="mb-3">
-    <a href="/activity" class="text-decoration-none">&larr; Back to activity</a>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        <a href="/activity" class="text-decoration-none">&larr; Back to activity</a>
+        {% if detail.parser_review.show %}
+            {% if detail.parser_review.action == "review" %}
+            <a href="{{ detail.parser_review.url }}" class="btn btn-sm btn-primary">{{ detail.parser_review.label }}</a>
+            {% elif detail.parser_review.action == "prepare" %}
+            <form method="post" action="{{ detail.parser_review.url }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-primary">{{ detail.parser_review.label }}</button>
+            </form>
+            {% elif detail.parser_review.action == "unavailable" %}
+            <span class="text-muted small">{{ detail.parser_review.reason }}</span>
+            {% endif %}
+            {% if detail.parser_review.status_text %}
+            <span class="text-muted small">{{ detail.parser_review.status_text }}</span>
+            {% endif %}
+        {% endif %}
+    </div>
 </div>
 
 {% if detail.match_notification %}
@@ -139,43 +155,78 @@
                         <span class="deal-recommendation-value">{{ deal.recommendation }}</span>
                     </div>
                     {% if detail.show_deal_debug and deal.debug %}
-                    <div class="deal-analysis-debug mt-3">
-                        <div class="text-muted small fw-semibold mb-2">Admin debug</div>
-                        <dl class="row mb-0 small">
-                            <dt class="col-sm-5">watch_id</dt>
-                            <dd class="col-sm-7">{{ deal.debug.watch_id }}</dd>
-                            <dt class="col-sm-5">brand</dt>
-                            <dd class="col-sm-7">{{ deal.debug.brand }}</dd>
-                            <dt class="col-sm-5">reference</dt>
-                            <dd class="col-sm-7">{{ deal.debug.reference }}</dd>
-                            <dt class="col-sm-5">normalized condition</dt>
-                            <dd class="col-sm-7">{{ deal.debug.normalized_condition }}</dd>
-                            <dt class="col-sm-5">market_condition</dt>
-                            <dd class="col-sm-7">{{ deal.debug.market_condition }}</dd>
-                            <dt class="col-sm-5">active comparables (before filter)</dt>
-                            <dd class="col-sm-7">{{ deal.debug.active_comparables_before_condition_filter }}</dd>
-                            <dt class="col-sm-5">active comparables (after filter)</dt>
-                            <dd class="col-sm-7">{{ deal.debug.active_comparables_after_condition_filter }}</dd>
-                            <dt class="col-sm-5">comparable offer IDs</dt>
-                            <dd class="col-sm-7">{{ deal.debug.comparable_offer_ids | join(", ") if deal.debug.comparable_offer_ids else "—" }}</dd>
-                            <dt class="col-sm-5">comparable prices</dt>
-                            <dd class="col-sm-7">{{ deal.debug.comparable_prices | join(", ") if deal.debug.comparable_prices else "—" }}</dd>
-                            <dt class="col-sm-5">comparable conditions</dt>
-                            <dd class="col-sm-7">{{ deal.debug.comparable_conditions | join(", ") if deal.debug.comparable_conditions else "—" }}</dd>
-                            <dt class="col-sm-5">market price unknown reason</dt>
-                            <dd class="col-sm-7">{{ deal.debug.market_price_unknown_reason }}</dd>
-                            <dt class="col-sm-5">parser confidence</dt>
-                            <dd class="col-sm-7">{{ deal.debug.parser_confidence if deal.debug.parser_confidence is not none else "—" }}</dd>
-                            <dt class="col-sm-5">market price confidence</dt>
-                            <dd class="col-sm-7">{{ deal.debug.market_price_confidence if deal.debug.market_price_confidence is not none else "—" }}</dd>
-                            <dt class="col-sm-5">Market Price eligible</dt>
-                            <dd class="col-sm-7">{{ "yes" if deal.debug.market_price_eligible else "no" }}</dd>
-                            <dt class="col-sm-5">exclusion reasons</dt>
-                            <dd class="col-sm-7">{{ deal.debug.market_price_exclusion_reasons | join(", ") if deal.debug.market_price_exclusion_reasons else "—" }}</dd>
-                            <dt class="col-sm-5">configured threshold</dt>
-                            <dd class="col-sm-7">{{ deal.debug.market_price_threshold }}</dd>
-                        </dl>
-                    </div>
+                    <details class="deal-analysis-debug">
+                        <summary>Admin debug</summary>
+                        <div class="deal-analysis-debug-content">
+                            <section class="deal-analysis-debug-group">
+                                <h4 class="deal-analysis-debug-heading">Identity</h4>
+                                <dl class="row mb-0 small deal-analysis-debug-fields">
+                                    <dt class="col-sm-5">watch_id</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.watch_id }}</dd>
+                                    <dt class="col-sm-5">brand</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.brand }}</dd>
+                                    <dt class="col-sm-5">reference</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.reference }}</dd>
+                                    <dt class="col-sm-5">normalized condition</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.normalized_condition }}</dd>
+                                    <dt class="col-sm-5">market_condition</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.market_condition }}</dd>
+                                </dl>
+                            </section>
+                            <section class="deal-analysis-debug-group">
+                                <h4 class="deal-analysis-debug-heading">Comparable selection</h4>
+                                <dl class="row mb-0 small deal-analysis-debug-fields">
+                                    <dt class="col-sm-5">active comparables (before filter)</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.active_comparables_before_condition_filter }}</dd>
+                                    <dt class="col-sm-5">active comparables (after filter)</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.active_comparables_after_condition_filter }}</dd>
+                                    <dt class="col-sm-5">comparable offer IDs</dt>
+                                    <dd class="col-sm-7">
+                                        {% if deal.debug.comparable_offer_ids %}
+                                        <ul class="deal-analysis-debug-id-list mb-0">
+                                            {% for offer_id in deal.debug.comparable_offer_ids %}
+                                            <li>{{ offer_id }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% else %}
+                                        —
+                                        {% endif %}
+                                    </dd>
+                                    <dt class="col-sm-5">comparable prices</dt>
+                                    <dd class="col-sm-7 deal-analysis-debug-wrap">{{ deal.debug.comparable_prices | join(", ") if deal.debug.comparable_prices else "—" }}</dd>
+                                    <dt class="col-sm-5">comparable conditions</dt>
+                                    <dd class="col-sm-7 deal-analysis-debug-wrap">{{ deal.debug.comparable_conditions | join(", ") if deal.debug.comparable_conditions else "—" }}</dd>
+                                </dl>
+                            </section>
+                            <section class="deal-analysis-debug-group">
+                                <h4 class="deal-analysis-debug-heading">Market Price eligibility</h4>
+                                <dl class="row mb-0 small deal-analysis-debug-fields">
+                                    <dt class="col-sm-5">parser confidence</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.parser_confidence if deal.debug.parser_confidence is not none else "—" }}</dd>
+                                    <dt class="col-sm-5">market price confidence</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.market_price_confidence if deal.debug.market_price_confidence is not none else "—" }}</dd>
+                                    <dt class="col-sm-5">Market Price eligible</dt>
+                                    <dd class="col-sm-7">{{ "yes" if deal.debug.market_price_eligible else "no" }}</dd>
+                                    <dt class="col-sm-5">exclusion reasons</dt>
+                                    <dd class="col-sm-7">
+                                        {% if deal.debug.market_price_exclusion_reasons %}
+                                        <ul class="deal-analysis-debug-wrap-list mb-0">
+                                            {% for reason in deal.debug.market_price_exclusion_reasons %}
+                                            <li>{{ reason }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% else %}
+                                        —
+                                        {% endif %}
+                                    </dd>
+                                    <dt class="col-sm-5">configured threshold</dt>
+                                    <dd class="col-sm-7">{{ deal.debug.market_price_threshold }}</dd>
+                                    <dt class="col-sm-5">market price unknown reason</dt>
+                                    <dd class="col-sm-7 deal-analysis-debug-wrap">{{ deal.debug.market_price_unknown_reason }}</dd>
+                                </dl>
+                            </section>
+                        </div>
+                    </details>
                     {% endif %}
                 </div>
             </div>
@@ -251,21 +302,33 @@
                     {% endif %}
 
                     {% if detail.show_deal_debug and card.market_price_debug %}
-                    <div class="deal-analysis-debug mt-3">
-                        <div class="text-muted small fw-semibold mb-2">Market Price debug</div>
-                        <dl class="row mb-0 small">
-                            <dt class="col-sm-5">parser confidence</dt>
-                            <dd class="col-sm-7">{{ card.market_price_debug.parser_confidence if card.market_price_debug.parser_confidence is not none else "—" }}</dd>
-                            <dt class="col-sm-5">market price confidence</dt>
-                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_confidence }}</dd>
-                            <dt class="col-sm-5">Market Price eligible</dt>
-                            <dd class="col-sm-7">{{ "yes" if card.market_price_debug.market_price_eligible else "no" }}</dd>
-                            <dt class="col-sm-5">exclusion reasons</dt>
-                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_exclusion_reasons | join(", ") if card.market_price_debug.market_price_exclusion_reasons else "—" }}</dd>
-                            <dt class="col-sm-5">configured threshold</dt>
-                            <dd class="col-sm-7">{{ card.market_price_debug.market_price_threshold }}</dd>
-                        </dl>
-                    </div>
+                    <details class="deal-analysis-debug deal-analysis-debug-market-price">
+                        <summary>Market Price debug</summary>
+                        <div class="deal-analysis-debug-content">
+                            <dl class="row mb-0 small deal-analysis-debug-fields">
+                                <dt class="col-sm-5">parser confidence</dt>
+                                <dd class="col-sm-7">{{ card.market_price_debug.parser_confidence if card.market_price_debug.parser_confidence is not none else "—" }}</dd>
+                                <dt class="col-sm-5">market price confidence</dt>
+                                <dd class="col-sm-7">{{ card.market_price_debug.market_price_confidence }}</dd>
+                                <dt class="col-sm-5">Market Price eligible</dt>
+                                <dd class="col-sm-7">{{ "yes" if card.market_price_debug.market_price_eligible else "no" }}</dd>
+                                <dt class="col-sm-5">exclusion reasons</dt>
+                                <dd class="col-sm-7">
+                                    {% if card.market_price_debug.market_price_exclusion_reasons %}
+                                    <ul class="deal-analysis-debug-wrap-list mb-0">
+                                        {% for reason in card.market_price_debug.market_price_exclusion_reasons %}
+                                        <li>{{ reason }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                    {% else %}
+                                    —
+                                    {% endif %}
+                                </dd>
+                                <dt class="col-sm-5">configured threshold</dt>
+                                <dd class="col-sm-7">{{ card.market_price_debug.market_price_threshold }}</dd>
+                            </dl>
+                        </div>
+                    </details>
                     {% endif %}
 
                     {% if card.price_label or card.results %}

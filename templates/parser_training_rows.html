@@ -13,8 +13,8 @@
                 </p>
             </div>
             <div class="d-flex flex-wrap gap-2">
+                <a href="{{ activity_detail_url }}" class="btn btn-sm btn-outline-primary">&larr; Back to import detail</a>
                 <a href="/parser-training" class="btn btn-sm btn-outline-dark">Back to Training Center</a>
-                <a href="/activity/{{ import_log.id }}" class="btn btn-sm btn-outline-primary">Open import detail</a>
             </div>
         </div>
     </div>
@@ -22,6 +22,9 @@
 
 {% if saved %}
 <div class="alert alert-success" role="alert">Row correction saved.</div>
+{% endif %}
+{% if save_error %}
+<div class="alert alert-danger" role="alert">{{ save_error }}</div>
 {% endif %}
 {% if bulk_saved %}
 <div class="alert alert-success" role="alert">Bulk action applied to selected rows.</div>

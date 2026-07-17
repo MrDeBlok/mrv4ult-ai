@@ -1,0 +1,13 @@
+﻿python : Traceback (most recent call last):
+At C:\Users\caspe\AppData\Local\Temp\ps-script-a863334b-4f2c-4725-ac61-b9862f000b7c.ps1:110 char:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "<string>", line 9, in <module>
+    print('after flag', fw.get('condition'), fw.get('raw_condition'), fw.get('condition_needs_training'))
+                        ^^^^^^
+AttributeError: 'bool' object has no attribute 'get'
+term message None
+term watch None

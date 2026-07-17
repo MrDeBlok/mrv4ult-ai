@@ -633,7 +633,7 @@ def get_offer_by_id(offer_id: str) -> Record | None:
 
     columns = (
         "id, message_id, dealer_id, watch_id, status, original_price, original_currency, "
-        "condition, card_date, created_at, duplicate_of_id, is_duplicate"
+        "condition, card_date, line_index, created_at, duplicate_of_id, is_duplicate"
     )
     if source_import_log_id_column_supported():
         columns += ", source_import_log_id"
@@ -651,30 +651,44 @@ def get_offer_by_id(offer_id: str) -> Record | None:
     return response.data[0]
 
 
-def link_offer_to_import_source(
-    offer_id: str,
-    *,
-    message_id: str,
-    source_import_log_id: str,
-) -> None:
-    """Persist the WhatsApp import source on an offer after import_log creation."""
-    cleaned_offer_id = offer_id.strip()
-    cleaned_message_id = message_id.strip()
-    cleaned_import_log_id = source_import_log_id.strip()
-    if not cleaned_offer_id or not cleaned_message_id or not cleaned_import_log_id:
-        return
-    if not (
-        _is_valid_uuid(cleaned_offer_id)
-        and _is_valid_uuid(cleaned_message_id)
-        and _is_valid_uuid(cleaned_import_log_id)
-    ):
-        return
+def find_offer_by_message_line_index(message_id: str, line_index: int) -> Record | None:
+    """Return the offer that owns a WhatsApp message source line, if any."""
+    cleaned_message_id = str(message_id or "").strip()
+    if not _is_valid_uuid(cleaned_message_id):
+        return None
 
-    payload: Record = {"message_id": cleaned_message_id}
-    if source_import_log_id_column_supported():
-        payload["source_import_log_id"] = cleaned_import_log_id
+    response = (
+        get_client()
+        .table("offers")
+        .select(
+            "id, message_id, dealer_id, watch_id, status, line_index, original_price, "
+            "original_currency, condition, card_date, duplicate_of_id, is_duplicate"
+        )
+        .eq("message_id", cleaned_message_id)
+        .eq("line_index", int(line_index))
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0]
 
-    get_client().table("offers").update(payload).eq("id", cleaned_offer_id).execute()
+
+def _is_postgres_unique_violation(exc: BaseException) -> bool:
+    if isinstance(exc, APIError):
+        code = str(getattr(exc, "code", "") or "")
+        if code == "23505":
+            return True
+    message = str(exc).lower()
+    return (
+        "23505" in message
+        or "duplicate key value violates unique constraint" in message
+        or "offers_message_line_unique" in message
+    )
+
+
+class OfferSourceIdentityConflictError(ValueError):
+    """Raised when a parser-training save would violate offer source identity."""
 
 
 def update_offer_from_training(
@@ -728,20 +742,79 @@ def update_offer_from_training(
         "usd_price": watch.get("usd_price"),
         "exchange_rate_to_usd": watch.get("exchange_rate_to_usd"),
     }
-    if message_id and _is_valid_uuid(message_id.strip()):
-        payload["message_id"] = message_id.strip()
-    if line_index is not None:
-        payload["line_index"] = line_index
 
-    response = (
-        get_client()
-        .table("offers")
-        .update(payload)
-        .eq("id", cleaned_offer_id)
-        .execute()
+    existing_message_id = str(existing.get("message_id") or "").strip() or None
+    existing_line_index = existing.get("line_index")
+    assign_message_id = (
+        message_id.strip()
+        if not existing_message_id and message_id and _is_valid_uuid(message_id.strip())
+        else None
     )
+    assign_line_index = line_index if existing_line_index is None and line_index is not None else None
+
+    if assign_message_id or assign_line_index is not None:
+        target_message_id = assign_message_id or existing_message_id
+        target_line_index = (
+            assign_line_index if assign_line_index is not None else existing_line_index
+        )
+        if target_message_id and target_line_index is not None:
+            conflict = find_offer_by_message_line_index(target_message_id, int(target_line_index))
+            if conflict and str(conflict.get("id")) != cleaned_offer_id:
+                raise OfferSourceIdentityConflictError(
+                    "Could not save this row because another offer already owns "
+                    f"message line {int(target_line_index)}. Review the linked offer "
+                    "mapping for this import before saving again."
+                )
+
+    if assign_message_id:
+        payload["message_id"] = assign_message_id
+    if assign_line_index is not None:
+        payload["line_index"] = assign_line_index
+
+    try:
+        response = (
+            get_client()
+            .table("offers")
+            .update(payload)
+            .eq("id", cleaned_offer_id)
+            .execute()
+        )
+    except APIError as exc:
+        if _is_postgres_unique_violation(exc):
+            raise OfferSourceIdentityConflictError(
+                "Could not save this row because another offer already uses the same "
+                "message line. Review the linked offer mapping for this import."
+            ) from exc
+        raise
+
     updated = _first_row(response.data, "offers")
     return updated or {**existing, **payload, "id": cleaned_offer_id}
+
+
+def link_offer_to_import_source(
+    offer_id: str,
+    *,
+    message_id: str,
+    source_import_log_id: str,
+) -> None:
+    """Persist the WhatsApp import source on an offer after import_log creation."""
+    cleaned_offer_id = offer_id.strip()
+    cleaned_message_id = message_id.strip()
+    cleaned_import_log_id = source_import_log_id.strip()
+    if not cleaned_offer_id or not cleaned_message_id or not cleaned_import_log_id:
+        return
+    if not (
+        _is_valid_uuid(cleaned_offer_id)
+        and _is_valid_uuid(cleaned_message_id)
+        and _is_valid_uuid(cleaned_import_log_id)
+    ):
+        return
+
+    payload: Record = {"message_id": cleaned_message_id}
+    if source_import_log_id_column_supported():
+        payload["source_import_log_id"] = cleaned_import_log_id
+
+    get_client().table("offers").update(payload).eq("id", cleaned_offer_id).execute()
 
 
 def link_import_log_to_summary_offers(

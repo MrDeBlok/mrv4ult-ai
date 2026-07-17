@@ -702,6 +702,56 @@ def backfill_parser_training_rows_for_recent_imports(
     return result
 
 
+def prepare_parser_training_rows_for_import(import_log: Record) -> Record:
+    """Create parser_training_rows from stored import summary without re-ingesting offers."""
+    from database import (
+        list_parser_training_rows_for_import,
+        parser_training_rows_supported,
+        parser_training_rows_write_guard,
+    )
+
+    import_id = str(import_log.get("id") or "")
+    if not import_id:
+        return {"status": "missing_import", "rows_created": 0, "import_log_id": import_id}
+
+    if not parser_training_rows_supported():
+        return {"status": "unsupported", "rows_created": 0, "import_log_id": import_id}
+
+    existing = list_parser_training_rows_for_import(import_id)
+    if existing:
+        return {
+            "status": "already_prepared",
+            "rows_created": 0,
+            "existing_rows": len(existing),
+            "import_log_id": import_id,
+        }
+
+    summary = import_log.get("summary") or {}
+    watches = list(summary.get("offer_watches") or summary.get("parsed_watches") or [])
+    if not watches:
+        return {"status": "no_rows", "rows_created": 0, "import_log_id": import_id}
+
+    message_id = str(summary.get("message_id") or import_log.get("message_id") or "")
+    with parser_training_rows_write_guard():
+        created = sync_training_rows_after_ingest(
+            import_log,
+            message_id=message_id,
+            watches=watches,
+            offer_ids_by_index=_offer_ids_by_index_from_summary(summary),
+            message_type=summary.get("message_type"),
+            created_by_user_id=str(import_log.get("imported_by_user_id") or "") or None,
+        )
+
+    if created:
+        re_evaluate_parser_training_rows(import_log_id=import_id)
+
+    return {
+        "status": "prepared",
+        "rows_created": len(created),
+        "import_log_id": import_id,
+    }
+
+
 def watch_from_training_row(row: Record) -> Record:
     """Reconstruct the current final offer payload from a training row."""
     from final_offer_payload import build_final_offer_payload
@@ -740,8 +790,12 @@ def create_offer_for_training_row(
     final_watch: Record | None = None,
 ) -> tuple[Record | None, bool]:
     """Create an active offer for one training row when it passes safety gates."""
-    from database import find_or_create_watch, insert_offer, link_offer_to_import_source
+    from database import find_offer_by_message_line_index, find_or_create_watch, insert_offer, link_offer_to_import_source
     from final_offer_payload import final_offer_training_context
+
+    existing_at_line = find_offer_by_message_line_index(message_id, line_index)
+    if existing_at_line:
+        return existing_at_line, False
 
     base_watch = dict(final_watch) if final_watch else watch_from_training_row(row)
     watch = enrich_watch_for_training_evaluation(base_watch)
@@ -857,6 +911,44 @@ def sync_import_log_summary_for_training_row(
     return patch_import_log(str(import_log["id"]), summary=summary)
 
 
+def _resolve_training_row_offer(
+    *,
+    row: Record,
+    message_id: str,
+    line_index: int,
+) -> Record | None:
+    """Resolve the existing offer that should be updated for one training row."""
+    from database import (
+        OfferSourceIdentityConflictError,
+        find_offer_by_message_line_index,
+        get_offer_by_id,
+        is_valid_uuid,
+    )
+
+    linked_id = str(row.get("created_offer_id") or "").strip()
+    linked = get_offer_by_id(linked_id) if linked_id and is_valid_uuid(linked_id) else None
+    by_source = (
+        find_offer_by_message_line_index(message_id, line_index)
+        if message_id and is_valid_uuid(message_id)
+        else None
+    )
+
+    if linked and by_source and str(linked.get("id")) != str(by_source.get("id")):
+        linked_line = linked.get("line_index")
+        raise OfferSourceIdentityConflictError(
+            "Could not save this row because it is linked to offer "
+            f"{linked.get('id')} (message line {linked_line}), but message line "
+            f"{line_index} is already owned by offer {by_source.get('id')}. "
+            "Review the linked offer mapping for this import before saving again."
+        )
+
+    if linked:
+        return linked
+    if by_source:
+        return by_source
+    return None
+
+
 def _persist_corrected_offer(
     *,
     row: Record,
@@ -873,38 +965,37 @@ def _persist_corrected_offer(
         update_offer_from_training,
     )
 
-    offer_id = row.get("created_offer_id")
     line_index = int(row.get("row_index") or 0)
     message_id = str((message or {}).get("id") or import_log.get("message_id") or "")
     import_log_id = str(import_log.get("id") or "")
 
     if blocked:
+        offer_id = row.get("created_offer_id")
         return str(offer_id) if offer_id else None
 
-    if offer_id and is_valid_uuid(str(offer_id)):
-        existing = get_offer_by_id(str(offer_id))
-        if existing is None:
-            offer_id = None
-        else:
-            updated = update_offer_from_training(
-                str(offer_id),
-                watch=final_watch,
-                message_id=message_id or None,
-                line_index=line_index,
+    offer_to_update = _resolve_training_row_offer(
+        row=row,
+        message_id=message_id,
+        line_index=line_index,
+    )
+
+    if offer_to_update:
+        offer_id = str(offer_to_update["id"])
+        updated = update_offer_from_training(offer_id, watch=final_watch)
+        if message_id and import_log_id:
+            link_offer_to_import_source(
+                offer_id,
+                message_id=message_id,
+                source_import_log_id=import_log_id,
             )
-            if message_id and import_log_id:
-                link_offer_to_import_source(
-                    str(offer_id),
-                    message_id=message_id,
-                    source_import_log_id=import_log_id,
-                )
-            return str(updated.get("id") or offer_id)
+        return str(updated.get("id") or offer_id)
 
     dealer_id = None
     if message:
         dealer_id = message.get("dealer_id")
-    if not dealer_id and offer_id:
-        existing = get_offer_by_id(str(offer_id))
+    prior_offer_id = row.get("created_offer_id")
+    if not dealer_id and prior_offer_id:
+        existing = get_offer_by_id(str(prior_offer_id))
         if existing:
             dealer_id = existing.get("dealer_id")
 
@@ -919,7 +1010,7 @@ def _persist_corrected_offer(
         )
         if offer_row:
             return str(offer_row["id"])
-    return str(offer_id) if offer_id else None
+    return str(prior_offer_id) if prior_offer_id else None
 
 
 def _correct_training_row_impl(
