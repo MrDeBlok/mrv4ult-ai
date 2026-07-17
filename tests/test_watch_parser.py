@@ -921,3 +921,133 @@ class TestRolex126200OmbreN7EmojiRegression:
         metadata = condition_display_metadata(row, watch)
         assert metadata["label"] == NEW_CONDITION
         assert metadata["is_known"] is True
+
+
+class TestGluedYearConditionNotation:
+    ROLEX_USED_LINE = "116655 paved 2018Used Both Tags with Invoice $284,000"
+    AP_N5_LINE = "15416CD Blue Ceramic 2026N5 400k USDT // 3.12m HKD"
+    AP_NEW_LINE = "26622CE Red 2026New (Open Date, can be named) 232k USDT // 1.8m HKD"
+
+    def _normalized(self, line: str) -> dict:
+        watch = _parse_normalized_message(line)
+        return mark_explicit_condition_metadata(apply_inferred_pre_owned_default(watch))
+
+    @pytest.mark.parametrize(
+        ("token", "expected_year", "expected_raw", "expected_card_date", "expected_wear"),
+        [
+            ("2018Used", 2018, "Used", None, PRE_OWNED_CONDITION),
+            ("2023Used", 2023, "Used", None, PRE_OWNED_CONDITION),
+            ("2026New", 2026, "New", None, NEW_CONDITION),
+            ("2026N3", 2026, "N3", "03/2026", NEW_CONDITION),
+            ("2026N4", 2026, "N4", "04/2026", NEW_CONDITION),
+            ("2026N5", 2026, "N5", "05/2026", NEW_CONDITION),
+            ("2026N12", 2026, "N12", "12/2026", NEW_CONDITION),
+            ("2025N7", 2025, "N7", "07/2025", NEW_CONDITION),
+        ],
+    )
+    def test_glued_year_condition_tokens(
+        self,
+        token: str,
+        expected_year: int,
+        expected_raw: str,
+        expected_card_date: str | None,
+        expected_wear: str,
+    ) -> None:
+        watch = parse_watch_line(f"126331 {token} 14500 USD")
+        assert watch is not None
+        assert watch["production_year"] == expected_year
+        assert watch["raw_condition"] == expected_raw
+        assert watch["card_date"] == expected_card_date
+        normalized = self._normalized(f"126331 {token} 14500 USD")
+        assert resolve_offer_wear_condition(
+            normalized.get("condition"),
+            normalized.get("raw_condition"),
+        ) == expected_wear
+        assert normalized.get("condition_source") == "explicit"
+
+    @pytest.mark.parametrize(
+        "token",
+        ["2018used", "2026new", "2026n5"],
+    )
+    def test_glued_tokens_are_case_insensitive(self, token: str) -> None:
+        watch = parse_watch_line(f"126331 {token} 14500 USD")
+        assert watch is not None
+        assert watch["production_year"] is not None
+        assert watch["raw_condition"] is not None
+        assert watch["condition"] is not None
+
+    def test_spaced_year_condition_formats_remain_unchanged(self) -> None:
+        spaced_used = parse_watch_line("126331 2018 Used 14500 USD")
+        spaced_new = parse_watch_line("126331 2026 New 14500 USD")
+        spaced_n5 = parse_watch_line("126331 2026 N5 14500 USD")
+
+        assert spaced_used is not None
+        assert spaced_used["production_year"] == 2018
+        assert spaced_used["condition"] == "Used"
+
+        assert spaced_new is not None
+        assert spaced_new["condition"] == "New"
+
+        assert spaced_n5 is not None
+        assert spaced_n5["condition"] == "New"
+        assert spaced_n5["card_date"] == "05/2026"
+
+    def test_rolex_full_pipeline_example(self) -> None:
+        watch = self._normalized(self.ROLEX_USED_LINE)
+
+        assert watch["brand"] == "Rolex"
+        assert watch["reference"] == "116655"
+        assert watch["production_year"] == 2018
+        assert watch["condition"] == PRE_OWNED_CONDITION
+        assert watch["raw_condition"] == "Used"
+        assert watch["original_price"] == 284_000
+
+    def test_ap_n5_full_pipeline_example(self) -> None:
+        watch = self._normalized(self.AP_N5_LINE)
+
+        assert watch["brand"] == "Audemars Piguet"
+        assert watch["reference"] == "15416CD"
+        assert watch["production_year"] == 2026
+        assert watch["card_date"] == "05/2026"
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "N5"
+        assert watch["original_price"] == 3_120_000
+        assert watch["original_currency"] == "HKD"
+
+    def test_ap_new_full_pipeline_example(self) -> None:
+        watch = self._normalized(self.AP_NEW_LINE)
+
+        assert watch["brand"] == "Audemars Piguet"
+        assert watch["reference"] == "26622CE"
+        assert watch["production_year"] == 2026
+        assert watch["condition"] == NEW_CONDITION
+        assert watch["raw_condition"] == "New"
+        assert watch["original_price"] == 1_800_000
+        assert watch["original_currency"] == "HKD"
+
+    def test_year_condition_token_is_not_treated_as_reference(self) -> None:
+        watch = parse_watch_line("26240st green 2026N3 64.4k USDT // 500k HKD")
+
+        assert watch is not None
+        assert watch["reference"] == "26240ST"
+        assert watch["production_year"] == 2026
+        assert watch["raw_condition"] == "N3"
+        assert "2026N3" not in str(watch.get("reference") or "")
+
+    def test_deal_analysis_receives_correct_condition_for_glued_notation(self) -> None:
+        from deal_market_lookup import resolve_deal_market_context
+
+        watch = self._normalized(self.AP_N5_LINE)
+        row = {
+            "brand": watch.get("brand"),
+            "reference": watch.get("reference"),
+            "condition": watch.get("condition"),
+            "raw_condition": watch.get("raw_condition"),
+            "condition_source": watch.get("condition_source"),
+            "usd_price": watch.get("usd_price"),
+        }
+        market = resolve_deal_market_context(row, watch, include_debug=True)
+
+        assert market.offer_condition == NEW_CONDITION
+        assert market.debug.get("normalized_condition") == NEW_CONDITION
+        assert market.debug.get("market_price_unknown_reason") != "offer_condition_unknown"

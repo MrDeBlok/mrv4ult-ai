@@ -149,6 +149,13 @@ HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*
 NEW_CARD_DATE_PATTERN = re.compile(
     r"(?:\b[Nn]\s*|(?<=[a-z])[Nn])(\d{1,2})(?:/(\d{2}|\d{4}))?\b",
 )
+GLUED_YEAR_N_NOTATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9/])((?:19|20)\d{2})[Nn](\d{1,2})(?![A-Za-z0-9/])",
+)
+GLUED_YEAR_WEAR_CONDITION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9/])((?:19|20)\d{2})(used|new|pre[-\s]?owned|preowned)(?![A-Za-z])",
+    re.I,
+)
 NEW_CARD_DATE_MMYyyy_PATTERN = re.compile(r"\bnew\s+(\d{1,2})/(\d{4})\b", re.I)
 FROM_CARD_DATE_PATTERN = re.compile(r"\bfrom\s+(\d{1,2})-(\d{4})\b", re.I)
 CARD_MMYyyy_PATTERN = re.compile(r"\b(\d{1,2})/(\d{4})\b")
@@ -458,6 +465,8 @@ def _strip_markdown(text: str) -> str:
 
 NOTES_REMOVE_PATTERNS = [
     NEW_CARD_DATE_PATTERN,
+    GLUED_YEAR_N_NOTATION_PATTERN,
+    GLUED_YEAR_WEAR_CONDITION_PATTERN,
     NEW_CARD_DATE_MMYyyy_PATTERN,
     CARD_MMYyyy_PATTERN,
     USED_YEAR_PATTERN,
@@ -851,21 +860,30 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
                 watch["production_year"] = int(card_year_match.group(1))
         remaining = _remove_card_date_tokens(remaining)
     else:
-        used_condition, production_year = _extract_used_year(text)
-        if used_condition:
-            watch["condition"] = used_condition
-            watch["production_year"] = production_year
-            remaining = USED_YEAR_PATTERN.sub(" ", remaining)
+        glued_year, glued_condition, glued_card_date, glued_raw = _extract_glued_year_condition(text)
+        if glued_condition:
+            watch["condition"] = glued_condition
+            watch["raw_condition"] = glued_raw
+            watch["production_year"] = glued_year
+            if glued_card_date:
+                watch["card_date"] = glued_card_date
+            remaining = _remove_glued_year_condition_tokens(text)
         else:
-            wear_condition, remaining = _extract_wear_condition(remaining)
-            watch["condition"] = wear_condition
-            watch["production_year"] = _extract_standalone_year(remaining, watch)
-            if watch["production_year"] is None:
-                from fpj_model_knowledge import extract_year_glue_suffix
+            used_condition, production_year = _extract_used_year(text)
+            if used_condition:
+                watch["condition"] = used_condition
+                watch["production_year"] = production_year
+                remaining = USED_YEAR_PATTERN.sub(" ", remaining)
+            else:
+                wear_condition, remaining = _extract_wear_condition(remaining)
+                watch["condition"] = wear_condition
+                watch["production_year"] = _extract_standalone_year(remaining, watch)
+                if watch["production_year"] is None:
+                    from fpj_model_knowledge import extract_year_glue_suffix
 
-                year_suffix = extract_year_glue_suffix(text)
-                if year_suffix is not None:
-                    watch["production_year"] = year_suffix
+                    year_suffix = extract_year_glue_suffix(text)
+                    if year_suffix is not None:
+                        watch["production_year"] = year_suffix
 
     accessory_notes, remaining = _apply_accessories(watch, remaining)
 
@@ -950,7 +968,43 @@ def _remove_card_date_tokens(text: str) -> str:
     remaining = FROM_CARD_DATE_PATTERN.sub(" ", text)
     remaining = NEW_CARD_DATE_MMYyyy_PATTERN.sub(" ", remaining)
     remaining = NEW_CARD_DATE_PATTERN.sub(" ", remaining)
+    remaining = _remove_glued_year_condition_tokens(remaining)
     return re.sub(r"\s+", " ", remaining).strip()
+
+
+def _remove_glued_year_condition_tokens(text: str) -> str:
+    remaining = GLUED_YEAR_N_NOTATION_PATTERN.sub(" ", text)
+    remaining = GLUED_YEAR_WEAR_CONDITION_PATTERN.sub(" ", remaining)
+    return re.sub(r"\s+", " ", remaining).strip()
+
+
+def _extract_glued_year_condition(
+    text: str,
+) -> tuple[int | None, str | None, str | None, str | None]:
+    """Parse glued year+condition tokens such as 2018Used, 2026New, and 2026N5."""
+    match = GLUED_YEAR_N_NOTATION_PATTERN.search(text)
+    if match:
+        year_token = match.group(1)
+        if _looks_like_year(year_token):
+            month = int(match.group(2))
+            if 1 <= month <= 12:
+                year = int(year_token)
+                raw_notation = text[match.start() + 4 : match.end()]
+                return year, "New", f"{month:02d}/{year}", raw_notation
+
+    match = GLUED_YEAR_WEAR_CONDITION_PATTERN.search(text)
+    if match:
+        year_token = match.group(1)
+        if _looks_like_year(year_token):
+            year = int(year_token)
+            raw_condition = text[match.start(2) : match.end(2)]
+            normalized_suffix = match.group(2).lower().replace("-", "").replace(" ", "")
+            if normalized_suffix in {"used", "preowned"}:
+                return year, "Used", None, raw_condition
+            if normalized_suffix == "new":
+                return year, "New", None, raw_condition
+
+    return None, None, None, None
 
 
 def _detect_wear_condition(text: str) -> str | None:
@@ -1770,6 +1824,8 @@ def _extract_standalone_year(text: str, watch: WatchDict) -> int | None:
 
     if (
         NEW_CARD_DATE_PATTERN.search(text)
+        or GLUED_YEAR_N_NOTATION_PATTERN.search(text)
+        or GLUED_YEAR_WEAR_CONDITION_PATTERN.search(text)
         or NEW_CARD_DATE_MMYyyy_PATTERN.search(text)
         or FROM_CARD_DATE_PATTERN.search(text)
         or CARD_MMYyyy_PATTERN.search(text)
