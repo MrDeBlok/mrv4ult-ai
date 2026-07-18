@@ -17,6 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from database_availability import (
+    DATABASE_UNAVAILABLE_MESSAGE,
+    DatabaseUnavailableError,
+    log_database_availability_error,
+)
 from timezone_utils import format_display_timestamp
 from condition_normalizer import (
     CONDITION_SOURCE_INFERRED_DEFAULT,
@@ -1270,33 +1275,6 @@ def _render_watch_reference_detail(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    offers = [
-        normalize_watch_detail_offer(offer)
-        for offer in get_active_offers_for_brand_reference(brand, reference)
-    ]
-    user = get_current_user(request)
-    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
-        offers
-    )
-    offers = attach_dealer_offer_source_urls(
-        offers,
-        import_logs_by_message_id,
-        user=user,
-        import_logs_by_id=import_logs_by_id,
-        import_logs_by_offer_id=import_logs_by_offer_id,
-    )
-    offers = enrich_watch_detail_offer_recency(
-        offers,
-        import_logs_by_message_id=import_logs_by_message_id,
-        import_logs_by_id=import_logs_by_id,
-        import_logs_by_offer_id=import_logs_by_offer_id,
-    )
-    filtered_offers = [
-        offer
-        for offer in offers
-        if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
-        and offer_matches_watch_detail_date_filter(offer, date_range)
-    ]
     detail_base_url = build_watch_reference_url(brand, reference) or "/"
     filter_urls = build_watch_reference_filter_urls(
         brand,
@@ -1314,24 +1292,74 @@ def _render_watch_reference_detail(
         date_from=date_from_input,
         date_to=date_to_input,
     )
+    template_context = {
+        "watch": build_reference_detail_display(brand, reference, []),
+        "stats": build_watch_stats([]),
+        "offers": [],
+        "condition_filter": condition_filter_input,
+        "date_filter": date_filter,
+        "date_from": date_from_input,
+        "date_to": date_to_input,
+        "detail_base_url": detail_base_url,
+        "condition_urls": condition_urls,
+        "filter_urls": filter_urls,
+        "brand_value": brand,
+        "reference_value": reference,
+        "database_unavailable": False,
+        "database_unavailable_message": DATABASE_UNAVAILABLE_MESSAGE,
+    }
+
+    try:
+        offers = [
+            normalize_watch_detail_offer(offer)
+            for offer in get_active_offers_for_brand_reference(brand, reference)
+        ]
+        user = get_current_user(request)
+        import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
+            offers
+        )
+        offers = attach_dealer_offer_source_urls(
+            offers,
+            import_logs_by_message_id,
+            user=user,
+            import_logs_by_id=import_logs_by_id,
+            import_logs_by_offer_id=import_logs_by_offer_id,
+        )
+        offers = enrich_watch_detail_offer_recency(
+            offers,
+            import_logs_by_message_id=import_logs_by_message_id,
+            import_logs_by_id=import_logs_by_id,
+            import_logs_by_offer_id=import_logs_by_offer_id,
+        )
+        filtered_offers = [
+            offer
+            for offer in offers
+            if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+            and offer_matches_watch_detail_date_filter(offer, date_range)
+        ]
+        template_context["watch"] = build_reference_detail_display(brand, reference, offers)
+        template_context["stats"] = build_watch_stats(filtered_offers)
+        template_context["offers"] = build_offer_rows(filtered_offers)
+    except DatabaseUnavailableError as exc:
+        root_exc = exc.__cause__ or exc
+        log_database_availability_error(
+            root_exc,
+            operation=exc.operation,
+            route="/watch-reference",
+        )
+        template_context["database_unavailable"] = True
+        template_context["database_unavailable_message"] = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "watch_detail.html",
+            template_context,
+            status_code=503,
+        )
 
     return templates.TemplateResponse(
         request,
         "watch_detail.html",
-        {
-            "watch": build_reference_detail_display(brand, reference, offers),
-            "stats": build_watch_stats(filtered_offers),
-            "offers": build_offer_rows(filtered_offers),
-            "condition_filter": condition_filter_input,
-            "date_filter": date_filter,
-            "date_from": date_from_input,
-            "date_to": date_to_input,
-            "detail_base_url": detail_base_url,
-            "condition_urls": condition_urls,
-            "filter_urls": filter_urls,
-            "brand_value": brand,
-            "reference_value": reference,
-        },
+        template_context,
     )
 
 
@@ -2185,6 +2213,16 @@ def _parse_signed_usd(value: Any) -> int | None:
 def build_activity_row(import_log: dict[str, Any]) -> dict[str, Any]:
     """Format one import log for the activity list."""
     status = normalize_import_status(import_log)
+    summary = import_log.get("summary") or {}
+    from parser_quality import resolve_import_parser_quality
+
+    quality_report = resolve_import_parser_quality(summary)
+    if (
+        status == "success"
+        and quality_report.total_offers > 0
+        and not quality_report.meets_thresholds
+    ):
+        status = "warning"
     sender_redacted = should_redact_import_sender(import_log)
     return {
         "id": import_log["id"],
@@ -2221,6 +2259,17 @@ def build_activity_detail(
         message,
         show_parser_review=show_parser_review,
     )
+    from parser_quality import build_parser_quality_display, resolve_import_parser_quality
+
+    parser_quality_report = resolve_import_parser_quality(summary)
+    parser_quality = build_parser_quality_display(parser_quality_report)
+    display_status = status
+    if (
+        status == "success"
+        and parser_quality_report.total_offers > 0
+        and not parser_quality_report.meets_thresholds
+    ):
+        display_status = "warning"
     return {
         "id": import_log["id"],
         "import_time": format_timestamp(import_log.get("import_time")),
@@ -2234,9 +2283,10 @@ def build_activity_detail(
         "duplicate_offers": import_log.get("duplicate_offers", 0),
         "matched_requests": import_log.get("matched_requests", 0),
         "processing_time": import_log.get("processing_time") or "N/A",
-        "status": format_import_status(status),
-        "status_class": import_status_class(status),
+        "status": format_import_status(display_status),
+        "status_class": import_status_class(display_status),
         "status_reason": import_status_reason(import_log),
+        "parser_quality": parser_quality,
         "raw_message": raw_message,
         "deal_analyses": build_deal_analysis_cards(summary, include_debug=show_deal_debug),
         "watch_cards": build_watch_offer_cards(summary, show_deal_debug=show_deal_debug),

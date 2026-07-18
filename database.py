@@ -69,8 +69,6 @@ IMPORT_LOG_PREVIEW_COLUMNS = "id, message_id"
 IMPORT_LOG_QUICK_FIX_COLUMNS = "id, message_id, summary"
 MESSAGE_PREVIEW_COLUMNS = "id, raw_text"
 IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
-IMPORT_LOG_SUMMARY_MAX_RETRIES = 3
-IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS = 0.5
 IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS = 30
 
 _UUID_PATTERN = re.compile(
@@ -102,6 +100,12 @@ try:
     from postgrest.exceptions import APIError
 except ImportError:  # pragma: no cover - test environments without postgrest
     APIError = Exception  # type: ignore[misc, assignment]
+
+from database_availability import (
+    DatabaseUnavailableError,
+    execute_postgrest_read,
+    summarize_exception_message,
+)
 
 Record = dict[str, Any]
 
@@ -578,13 +582,14 @@ def get_import_logs_by_message_ids(message_ids: list[str]) -> dict[str, Record]:
     if user_ownership_columns_supported():
         columns += ", imported_by_user_id"
 
-    response = (
-        get_client()
+    response = execute_postgrest_read(
+        "get_import_logs_by_message_ids",
+        lambda: get_client()
         .table("import_logs")
         .select(columns)
         .in_("message_id", unique_ids)
         .order("import_time", desc=True)
-        .execute()
+        .execute(),
     )
     by_message_id: dict[str, Record] = {}
     for row in response.data or []:
@@ -611,14 +616,15 @@ def find_import_logs_by_summary_offer_ids(offer_ids: list[str]) -> dict[str, Rec
 
     by_offer_id: dict[str, Record] = {}
     for offer_id in unique_offer_ids:
-        response = (
-            get_client()
+        response = execute_postgrest_read(
+            "find_import_logs_by_summary_offer_ids",
+            lambda offer_id=offer_id: get_client()
             .table("import_logs")
             .select(_import_log_source_select_columns())
             .contains("summary", {"rows": [{"offer_id": offer_id}]})
             .order("import_time", desc=True)
             .limit(1)
-            .execute()
+            .execute(),
         )
         if response.data:
             by_offer_id[offer_id] = response.data[0]
@@ -871,12 +877,13 @@ def get_import_logs_for_source_resolution(import_log_ids: list[str]) -> dict[str
     if not unique_ids:
         return {}
 
-    response = (
-        get_client()
+    response = execute_postgrest_read(
+        "get_import_logs_for_source_resolution",
+        lambda: get_client()
         .table("import_logs")
         .select(_import_log_source_select_columns())
         .in_("id", unique_ids)
-        .execute()
+        .execute(),
     )
     return {str(row["id"]): row for row in response.data or [] if row.get("id")}
 
@@ -891,12 +898,13 @@ def get_import_logs_by_offer_ids(offer_ids: list[str]) -> dict[str, Record]:
         return {}
 
     by_offer_id: dict[str, Record] = {}
-    response = (
-        get_client()
+    response = execute_postgrest_read(
+        "get_import_logs_by_offer_ids.request_matches",
+        lambda: get_client()
         .table("request_matches")
         .select("offer_id, import_log_id")
         .in_("offer_id", unique_offer_ids)
-        .execute()
+        .execute(),
     )
     import_log_ids = list(
         dict.fromkeys(
@@ -1131,7 +1139,14 @@ def find_watch_ids_for_brand_reference(brand: str | None, reference: str | None)
 
     while True:
         query = _build_watch_brand_reference_scan_query(brand, reference)
-        response = query.range(offset, offset + WATCH_LOOKUP_PAGE_SIZE - 1).execute()
+        page_offset = offset
+        response = execute_postgrest_read(
+            "find_watch_ids_for_brand_reference.watch_scan",
+            lambda page_offset=page_offset: query.range(
+                page_offset,
+                page_offset + WATCH_LOOKUP_PAGE_SIZE - 1,
+            ).execute(),
+        )
         batch = response.data or []
         for watch in batch:
             if watch.get("id") and brand_reference_group_key(watch) == target_key:
@@ -1557,7 +1572,12 @@ def _query_table_in_id_chunks(
             )
             if apply_filters is not None:
                 request = apply_filters(request)
-            response = request.execute()
+            response = execute_postgrest_read(
+                f"{table_name}.chunk_lookup",
+                lambda request=request: request.execute(),
+            )
+        except DatabaseUnavailableError:
+            raise
         except Exception as exc:
             logger.warning(
                 "%s chunk lookup failed on %s (offset=%s, size=%s): %s",
@@ -1565,7 +1585,7 @@ def _query_table_in_id_chunks(
                 id_column,
                 offset,
                 len(chunk),
-                exc,
+                summarize_exception_message(exc),
             )
             continue
         rows.extend(response.data or [])
@@ -2079,67 +2099,27 @@ def import_log_list_columns() -> str:
     return import_log_list_columns_light()
 
 
-def _is_transient_import_summary_error(exc: BaseException) -> bool:
-    """Return True for retryable Supabase/Cloudflare gateway failures."""
-    message = str(exc).lower()
-    if "json could not be generated" in message:
-        return True
-    if "cloudflare" in message:
-        return True
-    if "timeout" in message or "timed out" in message:
-        return True
-    for code in ("521", "502", "503", "504", "500"):
-        if code in message:
-            return True
-    if isinstance(exc, APIError):
-        error_code = str(getattr(exc, "code", "") or "")
-        if error_code.isdigit() and int(error_code) >= 500:
-            return True
-    return False
-
-
 def _execute_import_log_summary_batch(chunk: list[str]) -> list[Record]:
     """Fetch one import_logs summary batch with retry for transient failures."""
-    last_exc: Exception | None = None
-    for attempt in range(1, IMPORT_LOG_SUMMARY_MAX_RETRIES + 1):
-        started = time.perf_counter()
-        try:
-            response = (
-                get_client()
-                .table("import_logs")
-                .select("id,summary")
-                .in_("id", chunk)
-                .execute()
-            )
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            if elapsed_ms > IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000:
-                logger.warning(
-                    "import_log summary batch exceeded timeout threshold: "
-                    "ids=%s elapsed_ms=%s threshold_ms=%s",
-                    len(chunk),
-                    elapsed_ms,
-                    IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000,
-                )
-            return response.data or []
-        except Exception as exc:
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            last_exc = exc
-            if attempt < IMPORT_LOG_SUMMARY_MAX_RETRIES and _is_transient_import_summary_error(exc):
-                logger.warning(
-                    "import_log summary batch transient failure "
-                    "(attempt %s/%s, ids=%s, elapsed_ms=%s): %s",
-                    attempt,
-                    IMPORT_LOG_SUMMARY_MAX_RETRIES,
-                    len(chunk),
-                    elapsed_ms,
-                    exc,
-                )
-                time.sleep(IMPORT_LOG_SUMMARY_RETRY_BACKOFF_SECONDS * attempt)
-                continue
-            raise
-    if last_exc is not None:
-        raise last_exc
-    return []
+    started = time.perf_counter()
+    response = execute_postgrest_read(
+        "import_logs.summary_batch",
+        lambda: get_client()
+        .table("import_logs")
+        .select("id,summary")
+        .in_("id", chunk)
+        .execute(),
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if elapsed_ms > IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000:
+        logger.warning(
+            "import_log summary batch exceeded timeout threshold: "
+            "ids=%s elapsed_ms=%s threshold_ms=%s",
+            len(chunk),
+            elapsed_ms,
+            IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS * 1000,
+        )
+    return response.data or []
 
 
 def get_import_log_summaries_by_ids(import_log_ids: list[str]) -> dict[str, Record]:
@@ -2170,7 +2150,7 @@ def get_import_log_summaries_by_ids(import_log_ids: list[str]) -> dict[str, Reco
                 batch_index,
                 len(chunk),
                 chunk[:3],
-                exc,
+                summarize_exception_message(exc),
             )
             continue
 
