@@ -34,13 +34,13 @@ def _enrich_line(line: str, *, brand: str | None = None) -> dict:
 
 
 class TestReferenceBrandSafety:
-    def test_rolex_reference_under_ap_header_keeps_reference_and_clears_brand(self) -> None:
+    def test_rolex_reference_under_ap_header_keeps_inherited_brand_with_conflict(self) -> None:
         watch = _enrich_line("126334 blue jubilee new 14500 eur", brand=AP_HEADER)
 
         assert watch["reference"] == "126334"
-        assert watch["brand"] is None
-        assert watch["reference_needs_review"] is True
-        assert watch["reference_status"] == "Unknown"
+        assert watch["brand"] == AP_HEADER
+        assert watch.get("reference_brand_conflict")
+        assert not watch.get("reference_needs_review")
 
     def test_confident_ap_reference_under_ap_header_keeps_brand(self) -> None:
         watch = _enrich_line("15500ST blue full set 320k", brand=AP_HEADER)
@@ -49,11 +49,12 @@ class TestReferenceBrandSafety:
         assert watch["brand"] == AP_HEADER
         assert not watch.get("reference_needs_review")
 
-    def test_known_cross_brand_reference_still_resolves_correctly(self) -> None:
+    def test_known_cross_brand_reference_keeps_section_brand_with_conflict(self) -> None:
         watch = _enrich_line("5968A blue dial 120k", brand=AP_HEADER)
 
         assert watch["reference"] == "5968A"
-        assert watch["brand"] == "Patek Philippe"
+        assert watch["brand"] == AP_HEADER
+        assert watch.get("reference_brand_conflict")
         assert watch.get("reference_needs_review") is not True
 
     def test_reference_confidently_belongs_uses_saved_mapping(self) -> None:
@@ -69,7 +70,7 @@ class TestReferenceBrandSafety:
         assert reference_confidently_belongs_to_brand("126334", "Rolex") is True
         assert reference_confidently_belongs_to_brand("126334", AP_HEADER) is False
 
-    def test_apply_reference_brand_safety_clears_confident_cross_brand_only(self) -> None:
+    def test_apply_reference_brand_safety_keeps_inherited_brand_with_conflict(self) -> None:
         watch = apply_reference_brand_safety(
             {
                 "reference": "126334",
@@ -82,9 +83,10 @@ class TestReferenceBrandSafety:
             }
         )
 
-        assert watch["brand"] is None
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "126334"
-        assert watch["reference_needs_review"] is True
+        assert watch.get("reference_brand_conflict")
+        assert watch.get("reference_needs_review") is not True
 
     def test_unknown_ap_reference_under_ap_header_is_allowed(self) -> None:
         watch = _enrich_line("3661B blue dial 32000 usd", brand=AP_HEADER)
@@ -145,10 +147,11 @@ class TestReferenceBrandSafety:
         message = f"{AP_HEADER}\n3661B blue dial 32000 usd"
         summary = ingest_message(message, group_name="HK", dealer_whatsapp="+85291234567")
 
-        assert summary["status"] == "success"
+        assert summary["status"] == "warning"
         assert summary["parsed_watches"][0]["brand"] == AP_HEADER
         assert summary["parsed_watches"][0]["reference"] == "3661B"
         assert summary["new_offers"] == 1
+        assert "condition" in (summary.get("parser_quality") or {}).get("failed_fields", [])
         mock_insert_offer.assert_called_once()
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
@@ -187,23 +190,23 @@ class TestReferenceBrandSafety:
 
 
 class TestUnknownReferenceWorkbench:
-    def test_unknown_reference_is_primary_failure_reason(self) -> None:
+    def test_cross_brand_reference_conflict_is_detected(self) -> None:
         watch = _enrich_line("126334 blue jubilee new 14500 eur", brand=AP_HEADER)
         import_log = {
             "id": "log-1",
-            "status": "warning",
+            "status": "success",
             "watches_parsed": 1,
             "summary": {
-                "status": "warning",
+                "status": "success",
                 "watches_parsed": 1,
                 "parsed_watches": [watch],
                 "rows": [watch],
             },
         }
 
-        assert "unknown_reference" in detect_watch_failure_reasons(watch)
-        assert detect_primary_failure_reason(import_log) == "unknown_reference"
-        assert determine_primary_fix_action({"unknown_reference"}) == "unknown_reference"
+        assert watch.get("reference_brand_conflict")
+        assert "unknown_reference" not in detect_watch_failure_reasons(watch)
+        assert detect_primary_failure_reason(import_log) != "unknown_reference"
 
     @patch("parser_workbench.reprocess_import_log")
     @patch("database.reference_brand_mappings_supported", return_value=True)
@@ -243,12 +246,13 @@ class TestUnknownReferenceWorkbench:
         )
 
     @patch("watch_knowledge._load_reference_brand_mapping_index", return_value={"126334": "Rolex"})
-    def test_saved_mapping_applies_on_future_parse(self, _mock_index: MagicMock) -> None:
+    def test_saved_mapping_does_not_override_inherited_section_brand(self, _mock_index: MagicMock) -> None:
         invalidate_reference_brand_mapping_cache()
         watch = _enrich_line("126334 blue jubilee new 14500 eur", brand=AP_HEADER)
 
         assert watch["reference"] == "126334"
-        assert watch["brand"] == "Rolex"
+        assert watch["brand"] == AP_HEADER
+        assert watch.get("reference_brand_conflict")
         assert not watch.get("reference_needs_review")
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
@@ -281,15 +285,16 @@ class TestUnknownReferenceWorkbench:
         message = f"{AP_HEADER}\n126334 blue jubilee new 14500 eur"
         summary = ingest_message(message, group_name="HK", dealer_whatsapp="+85291234567")
 
-        assert summary["status"] == "warning"
+        assert summary["status"] == "success"
         assert summary["parsed_watches"][0]["reference"] == "126334"
-        assert summary["parsed_watches"][0]["brand"] is None
-        assert summary["new_offers"] == 0
+        assert summary["parsed_watches"][0]["brand"] == AP_HEADER
+        assert summary["parsed_watches"][0].get("reference_brand_conflict")
+        assert summary["new_offers"] == 1
+        mock_insert_offer.assert_called_once()
         import_log = {
             "id": "log-1",
             "status": summary["status"],
             "watches_parsed": summary["watches_parsed"],
             "summary": summary,
         }
-        assert is_parser_review_pending(import_log) is True
-        mock_insert_offer.assert_not_called()
+        assert is_parser_review_pending(import_log) is False

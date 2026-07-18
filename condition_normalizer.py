@@ -35,6 +35,7 @@ SECTION_HEADER_DECORATION_PATTERN = re.compile(
 )
 
 NEW_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bsell\s+new\b", re.I), "Sell new"),
     (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
     (re.compile(r"\b(?:bnib|unworn)\b", re.I), "Unworn"),
     (re.compile(r"\bnew\s+arrivals?\b", re.I), "New Arrivals"),
@@ -51,6 +52,7 @@ PRE_OWNED_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bpre[-\s]?owned\b", re.I), "Pre-Owned"),
     (re.compile(r"\bpreowned\b", re.I), "Preowned"),
     (re.compile(r"\bsecond\s+hand\b", re.I), "Second Hand"),
+    (re.compile(r"\bused\s+stock\b", re.I), "Used stock"),
     (
         re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+used(?:\s|$)", re.I),
         "Richard Mille Used",
@@ -92,6 +94,8 @@ NEW_ALIASES: dict[str, str] = {
 }
 
 PRE_OWNED_ALIASES: dict[str, str] = {
+    "good condition": PRE_OWNED_CONDITION,
+    "like new": PRE_OWNED_CONDITION,
     "mint": PRE_OWNED_CONDITION,
     "worn": PRE_OWNED_CONDITION,
     "pre owned": PRE_OWNED_CONDITION,
@@ -487,12 +491,49 @@ def _line_has_product_row_signals(line: str) -> bool:
     return False
 
 
+def _brand_banner_blocks_section_header(line: str) -> bool:
+    """Return True when a line is a dealer brand banner, not a condition section header."""
+    try:
+        from dealer_list_splitter import clean_dealer_list_line, detect_brand_header_line
+        from watch_parser import get_brand_pattern
+    except ImportError:  # pragma: no cover
+        return False
+
+    cleaned = clean_dealer_list_line(line)
+    brand = detect_brand_header_line(cleaned)
+    if not brand:
+        return False
+
+    remainder = get_brand_pattern().sub("", cleaned, count=1)
+    remainder = _clean_section_header_line(remainder)
+    if not remainder:
+        return True
+
+    return not _remainder_is_section_condition_only(remainder)
+
+
+def _remainder_is_section_condition_only(remainder: str) -> bool:
+    cleaned = _clean_section_header_line(remainder)
+    if not cleaned:
+        return False
+    for pattern, _ in NEW_SECTION_HEADER_PATTERNS:
+        if pattern.fullmatch(cleaned):
+            return True
+    for pattern, _ in PRE_OWNED_SECTION_HEADER_PATTERNS:
+        if pattern.fullmatch(cleaned):
+            return True
+    return False
+
+
 def detect_section_condition_header(line: str) -> tuple[str | None, str | None]:
     """Return normalized section condition and raw header text when a line is a section header."""
     if _line_is_watch_offer_line(line):
         return None, None
 
     if _line_has_product_row_signals(line):
+        return None, None
+
+    if _brand_banner_blocks_section_header(line):
         return None, None
 
     try:
@@ -522,59 +563,88 @@ def is_section_condition_header_line(line: str) -> bool:
     return detect_section_condition_header(line)[0] is not None
 
 
+def _message_lines_for_section_propagation(message: str) -> list[str]:
+    """Return message lines using the same splitting rules as dealer-list parsing."""
+    try:
+        from dealer_list_splitter import expand_dealer_list_raw_lines
+        from watch_parser import iter_content_lines
+    except ImportError:  # pragma: no cover
+        return [line.strip() for line in message.splitlines() if line.strip()]
+
+    expanded = expand_dealer_list_raw_lines(message)
+    if len(expanded) >= 2:
+        return expanded
+    content = iter_content_lines(message)
+    if content:
+        return content
+    return [line.strip() for line in message.splitlines() if line.strip()]
+
+
+def _line_is_brand_context_line(line: str) -> bool:
+    """Return True when a line only establishes brand context or decorative structure."""
+    try:
+        from dealer_list_splitter import clean_dealer_list_line, detect_brand_header_line
+    except ImportError:  # pragma: no cover
+        return False
+
+    cleaned = clean_dealer_list_line(line)
+    if not cleaned:
+        return True
+    if re.fullmatch(r"[-=_*#]+", cleaned):
+        return True
+    return detect_brand_header_line(cleaned) is not None
+
+
+def _resolve_section_condition_for_source_line(
+    source_line: str,
+    ordered_lines: list[str],
+) -> tuple[str | None, str | None]:
+    """Return the active section condition immediately before a parsed source line."""
+    if not source_line or not ordered_lines:
+        return None, None
+
+    source_parts = [part.strip() for part in str(source_line).splitlines() if part.strip()]
+    if not source_parts:
+        source_parts = [str(source_line).strip()]
+    source_keys = {
+        key
+        for part in source_parts
+        if (key := _line_section_lookup_key(part))
+    }
+    if not source_keys:
+        return None, None
+
+    active_condition: str | None = None
+    active_raw: str | None = None
+
+    for line in ordered_lines:
+        header_condition, header_raw = detect_section_condition_header(line)
+        if header_condition:
+            active_condition = header_condition
+            active_raw = header_raw
+            continue
+
+        if _line_is_brand_context_line(line):
+            continue
+
+        line_key = _line_section_lookup_key(line)
+        if line_key and line_key in source_keys:
+            return active_condition, active_raw
+
+    return None, None
+
+
 def _line_section_lookup_key(line: str) -> str:
     from dealer_list_splitter import clean_dealer_list_line
 
     return clean_dealer_list_line(line).casefold()
 
 
-def _active_section_for_source_line(
-    source_line: str,
-    *,
-    line_sections: dict[str, tuple[str | None, str | None]],
-    ordered_lines: list[str],
-) -> tuple[str | None, str | None]:
-    if not source_line:
-        return None, None
-
-    source_parts = [part.strip() for part in str(source_line).splitlines() if part.strip()]
-    if not source_parts:
-        source_parts = [str(source_line).strip()]
-
-    for part in source_parts:
-        key = _line_section_lookup_key(part)
-        if key in line_sections:
-            return line_sections[key]
-
-    source_key = _line_section_lookup_key(source_parts[0])
-    for line in ordered_lines:
-        key = _line_section_lookup_key(line)
-        if key == source_key:
-            return line_sections.get(key, (None, None))
-    return None, None
-
-
 def propagate_section_condition_context(message: str, watches: list[Record]) -> list[Record]:
     """Apply sequential section-header condition inheritance to parsed watches."""
-    from watch_parser import iter_content_lines
-
-    lines = iter_content_lines(message)
+    lines = _message_lines_for_section_propagation(message)
     if not lines or not watches:
         return watches
-
-    active_condition: str | None = None
-    active_raw: str | None = None
-    line_sections: dict[str, tuple[str | None, str | None]] = {}
-
-    for line in lines:
-        header_condition, header_raw = detect_section_condition_header(line)
-        if header_condition:
-            active_condition = header_condition
-            active_raw = header_raw
-            continue
-        if not _line_is_watch_offer_line(line):
-            continue
-        line_sections[_line_section_lookup_key(line)] = (active_condition, active_raw)
 
     updated: list[Record] = []
     for watch in watches:
@@ -583,10 +653,9 @@ def propagate_section_condition_context(message: str, watches: list[Record]) -> 
             updated.append(row)
             continue
 
-        section_condition, section_raw = _active_section_for_source_line(
+        section_condition, section_raw = _resolve_section_condition_for_source_line(
             str(row.get("source_line") or ""),
-            line_sections=line_sections,
-            ordered_lines=lines,
+            lines,
         )
         if section_condition is None:
             updated.append(row)

@@ -165,6 +165,7 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     enriched = apply_identification_to_watch(enriched)
 
     from brand_resolver import (
+        BRAND_SOURCE_EXPLICIT,
         apply_brand_resolution_to_watch,
         apply_reference_brand_safety,
         resolve_explicit_brand,
@@ -172,17 +173,20 @@ def enrich_parsed_watch(watch: dict[str, Any]) -> dict[str, Any]:
     )
 
     text = _watch_resolution_text(enriched)
-    source_line = str(enriched.get("source_line") or text)
+    source_line = str(enriched.get("source_line") or "")
     identification_brand = None
     identification = enriched.get("watch_identification")
     if isinstance(identification, dict):
         identification_brand = identification.get("brand")
 
+    explicit_brand = resolve_explicit_brand(source_line) if source_line.strip() else None
+    if not explicit_brand and enriched.get("brand_source") == BRAND_SOURCE_EXPLICIT:
+        explicit_brand = enriched.get("brand")
     resolution = resolve_watch_brand(
         reference=enriched.get("reference"),
         text=text,
         model=enriched.get("model"),
-        explicit_brand=resolve_explicit_brand(source_line),
+        explicit_brand=explicit_brand,
         inherited_brand=enriched.get("_inherited_brand"),
         identification_brand=identification_brand,
         brand_before_normalization=enriched.get("brand"),

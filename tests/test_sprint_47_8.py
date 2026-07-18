@@ -35,27 +35,26 @@ def _parse_full(message: str) -> list[dict]:
 
 
 class TestReferenceKnowledgeOverridesBrandContext:
-    def test_5968a_under_ap_header_is_patek_philippe(self) -> None:
+    def test_5968a_under_ap_header_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line("5968A")
 
-        assert watch["brand"] == "Patek Philippe"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "5968A"
-        assert watch.get("brand_context_conflict") == {
-            "inherited_brand": AP_HEADER,
-            "resolved_brand": "Patek Philippe",
-        }
+        assert watch.get("reference_brand_conflict")
 
-    def test_7010r_under_ap_header_is_patek_philippe(self) -> None:
+    def test_7010r_under_ap_header_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line("7010R")
 
-        assert watch["brand"] == "Patek Philippe"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "7010R"
+        assert watch.get("reference_brand_conflict")
 
-    def test_5500v_under_ap_header_is_vacheron_constantin(self) -> None:
+    def test_5500v_under_ap_header_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line("5500V")
 
-        assert watch["brand"] == "Vacheron Constantin"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "5500V"
+        assert watch.get("reference_brand_conflict")
 
     def test_ap_prefixed_refs_still_parse_as_audemars_piguet(self) -> None:
         watches = _parse_full(AP_MULTI_LINE_MESSAGE)

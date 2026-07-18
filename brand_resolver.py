@@ -22,12 +22,12 @@ BRAND_SOURCE_IDENTIFICATION = "identification"
 BRAND_SOURCE_REFERENCE_INFERENCE = "reference_inference"
 
 BRAND_RESOLUTION_ORDER: tuple[tuple[int, str], ...] = (
-    (1, BRAND_SOURCE_REFERENCE),
-    (2, BRAND_SOURCE_MODEL),
-    (3, BRAND_SOURCE_EXPLICIT),
-    (4, BRAND_SOURCE_INHERITED),
-    (5, BRAND_SOURCE_IDENTIFICATION),
-    (6, BRAND_SOURCE_REFERENCE_INFERENCE),
+    (1, BRAND_SOURCE_EXPLICIT),
+    (2, BRAND_SOURCE_INHERITED),
+    (3, BRAND_SOURCE_REFERENCE),
+    (4, BRAND_SOURCE_MODEL),
+    (5, BRAND_SOURCE_REFERENCE_INFERENCE),
+    (6, BRAND_SOURCE_IDENTIFICATION),
 )
 
 _PRIORITY_BY_SOURCE = {source: priority for priority, source in BRAND_RESOLUTION_ORDER}
@@ -440,6 +440,32 @@ def apply_reference_brand_safety(watch: Record) -> Record:
         return enriched
 
     if brand:
+        if source == BRAND_SOURCE_INHERITED:
+            if trusted_confident and trusted_brand and trusted_brand != brand:
+                record_reference_brand_conflict(
+                    reference=reference,
+                    trusted_brand=trusted_brand,
+                    rejected_brand=brand,
+                    source="inherited_section_brand",
+                )
+                enriched["reference_brand_conflict"] = {
+                    "reference": reference,
+                    "inherited_brand": brand,
+                    "inferred_reference_brand": trusted_brand,
+                    "conflict_source": BRAND_SOURCE_REFERENCE,
+                    **(conflict if isinstance(conflict, dict) else {}),
+                }
+            elif reference_confidently_conflicts_with_brand(reference, brand, conflict=conflict):
+                inferred = infer_brand_from_reference_heuristic(reference)
+                enriched["reference_brand_conflict"] = {
+                    "reference": reference,
+                    "inherited_brand": brand,
+                    "inferred_reference_brand": inferred,
+                    "conflict_source": BRAND_SOURCE_REFERENCE_INFERENCE,
+                    **(conflict if isinstance(conflict, dict) else {}),
+                }
+            return enriched
+
         if reference_confidently_belongs_to_brand(reference, brand):
             return enriched
         if trusted_confident and trusted_brand and trusted_brand != brand:
@@ -500,14 +526,47 @@ def apply_brand_resolution_to_watch(
         brand
         and inherited_brand
         and inherited_brand != brand
-        and resolution.source == BRAND_SOURCE_REFERENCE
+        and resolution.source in {
+            BRAND_SOURCE_REFERENCE,
+            BRAND_SOURCE_MODEL,
+            BRAND_SOURCE_REFERENCE_INFERENCE,
+        }
     ):
         enriched["brand_context_conflict"] = {
             "inherited_brand": inherited_brand,
             "resolved_brand": brand,
         }
-        enriched["reference_high_confidence"] = True
+        if resolution.source == BRAND_SOURCE_REFERENCE:
+            enriched["reference_high_confidence"] = True
     elif resolution.source == BRAND_SOURCE_REFERENCE:
         enriched["reference_high_confidence"] = True
+
+    if (
+        resolution.source == BRAND_SOURCE_INHERITED
+        and inherited_brand
+        and enriched.get("reference")
+    ):
+        reference_value = str(enriched.get("reference"))
+        authoritative = resolve_brand_from_reference(reference_value)
+        if authoritative and authoritative.brand != inherited_brand:
+            enriched.setdefault(
+                "reference_brand_conflict",
+                {
+                    "inherited_brand": inherited_brand,
+                    "inferred_reference_brand": authoritative.brand,
+                    "conflict_source": authoritative.source,
+                },
+            )
+        else:
+            heuristic = resolve_brand_from_reference_inference(reference_value)
+            if heuristic and heuristic.brand != inherited_brand:
+                enriched.setdefault(
+                    "reference_brand_conflict",
+                    {
+                        "inherited_brand": inherited_brand,
+                        "inferred_reference_brand": heuristic.brand,
+                        "conflict_source": heuristic.source,
+                    },
+                )
 
     return enriched

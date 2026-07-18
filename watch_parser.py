@@ -78,6 +78,12 @@ BRACELET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 WEAR_CONDITION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bgood\s+condition\b", re.I), "Good condition"),
+    (re.compile(r"\blike\s+new\b", re.I), "Like new"),
+    (re.compile(r"\(used\)", re.I), "Used"),
+    (re.compile(r"🆕\s*(?:\(?\s*)?(19|20)\d{2}(?:y)?\b", re.I), "New"),
+    (re.compile(r"\b(19|20)\d{2}(?:y)?\s*🆕", re.I), "New"),
+    (re.compile(r"\b(19|20)\d{2}y\s*🆕", re.I), "New"),
     (re.compile(r"\bfresh\s+new\s*/\s*unworn\b", re.I), "Fresh New / Unworn"),
     (re.compile(r"\bbrand\s+new\s*/\s*unworn\b", re.I), "Brand New / Unworn"),
     (re.compile(r"\bnew\s*/\s*unworn\b", re.I), "New / Unworn"),
@@ -147,7 +153,7 @@ OFFER_PATTERN = re.compile(
 HEADER_PATTERN = re.compile(r"^(?:fs|for\s+sale|stock|available|offers?)[\s:.-]*$", re.I)
 
 NEW_CARD_DATE_PATTERN = re.compile(
-    r"(?:\b[Nn]\s*|(?<=[a-z])[Nn])(\d{1,2})(?:/(\d{2}|\d{4}))?\b",
+    r"(?:\b[Nn]\s*|(?<=[a-z])[Nn])(\d{1,2})(?:[/\-](\d{2}|\d{4}))?\b",
 )
 GLUED_YEAR_N_NOTATION_PATTERN = re.compile(
     r"(?<![A-Za-z0-9/])((?:19|20)\d{2})[Nn](\d{1,2})(?![A-Za-z0-9/])",
@@ -159,7 +165,8 @@ GLUED_YEAR_WEAR_CONDITION_PATTERN = re.compile(
 NEW_CARD_DATE_MMYyyy_PATTERN = re.compile(r"\bnew\s+(\d{1,2})/(\d{4})\b", re.I)
 FROM_CARD_DATE_PATTERN = re.compile(r"\bfrom\s+(\d{1,2})-(\d{4})\b", re.I)
 CARD_MMYyyy_PATTERN = re.compile(r"\b(\d{1,2})/(\d{4})\b")
-USED_YEAR_PATTERN = re.compile(r"\bused\s+(\d{4})y\b", re.I)
+USED_YEAR_PATTERN = re.compile(r"\bused\s+((?:19|20)\d{4})y?\b", re.I)
+USED_AFTER_YEAR_PATTERN = re.compile(r"\b((?:19|20)\d{4})y?\s+used\b", re.I)
 YEAR_SUFFIX_PATTERN = re.compile(r"\b(19|20)\d{2}\s*y\b", re.I)
 STANDALONE_YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -470,6 +477,7 @@ NOTES_REMOVE_PATTERNS = [
     NEW_CARD_DATE_MMYyyy_PATTERN,
     CARD_MMYyyy_PATTERN,
     USED_YEAR_PATTERN,
+    USED_AFTER_YEAR_PATTERN,
     YEAR_SUFFIX_PATTERN,
     get_brand_pattern(),
     DIAL_ABBREV_PATTERN,
@@ -542,8 +550,12 @@ def parse_message(message: str) -> ParseResult:
     multi_brand_rows = split_multi_brand_dealer_list_message(text)
     if multi_brand_rows is not None and not (is_request and not OFFER_PATTERN.search(text)):
         watches: list[WatchDict] = []
-        for header_brand, line in multi_brand_rows:
-            if watch := parse_watch_line(line, current_brand=header_brand):
+        for header_brand, line, section_condition in multi_brand_rows:
+            if watch := parse_watch_line(
+                line,
+                current_brand=header_brand,
+                current_condition=section_condition,
+            ):
                 watch["source_line"] = line
                 watch["dealer_list_line"] = True
                 watch["dealer_list_brand_header"] = header_brand
@@ -578,6 +590,10 @@ def parse_message(message: str) -> ParseResult:
 
     for line, context_brand in blocks:
         if is_section_condition_header_line(line):
+            continue
+        from dealer_list_splitter import clean_dealer_list_line, is_dealer_list_brand_banner_line
+
+        if is_dealer_list_brand_banner_line(line):
             continue
         if watch := parse_watch_line(line, current_brand=context_brand):
             watch["source_line"] = line
@@ -778,9 +794,19 @@ def _looks_like_watch_line(line: str, *, brand_hint: str | None = None) -> bool:
     return False
 
 
-def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict | None:
+def parse_watch_line(
+    line: str,
+    current_brand: str | None = None,
+    *,
+    current_condition: str | None = None,
+) -> WatchDict | None:
     """Parse a single watch line into a structured watch dict."""
-    text = _normalize_parser_text(_strip_markdown(line.strip()))
+    from dealer_list_splitter import clean_dealer_list_line
+
+    canonical = clean_dealer_list_line(_strip_markdown(line.strip()))
+    if not canonical:
+        return None
+    text = _normalize_parser_text(canonical)
     if not text:
         return None
 
@@ -874,16 +900,30 @@ def parse_watch_line(line: str, current_brand: str | None = None) -> WatchDict |
                 watch["condition"] = used_condition
                 watch["production_year"] = production_year
                 remaining = USED_YEAR_PATTERN.sub(" ", remaining)
+                remaining = USED_AFTER_YEAR_PATTERN.sub(" ", remaining)
             else:
-                wear_condition, remaining = _extract_wear_condition(remaining)
-                watch["condition"] = wear_condition
-                watch["production_year"] = _extract_standalone_year(remaining, watch)
-                if watch["production_year"] is None:
-                    from fpj_model_knowledge import extract_year_glue_suffix
+                emoji_new, emoji_year, remaining = _extract_new_emoji_condition(text)
+                if emoji_new:
+                    watch["condition"] = emoji_new
+                    watch["production_year"] = emoji_year
+                else:
+                    wear_condition, remaining = _extract_wear_condition(remaining)
+                    watch["condition"] = wear_condition
+                    watch["production_year"] = _extract_standalone_year(remaining, watch)
+                    if watch["production_year"] is None:
+                        from fpj_model_knowledge import extract_year_glue_suffix
 
-                    year_suffix = extract_year_glue_suffix(text)
-                    if year_suffix is not None:
-                        watch["production_year"] = year_suffix
+                        year_suffix = extract_year_glue_suffix(text)
+                        if year_suffix is not None:
+                            watch["production_year"] = year_suffix
+
+    if not watch.get("condition") and current_condition:
+        from condition_normalizer import CONDITION_SOURCE_INHERITED_SECTION
+
+        watch["condition"] = current_condition
+        watch["condition_source"] = CONDITION_SOURCE_INHERITED_SECTION
+        watch["condition_explicit"] = True
+        watch["condition_confidence"] = "high"
 
     accessory_notes, remaining = _apply_accessories(watch, remaining)
 
@@ -1802,11 +1842,29 @@ def _extract_card_date(text: str) -> tuple[str | None, str | None, str | None]:
     return None, None, None
 
 
+def _extract_new_emoji_condition(text: str) -> tuple[str | None, int | None, str]:
+    """Detect 🆕 new-in-stock markers and capture the adjacent production year."""
+    match = re.search(r"🆕\s*(?:\(?\s*)?((?:19|20)\d{2})(?:y)?\b", text, re.I)
+    if match:
+        year = int(match.group(1))
+        remaining = text[: match.start()] + " " + text[match.end() :]
+        return "New", year, re.sub(r"\s+", " ", remaining).strip()
+    match = re.search(r"\b((?:19|20)\d{2})(?:y)?\s*🆕", text, re.I)
+    if match:
+        year = int(match.group(1))
+        remaining = text[: match.start()] + " " + text[match.end() :]
+        return "New", year, re.sub(r"\s+", " ", remaining).strip()
+    return None, None, text
+
+
 def _extract_used_year(text: str) -> tuple[str | None, int | None]:
     match = USED_YEAR_PATTERN.search(text)
-    if not match:
-        return None, None
-    return "Used", int(match.group(1))
+    if match:
+        return "Used", int(match.group(1))
+    match = USED_AFTER_YEAR_PATTERN.search(text)
+    if match:
+        return "Used", int(match.group(1))
+    return None, None
 
 
 

@@ -70,7 +70,7 @@ class TestVacheronReferenceFamilies:
 
         assert watch["reference"] == expected_reference
         assert watch["brand"] == VACHERON
-        assert watch.get("brand_source") == BRAND_SOURCE_REFERENCE
+        assert watch.get("brand_source") in {BRAND_SOURCE_REFERENCE, "explicit"}
 
     def test_legitimate_ap_reference_still_resolves_to_ap(self) -> None:
         watch = _enrich_line("15500ST blue full set 320k", brand=AUDEMARS)
@@ -92,11 +92,12 @@ class TestVacheronReferenceFamilies:
 
 
 class TestVacheronConflictResolution:
-    def test_exact_vacheron_mapping_overrides_ap_header(self) -> None:
+    def test_exact_vacheron_mapping_keeps_ap_header_with_conflict(self) -> None:
         watch = _enrich_line("4300V 100,000 USD", brand=AUDEMARS)
 
         assert watch["reference"] == "4300V"
-        assert watch["brand"] == VACHERON
+        assert watch["brand"] == AUDEMARS
+        assert watch.get("reference_brand_conflict")
 
     def test_explicit_vacheron_text_beats_ap_generic_pattern(self) -> None:
         watch = _enrich_line("Vacheron Constantin 7920V 410k usd", brand=AUDEMARS)
@@ -104,7 +105,7 @@ class TestVacheronConflictResolution:
         assert watch["brand"] == VACHERON
         assert watch["reference"] == "7920V"
 
-    def test_trusted_mapping_overrides_ap_ai_identification(self) -> None:
+    def test_trusted_mapping_keeps_inherited_ap_with_conflict(self) -> None:
         resolution = resolve_watch_brand(
             reference="4520V",
             text="4520V 420k",
@@ -113,10 +114,10 @@ class TestVacheronConflictResolution:
             brand_before_normalization=AUDEMARS,
         )
 
-        assert resolution.brand == VACHERON
-        assert resolution.source == BRAND_SOURCE_REFERENCE
+        assert resolution.brand == AUDEMARS
+        assert resolution.source == "inherited"
 
-    def test_apply_reference_brand_safety_prefers_trusted_vacheron_mapping(self) -> None:
+    def test_apply_reference_brand_safety_keeps_inherited_ap_with_conflict(self) -> None:
         watch = apply_reference_brand_safety(
             {
                 "reference": "7900V",
@@ -125,7 +126,8 @@ class TestVacheronConflictResolution:
             }
         )
 
-        assert watch["brand"] == VACHERON
+        assert watch["brand"] == AUDEMARS
+        assert watch.get("reference_brand_conflict")
         assert watch.get("reference_needs_review") is not True
 
     def test_infer_heuristic_never_returns_ap_for_vacheron_v_suffix(self) -> None:

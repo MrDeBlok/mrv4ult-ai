@@ -8,11 +8,17 @@ from typing import Any
 Record = dict[str, Any]
 
 DECORATION_PATTERN = re.compile(
-    r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\uFE0F]+|[\u2600-\u27BF]|✅|✔️|❤️|♥️",
+    r"[\U0001F300-\U0001F9FF\U00002700-\U000027BF\uFE0F]+|[\u2600-\u27BF]|✅|✔️|❤️|♥️|📌|🛫|‼️|‼",
 )
 FULLSET_PATTERN = re.compile(r"\bfull\s*set\b", re.I)
 WATCH_ROW_SEPARATOR = re.compile(
-    r"[\u231A\u23F1\u23F2]|\u231A\uFE0F|\U0001F48E|\U0001F48F|\U0001F4B0|\U0001F4B5"
+    r"[\u231A\u23F1\u23F2][\uFE0F]?|"
+    r"[\U0001F48E\U0001F48F\U0001F4B0\U0001F4B5\U0001F4CC\U0001F6EB][\uFE0F]?",
+)
+WATCH_ROW_LEADING_PATTERN = re.compile(
+    r"^[\s\uFE0F\u200D]*"
+    r"(?:[\u231A\u23F1\u23F2\U0001F48E\U0001F48F\U0001F4B0\U0001F4B5\U0001F4CC\U0001F6EB]"
+    r"[\uFE0F\u200D\s]*)+",
 )
 BULLET_ROW_PREFIX = re.compile(r"^[-*•▪▫]\s+")
 
@@ -21,7 +27,11 @@ def clean_dealer_list_line(line: str) -> str:
     """Remove decorative emoji/checkmarks and normalize whitespace."""
     from watch_parser import _normalize_parser_text
 
-    cleaned = DECORATION_PATTERN.sub(" ", line)
+    cleaned = line.strip()
+    cleaned = WATCH_ROW_LEADING_PATTERN.sub("", cleaned)
+    cleaned = DECORATION_PATTERN.sub(" ", cleaned)
+    cleaned = WATCH_ROW_SEPARATOR.sub(" ", cleaned)
+    cleaned = re.sub(r"^[\uFE0F\s]+", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return _normalize_parser_text(cleaned)
 
@@ -93,6 +103,57 @@ def is_dealer_list_offer_line(line: str) -> bool:
     return price is not None
 
 
+def _brand_leads_dealer_line(line: str) -> bool:
+    """Return True when the first brand token opens the line (dealer banner)."""
+    from brand_registry import lookup_brand
+    from watch_parser import get_brand_pattern
+
+    cleaned = clean_dealer_list_line(line)
+    if not cleaned:
+        return False
+
+    alias = resolve_brand_header_alias(cleaned)
+    if alias:
+        alias_pattern = re.compile(
+            rf"^(?:[^\w]*)(?:{re.escape(cleaned.split()[0])})\b",
+            re.I,
+        )
+        if alias_pattern.match(cleaned):
+            return True
+
+    leading = re.sub(r"^[^\w]+", "", cleaned)
+    match = get_brand_pattern().search(leading)
+    if not match or match.start() != 0:
+        return False
+    return lookup_brand(match.group(1)) is not None
+
+
+def is_dealer_list_brand_banner_line(line: str) -> bool:
+    """Return True for dealer inventory brand banners, not conversational brand mentions."""
+    from watch_parser import _extract_brand, _is_brand_only_line, get_brand_pattern
+
+    cleaned = clean_dealer_list_line(line)
+    if not cleaned:
+        return False
+    if _is_brand_only_line(line):
+        return True
+    if not _brand_leads_dealer_line(line):
+        return False
+    if not detect_brand_header_line(cleaned):
+        return False
+    if is_dealer_list_offer_line(cleaned):
+        return False
+
+    brand = _extract_brand(cleaned)
+    if not brand:
+        return False
+    remainder = get_brand_pattern().sub("", cleaned, count=1)
+    remainder = re.sub(r"\s+", " ", remainder).strip(" .:-")
+    if not remainder:
+        return True
+    return bool(re.search(r"\b(used|new|pre[-\s]?owned|preowned)\b", remainder, re.I))
+
+
 def detect_brand_header_line(line: str, *, header_rules: list[Record] | None = None) -> str | None:
     """Return a brand name when the line is a header without offer details."""
     from watch_parser import _extract_brand, _extract_price, _extract_reference
@@ -135,20 +196,32 @@ def split_multi_brand_dealer_list_message(
         return None
 
     active_brand: str | None = None
-    offer_rows: list[tuple[str | None, str]] = []
+    active_condition: str | None = None
+    offer_rows: list[tuple[str | None, str, str | None]] = []
 
     for raw_line in raw_lines:
         cleaned = clean_dealer_list_line(raw_line)
         if not cleaned:
             continue
 
+        from condition_normalizer import detect_section_condition_header, is_section_condition_header_line
+
         header_brand = detect_brand_header_line(cleaned, header_rules=header_rules)
         if header_brand:
             active_brand = header_brand
+            banner_condition, _ = detect_section_condition_header(cleaned)
+            if banner_condition:
+                active_condition = banner_condition
+            continue
+
+        if is_section_condition_header_line(cleaned):
+            section_condition, _ = detect_section_condition_header(cleaned)
+            if section_condition:
+                active_condition = section_condition
             continue
 
         if is_dealer_list_offer_line(cleaned):
-            offer_rows.append((active_brand, raw_line))
+            offer_rows.append((active_brand, cleaned, active_condition))
 
     if len(offer_rows) < 2:
         return None
@@ -161,9 +234,9 @@ def split_dealer_list_message(message: str) -> tuple[str | None, list[str]] | No
     if offer_rows is None:
         return None
 
-    brands = {brand for brand, _ in offer_rows if brand}
+    brands = {brand for brand, _, _ in offer_rows if brand}
     if len(brands) != 1:
         return None
 
     brand = next(iter(brands)) if brands else None
-    return brand, [line for _, line in offer_rows]
+    return brand, [line for _, line, _ in offer_rows]

@@ -8,6 +8,7 @@ import pytest
 
 from brand_resolver import (
     BRAND_RESOLUTION_ORDER,
+    BRAND_SOURCE_INHERITED,
     BRAND_SOURCE_MODEL,
     BRAND_SOURCE_REFERENCE,
     apply_brand_resolution_to_watch,
@@ -54,16 +55,13 @@ class TestDaytona16520BrandResolution:
         assert watch["brand"] == "Rolex"
         assert watch["model"] == "Cosmograph Daytona"
 
-    def test_ap_header_with_daytona_16520_still_resolves_to_rolex(self) -> None:
+    def test_ap_header_with_daytona_16520_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line(DAYTONA_MESSAGE, current_brand=AP_HEADER)
 
-        assert watch["brand"] == "Rolex"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "16520"
         assert watch["model"] == "Cosmograph Daytona"
-        assert watch.get("brand_context_conflict") == {
-            "inherited_brand": AP_HEADER,
-            "resolved_brand": "Rolex",
-        }
+        assert watch.get("reference_brand_conflict")
 
     def test_brand_resolution_trace_logs_daytona_message(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.INFO, logger="brand_resolver")
@@ -85,17 +83,19 @@ class TestBrandResolutionPriorityRegression:
         assert watch["brand"] == "Audemars Piguet"
         assert watch["reference"] == "26239BC"
 
-    def test_5968a_under_ap_header_is_patek_philippe(self) -> None:
+    def test_5968a_under_ap_header_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line("5968A 100,000 USD", current_brand=AP_HEADER)
 
-        assert watch["brand"] == "Patek Philippe"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "5968A"
+        assert watch.get("reference_brand_conflict")
 
-    def test_5500v_under_ap_header_is_vacheron_constantin(self) -> None:
+    def test_5500v_under_ap_header_keeps_ap_with_conflict(self) -> None:
         watch = _parse_line("5500V 100,000 USD", current_brand=AP_HEADER)
 
-        assert watch["brand"] == "Vacheron Constantin"
+        assert watch["brand"] == AP_HEADER
         assert watch["reference"] == "5500V"
+        assert watch.get("reference_brand_conflict")
 
     def test_ap_multi_line_message_still_parses_three_ap_offers(self) -> None:
         message = (
@@ -112,7 +112,7 @@ class TestBrandResolutionPriorityRegression:
 
 
 class TestCanonicalBrandResolutionOrder:
-    def test_lower_priority_source_cannot_override_reference(self) -> None:
+    def test_inherited_brand_wins_over_authoritative_reference(self) -> None:
         resolution = resolve_watch_brand(
             reference="16520",
             text=DAYTONA_MESSAGE,
@@ -123,18 +123,18 @@ class TestCanonicalBrandResolutionOrder:
             brand_before_normalization=AP_HEADER,
         )
 
-        assert resolution.brand == "Rolex"
-        assert resolution.source == BRAND_SOURCE_REFERENCE
-        assert resolution.priority == 1
+        assert resolution.brand == AP_HEADER
+        assert resolution.source == BRAND_SOURCE_INHERITED
+        assert resolution.priority == 2
 
     def test_resolution_order_is_documented(self) -> None:
         assert [source for _priority, source in BRAND_RESOLUTION_ORDER] == [
-            "reference",
-            "model",
             "explicit",
             "inherited",
-            "identification",
+            "reference",
+            "model",
             "reference_inference",
+            "identification",
         ]
 
     def test_apply_brand_resolution_preserves_highest_priority_brand(self) -> None:
@@ -152,5 +152,5 @@ class TestCanonicalBrandResolutionOrder:
             inherited_brand=AP_HEADER,
         )
 
-        assert resolved["brand"] == "Rolex"
-        assert resolved["brand_source"] == BRAND_SOURCE_REFERENCE
+        assert resolved["brand"] == AP_HEADER
+        assert resolved["brand_source"] == BRAND_SOURCE_INHERITED
