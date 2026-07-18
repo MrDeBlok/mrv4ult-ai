@@ -50,6 +50,11 @@ from import_classification import (
     sold_order_has_actionable_identity,
     split_offer_watches,
 )
+from parser_quality import (
+    ParserQualityReport,
+    compute_parser_quality,
+    parser_quality_status_reason,
+)
 from ingest_lifecycle import (
     bind_import_log_id,
     end_import_trace,
@@ -869,6 +874,7 @@ def ingest_message(
             message_type=parsed.get("message_type"),
         )
 
+    quality_report = compute_parser_quality(status_watches)
     import_status, status_reason = _import_status(
         summary,
         parse_status,
@@ -878,8 +884,10 @@ def ingest_message(
         sold_order_message=sold_order_message,
         sold_order_needs_review=sold_order_message
         and not sold_order_has_actionable_identity(parsed_watches),
+        parser_quality=quality_report,
     )
     summary["status_reason"] = status_reason
+    summary["parser_quality"] = quality_report.to_dict()
     summary["parsed_watches"] = list(parsed_watches)
     summary["offer_watches"] = list(offer_watches)
     summary["message_type"] = parsed["message_type"]
@@ -1369,6 +1377,7 @@ def _import_status(
     bulk_mode: bool = False,
     sold_order_message: bool = False,
     sold_order_needs_review: bool = False,
+    parser_quality: ParserQualityReport | None = None,
 ) -> tuple[str, str]:
     if parse_status == "failed":
         return "error", "Technical failure during parsing."
@@ -1442,6 +1451,14 @@ def _import_status(
             return "success", reason
         reason = "Important fields are missing — " + "; ".join(watches_needing_review)
         return "warning", reason
+
+    quality_report = parser_quality or compute_parser_quality(watches)
+    if quality_report.total_offers > 0 and not quality_report.meets_thresholds:
+        quality_reason = parser_quality_status_reason(quality_report)
+        duplicate_count = summary["duplicate_offers"]
+        if duplicate_count:
+            quality_reason += f" {duplicate_count} duplicate offer(s) were skipped."
+        return "warning", quality_reason
 
     duplicate_count = summary["duplicate_offers"]
     if duplicate_count:

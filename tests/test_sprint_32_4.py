@@ -498,8 +498,9 @@ class TestRealOfferClassification:
             dealer_whatsapp="+85291234567",
         )
 
-        assert summary["status"] == "success"
+        assert summary["status"] == "warning"
         assert summary["new_offers"] == 1
+        assert summary.get("parser_quality", {}).get("failed_fields") == ["condition"]
         mock_insert_offer.assert_called_once()
 
 

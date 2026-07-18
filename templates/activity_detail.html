@@ -67,6 +67,33 @@
             <dt class="col-sm-4 col-md-3">Status reason</dt>
             <dd class="col-sm-8 col-md-9">{{ detail.status_reason }}</dd>
         </dl>
+        {% if detail.parser_quality and detail.parser_quality.total_offers %}
+        <hr class="my-3">
+        <h3 class="h6 mb-3">Parser quality</h3>
+        <dl class="row mb-0 import-stats">
+            <dt class="col-sm-4 col-md-3">Offers</dt>
+            <dd class="col-sm-8 col-md-9">{{ detail.parser_quality.total_offers }}</dd>
+
+            {% for field in detail.parser_quality.fields %}
+            <dt class="col-sm-4 col-md-3">{{ field.label }}</dt>
+            <dd class="col-sm-8 col-md-9">{{ field.display }}</dd>
+            {% endfor %}
+
+            <dt class="col-sm-4 col-md-3">Parser quality</dt>
+            <dd class="col-sm-8 col-md-9">{{ detail.parser_quality.overall_quality_pct }}%</dd>
+
+            {% if detail.parser_quality.issue_summary %}
+            <dt class="col-sm-4 col-md-3">Parser issues</dt>
+            <dd class="col-sm-8 col-md-9">
+                <ul class="mb-0 ps-3">
+                    {% for issue in detail.parser_quality.issue_summary %}
+                    <li>{{ issue }}</li>
+                    {% endfor %}
+                </ul>
+            </dd>
+            {% endif %}
+        </dl>
+        {% endif %}
     </div>
 </section>
 

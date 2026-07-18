@@ -63,6 +63,12 @@ def import_status_reason(import_log: dict[str, Any]) -> str:
     if status == "no_watch_detected":
         return "No watch offer was detected in this message."
     if status == "warning":
+        from parser_quality import resolve_import_parser_quality, parser_quality_status_reason
+
+        quality_report = resolve_import_parser_quality(summary)
+        quality_reason = parser_quality_status_reason(quality_report)
+        if quality_reason:
+            return quality_reason
         return "Parsed watches are missing important fields such as brand, reference, or price."
     if duplicate_offers:
         return (
