@@ -106,13 +106,15 @@ def find_matching_learning_rule(
 def detect_condition_training_term(message_text: str, watch: Record | None = None) -> str | None:
     """Return the first unknown condition training term found in message or watch."""
     haystacks: list[str] = []
-    if message_text.strip():
-        haystacks.append(message_text)
     if watch:
-        for key in ("condition", "raw_condition", "source_line", "notes"):
+        for key in ("source_line", "condition", "raw_condition", "notes"):
             value = watch.get(key)
             if value:
                 haystacks.append(str(value))
+        if not haystacks and message_text.strip():
+            haystacks.append(message_text)
+    elif message_text.strip():
+        haystacks.append(message_text)
 
     for text in haystacks:
         explicit_new = _has_explicit_new_condition_phrase(text)

@@ -24,6 +24,10 @@ from tests.conftest import ADMIN_USER, TRADER_ONE
 
 pytestmark = pytest.mark.no_auto_login
 
+PP_BRAND_NEW_HEADER_MESSAGE = """PP brand new Hong Kong ready stock list
+
+● 5160/500R new 2026 HKD 1.2M"""
+
 
 def _fresh_watch() -> dict:
     return {
@@ -107,6 +111,20 @@ class TestConditionTraining:
         assert detect_condition_training_term(
             "Tudor Royal M2836C1A3-0002 Fresh New / Unworn"
         ) is None
+
+    def test_ready_stock_header_does_not_trigger_training_on_parsed_offer_line(self) -> None:
+        watch = {
+            "brand": "Patek Philippe",
+            "reference": "5160/500R",
+            "condition": "New",
+            "raw_condition": "new 2026",
+            "source_line": "● 5160/500R new 2026 HKD 1.2M",
+            "condition_source": "explicit",
+            "condition_explicit": True,
+        }
+        assert detect_condition_training_term(PP_BRAND_NEW_HEADER_MESSAGE, watch) is None
+        assert flag_condition_training(watch, message_text=PP_BRAND_NEW_HEADER_MESSAGE, rules=[]) is False
+        assert watch["condition"] == "New"
 
     def test_fresh_new_unworn_does_not_trigger_fresh_training(self) -> None:
         watch = {

@@ -92,7 +92,7 @@ class TestMultiBrandDealerListSplit:
 
         assert rows is not None
         assert len(rows) == 3
-        assert all(brand == "Rolex" for brand, _ in rows)
+        assert all(brand == "Rolex" for brand, _, _ in rows)
 
 
 class TestDealerListTrainingStats:
