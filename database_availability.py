@@ -176,6 +176,20 @@ def summarize_exception_message(exc: BaseException, *, max_length: int = 240) ->
     return message
 
 
+def log_temporary_database_unavailable_message(
+    action: str,
+    *,
+    status_code: int | None = None,
+) -> None:
+    """Log a concise availability message without upstream HTML or tracebacks."""
+    status_label = status_code if status_code is not None else "unknown"
+    logger.warning(
+        "Database temporarily unavailable (HTTP %s). %s",
+        status_label,
+        action,
+    )
+
+
 def log_database_availability_error(
     exc: BaseException,
     *,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -9,6 +10,8 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from permissions import is_active_user, is_admin
+
+logger = logging.getLogger(__name__)
 
 Record = dict[str, Any]
 
@@ -41,12 +44,21 @@ def get_current_user(request: Request) -> Record | None:
     if not user_id:
         return None
 
-    from database import get_user_by_id, users_table_supported
+    from database import DatabaseUnavailableError, get_user_by_id, users_table_supported
+    from database_availability import log_temporary_database_unavailable_message
 
     if not users_table_supported():
         return None
 
-    user = get_user_by_id(str(user_id))
+    try:
+        user = get_user_by_id(str(user_id))
+    except DatabaseUnavailableError as exc:
+        log_temporary_database_unavailable_message(
+            "Rendering anonymous layout.",
+            status_code=exc.status_code,
+        )
+        return None
+
     if user is None or not is_active_user(user):
         request.session.pop(SESSION_USER_ID_KEY, None)
     return user

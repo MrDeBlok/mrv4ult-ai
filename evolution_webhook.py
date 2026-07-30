@@ -303,9 +303,28 @@ def handle_evolution_webhook(payload: dict[str, Any]) -> dict[str, Any]:
 
     whatsapp_message_id = extract_whatsapp_message_id(data)
     if whatsapp_message_id:
-        from database import find_message_by_whatsapp_id
+        from database import DatabaseUnavailableError, find_message_by_whatsapp_id
+        from database_availability import log_temporary_database_unavailable_message
 
-        if find_message_by_whatsapp_id(whatsapp_message_id):
+        try:
+            existing_message = find_message_by_whatsapp_id(whatsapp_message_id)
+        except DatabaseUnavailableError as exc:
+            reason = "database temporarily unavailable"
+            log_temporary_database_unavailable_message(
+                "Skipping webhook processing.",
+                status_code=exc.status_code,
+            )
+            log_webhook_trace(trace, decision="skipped", skip_reason=reason)
+            return _return_webhook_result(
+                trace,
+                {
+                    "status": "database_unavailable",
+                    "reason": reason,
+                    "whatsapp_message_id": whatsapp_message_id,
+                },
+            )
+
+        if existing_message:
             reason = "duplicate whatsapp_message_id"
             trace["filters"]["duplicate_message_filter"] = True
             log_webhook_trace(trace, decision="skipped", skip_reason=reason)

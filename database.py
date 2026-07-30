@@ -539,15 +539,19 @@ def find_message_by_whatsapp_id(whatsapp_message_id: str) -> Record | None:
     cleaned = whatsapp_message_id.strip()
     if not cleaned:
         return None
-    response = (
-        get_client()
-        .table("messages")
-        .select("*")
-        .eq("whatsapp_message_id", cleaned)
-        .order("received_at", desc=True)
-        .limit(1)
-        .execute()
-    )
+
+    def _read():
+        return (
+            get_client()
+            .table("messages")
+            .select("*")
+            .eq("whatsapp_message_id", cleaned)
+            .order("received_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+    response = execute_postgrest_read("messages.find_by_whatsapp_id", _read)
     if not response.data:
         return None
     return response.data[0]
@@ -2626,14 +2630,18 @@ def get_user_by_id(user_id: str) -> Record | None:
     """Return one dashboard user by id."""
     if not users_table_supported():
         return None
-    response = (
-        get_client()
-        .table("users")
-        .select("id, name, email, role, status, created_at, last_login_at")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-    )
+
+    def _read():
+        return (
+            get_client()
+            .table("users")
+            .select("id, name, email, role, status, created_at, last_login_at")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+
+    response = execute_postgrest_read("users.get_by_id", _read)
     if not response.data:
         return None
     return _normalize_user_record(response.data[0])

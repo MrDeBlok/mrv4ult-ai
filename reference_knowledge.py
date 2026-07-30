@@ -22,6 +22,10 @@ VACHERON_OVERSEAS_V_SUFFIX_PATTERN = re.compile(
     r"^\d{4}V(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?$",
     re.I,
 )
+VACHERON_OVERSEAS_F_SUFFIX_PATTERN = re.compile(
+    r"^\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?$",
+    re.I,
+)
 
 
 @dataclass
@@ -55,12 +59,27 @@ def normalize_reference_for_lookup(reference: str | None) -> str | None:
     return cleaned or None
 
 
-def is_vacheron_overseas_reference(reference: str | None) -> bool:
+def is_vacheron_overseas_v_suffix_reference(reference: str | None) -> bool:
     """Return True for the high-confidence Vacheron Overseas V-suffix family."""
     token = normalize_reference_for_lookup(reference)
     if not token:
         return False
     return bool(VACHERON_OVERSEAS_V_SUFFIX_PATTERN.fullmatch(token))
+
+
+def is_vacheron_overseas_f_suffix_reference(reference: str | None) -> bool:
+    """Return True for the high-confidence Vacheron Overseas F-suffix family."""
+    token = normalize_reference_for_lookup(reference)
+    if not token:
+        return False
+    return bool(VACHERON_OVERSEAS_F_SUFFIX_PATTERN.fullmatch(token))
+
+
+def is_vacheron_overseas_reference(reference: str | None) -> bool:
+    """Return True for high-confidence Vacheron Overseas V- or F-suffix families."""
+    return is_vacheron_overseas_v_suffix_reference(reference) or is_vacheron_overseas_f_suffix_reference(
+        reference
+    )
 
 
 def record_exact_mapping_hit(reference: str, brand: str) -> None:
@@ -178,11 +197,18 @@ def resolve_authoritative_reference_brand(reference: str | None) -> tuple[str | 
         trusted = confidence in {"high", "verified", "authority"}
         return str(entry["brand"]).strip(), trusted
 
-    if is_vacheron_overseas_reference(reference):
+    if is_vacheron_overseas_v_suffix_reference(reference):
         record_family_pattern_hit(
             str(reference),
             VACHERON_CONSTANTIN,
             family="overseas_v_suffix",
+        )
+        return VACHERON_CONSTANTIN, True
+    if is_vacheron_overseas_f_suffix_reference(reference):
+        record_family_pattern_hit(
+            str(reference),
+            VACHERON_CONSTANTIN,
+            family="overseas_f_suffix",
         )
         return VACHERON_CONSTANTIN, True
     return None, False
