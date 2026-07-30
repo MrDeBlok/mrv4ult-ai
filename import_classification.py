@@ -192,6 +192,19 @@ def split_offer_watches(text: str, parsed: Record, watches: list[Record]) -> tup
         return [], "request_intent"
 
     if not watches:
+        from offer_line_classifier import PRICE_LINE, classify_offer_line, has_watch_identity_evidence
+        from watch_parser import _extract_price
+
+        content_lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip()
+        ]
+        if content_lines and all(classify_offer_line(line) == PRICE_LINE for line in content_lines):
+            return [], "noise"
+        if _extract_price(text)[0] is not None and content_lines:
+            if not any(has_watch_identity_evidence(line) for line in content_lines):
+                return [], "noise"
         return [], None
 
     substantive_watches = [watch for watch in watches if watch_has_substantive_identity(watch)]

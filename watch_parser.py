@@ -238,8 +238,11 @@ def _normalize_glued_amount_currency_symbols(text: str) -> str:
 
 def _normalize_parser_text(text: str) -> str:
     """Apply intent, brand, and currency glue normalization before parsing."""
+    from offer_line_classifier import normalize_glued_year_metadata
+
     normalized = _normalize_glued_intent_prefixes(text)
     normalized = _normalize_glued_brand_prefixes(normalized)
+    normalized = normalize_glued_year_metadata(normalized)
     normalized = _normalize_glued_currency_amounts(normalized)
     return _normalize_glued_amount_currency_symbols(normalized)
 
@@ -392,6 +395,13 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (
         re.compile(
             rf"\b([\d.,]+)\s*(k|K|m|M)?\s*({CURRENCY_CODE_PATTERN})\b",
+            re.I,
+        ),
+        None,
+    ),
+    (
+        re.compile(
+            rf"\b({CURRENCY_CODE_PATTERN}):([\d.,]+)\s*(k|K|m|M)?\b",
             re.I,
         ),
         None,
@@ -635,31 +645,42 @@ def _line_establishes_brand_context(line: str, *, brand_hint: str | None = None)
 
 def _group_offer_lines(lines: list[str]) -> tuple[list[tuple[str, str | None]], str | None]:
     """Merge continuation lines into single offer blocks with brand context."""
+    from offer_line_classifier import (
+        WATCH_IDENTITY_LINE,
+        classify_offer_line,
+        line_attaches_to_previous_watch,
+        line_starts_new_watch,
+        normalize_glued_year_metadata,
+    )
+
     blocks: list[tuple[str, str | None]] = []
     current_brand: str | None = None
 
-    for line in lines:
+    for raw_line in lines:
+        line = normalize_glued_year_metadata(raw_line)
         if brand_only := _is_brand_only_line(line):
             current_brand = brand_only
             continue
 
         context_brand = current_brand
+        line_type = classify_offer_line(line, brand_hint=current_brand)
 
         if not blocks:
-            if _line_begins_offer(line, brand_hint=current_brand):
+            if line_type == WATCH_IDENTITY_LINE:
                 blocks.append((line, context_brand))
                 if established := _line_establishes_brand_context(line, brand_hint=current_brand):
                     current_brand = established
             continue
 
         previous_line, _ = blocks[-1]
-        if _starts_new_watch_block(line, previous_line, brand_hint=current_brand):
+        if line_starts_new_watch(line, previous_line, brand_hint=current_brand):
             blocks.append((line, context_brand))
-        elif _is_continuation_line(line, previous_line, brand_hint=current_brand):
+        elif line_attaches_to_previous_watch(line, brand_hint=current_brand) or (
+            line_type == WATCH_IDENTITY_LINE
+            and not line_starts_new_watch(line, previous_line, brand_hint=current_brand)
+        ):
             merged = f"{previous_line}\n{line}"
             blocks[-1] = (merged, blocks[-1][1])
-        elif _looks_like_watch_line(line, brand_hint=current_brand):
-            blocks.append((line, context_brand))
 
         if established := _line_establishes_brand_context(line, brand_hint=current_brand):
             current_brand = established
@@ -668,11 +689,9 @@ def _group_offer_lines(lines: list[str]) -> tuple[list[tuple[str, str | None]], 
 
 
 def _line_begins_offer(line: str, *, brand_hint: str | None = None) -> bool:
-    if _extract_reference(line, brand_hint=brand_hint)[0]:
-        return True
-    if _extract_brand(line) and len(line.split()) >= 2:
-        return True
-    return _looks_like_watch_line(line, brand_hint=brand_hint)
+    from offer_line_classifier import has_watch_identity_evidence
+
+    return has_watch_identity_evidence(line, brand_hint=brand_hint)
 
 
 def _starts_new_watch_block(
@@ -1552,7 +1571,7 @@ def _extract_als_brand(text: str) -> str | None:
     if not re.search(r"\bals\b", text):
         return None
 
-    if _extract_reference(text)[0]:
+    if _extract_reference_for_identity(text)[0]:
         return als_brand
     if ALS_CONTEXT_TERMS.search(text):
         return als_brand
@@ -1575,6 +1594,14 @@ def _is_dotted_watch_reference_token(token: str) -> bool:
 def _mask_price_spans(text: str) -> str:
     """Remove price segments so numeric references are not confused with prices."""
     masked = text
+    colon_price_pattern = re.compile(
+        rf"\b({CURRENCY_CODE_PATTERN}):([\d.,]+)\s*(k|K|m|M)?\b",
+        re.I,
+    )
+    masked = colon_price_pattern.sub(
+        lambda match: " " * len(match.group(0)),
+        masked,
+    )
     for pattern, _ in PRICE_WITH_CURRENCY_PATTERNS[:-1]:
         masked = pattern.sub(
             lambda match, _pattern=pattern: (
@@ -1587,8 +1614,12 @@ def _mask_price_spans(text: str) -> str:
     return masked
 
 
-def _reference_is_blocked(reference: str, price: int | None) -> bool:
+def _reference_is_blocked(reference: str, price: int | None, *, text: str | None = None) -> bool:
     from fpj_model_knowledge import is_blocked_year_reference
+    from offer_line_classifier import _is_authoritative_reference_only_line
+
+    if text and _is_authoritative_reference_only_line(text, reference):
+        return False
 
     numeric_reference = reference.replace(" ", "")
     if price is not None and numeric_reference.isdigit() and int(numeric_reference) == price:
@@ -1603,11 +1634,17 @@ def _extract_reference(
     *,
     brand_hint: str | None = None,
     enforce_brand_context: bool = False,
+    skip_price_dominant_guard: bool = False,
 ) -> tuple[str | None, str | None, bool]:
     from fpj_model_knowledge import is_blocked_year_reference, mask_year_suffix_spans
+    from offer_line_classifier import is_price_dominant_line, normalize_glued_year_metadata
 
-    ref_text = mask_year_suffix_spans(_mask_price_spans(text))
-    price, _ = _extract_price(text)
+    if not skip_price_dominant_guard and is_price_dominant_line(text):
+        return None, None, False
+
+    normalized_text = normalize_glued_year_metadata(text)
+    ref_text = mask_year_suffix_spans(_mask_price_spans(normalized_text))
+    price, _ = _extract_price(normalized_text)
 
     from brand_knowledge import (
         extract_reference_from_brand_knowledge,
@@ -1617,7 +1654,7 @@ def _extract_reference(
     brand_match = extract_reference_from_brand_knowledge(ref_text, brand_hint=brand_hint)
     if brand_match:
         reference, brand, _high_confidence = brand_match
-        if not _reference_is_blocked(reference, price):
+        if not _reference_is_blocked(reference, price, text=normalized_text):
             return reference, brand or brand_hint, True
 
     for pattern, brand_hint_from_pattern in REFERENCE_PATTERNS:
@@ -1631,9 +1668,13 @@ def _extract_reference(
         ):
             continue
         reference = match.group(1).upper().replace("  ", " ").strip()
-        if _reference_is_blocked(reference, price):
+        if _reference_is_blocked(reference, price, text=normalized_text):
             continue
         if is_blocked_year_reference(reference):
+            continue
+        from offer_line_classifier import _numeric_reference_is_price_artifact
+
+        if _numeric_reference_is_price_artifact(normalized_text, reference):
             continue
         inferred_brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
         if enforce_brand_context and brand_hint:
@@ -1647,6 +1688,15 @@ def _extract_reference(
     if enforce_brand_context and brand_hint:
         return None, None, False
     return None, None, False
+
+
+def _extract_reference_for_identity(
+    text: str,
+    *,
+    brand_hint: str | None = None,
+) -> tuple[str | None, str | None, bool]:
+    """Extract reference without treating mixed identity+price lines as price-only."""
+    return _extract_reference(text, brand_hint=brand_hint, skip_price_dominant_guard=True)
 
 
 def _looks_like_year(value: str) -> bool:
