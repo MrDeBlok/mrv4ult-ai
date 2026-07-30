@@ -251,6 +251,7 @@ REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{4}[A-Za-z]-\d{3,})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b([12]\d{5}[A-Za-z]{0,4})\b", re.I), "Rolex"),
     (re.compile(r"\b(\d{4}V(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b", re.I), "Vacheron Constantin"),
+    (re.compile(r"\b(\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b", re.I), "Vacheron Constantin"),
     (
         re.compile(
             rf"\b(\d{{5}}(?!{CURRENCY_CODE_PATTERN}\b)[A-Za-z]{{2,4}})\b",
@@ -258,7 +259,7 @@ REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
         ),
         "Audemars Piguet",
     ),
-    (re.compile(r"\b(\d{4}(?![Vv])[A-Za-z]{1,4})\b", re.I), None),
+    (re.compile(r"\b(\d{4}(?![VvFf])[A-Za-z]{1,4})\b", re.I), None),
     (re.compile(r"\b([3456]\d{3})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{5})\b", re.I), None),
 ]

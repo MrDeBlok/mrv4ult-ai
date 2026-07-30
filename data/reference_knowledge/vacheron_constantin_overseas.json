@@ -97,5 +97,38 @@
     "source": "authority_vacheron_overseas",
     "source_confidence": "high",
     "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "8005F/120A-B497",
+    "normalized_reference": "8005F/120A-B497",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_f_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "8005F/000R-B498",
+    "normalized_reference": "8005F/000R-B498",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_f_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "8005F/000R-B958",
+    "normalized_reference": "8005F/000R-B958",
+    "collection": "Overseas",
+    "model": "Overseas",
+    "reference_family": "overseas_f_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
   }
 ]

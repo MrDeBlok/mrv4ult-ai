@@ -21,6 +21,22 @@ BRAND_SOURCE_INHERITED = "inherited"
 BRAND_SOURCE_IDENTIFICATION = "identification"
 BRAND_SOURCE_REFERENCE_INFERENCE = "reference_inference"
 
+BRAND_CONFIDENCE_LOCKED = "locked"
+BRAND_CONFIDENCE_HIGH = "high"
+BRAND_CONFIDENCE_MEDIUM = "medium"
+BRAND_CONFIDENCE_LOW = "low"
+
+BRAND_CONFIDENCE_BY_SOURCE: dict[str, str] = {
+    BRAND_SOURCE_REFERENCE: BRAND_CONFIDENCE_LOCKED,
+    BRAND_SOURCE_EXPLICIT: BRAND_CONFIDENCE_HIGH,
+    BRAND_SOURCE_INHERITED: BRAND_CONFIDENCE_HIGH,
+    BRAND_SOURCE_MODEL: BRAND_CONFIDENCE_MEDIUM,
+    BRAND_SOURCE_IDENTIFICATION: BRAND_CONFIDENCE_MEDIUM,
+    BRAND_SOURCE_REFERENCE_INFERENCE: BRAND_CONFIDENCE_LOW,
+}
+
+PROTECTED_BRAND_CONFIDENCES = frozenset({BRAND_CONFIDENCE_LOCKED, BRAND_CONFIDENCE_HIGH})
+
 BRAND_RESOLUTION_ORDER: tuple[tuple[int, str], ...] = (
     (1, BRAND_SOURCE_EXPLICIT),
     (2, BRAND_SOURCE_INHERITED),
@@ -38,6 +54,7 @@ class BrandCandidate:
     brand: str
     source: str
     priority: int
+    confidence: str
 
 
 @dataclass
@@ -45,7 +62,22 @@ class BrandResolution:
     brand: str | None = None
     source: str | None = None
     priority: int | None = None
+    confidence: str | None = None
     trace: list[dict[str, Any]] = field(default_factory=list)
+
+
+def brand_confidence_for_source(source: str) -> str:
+    """Map a brand source to its resolution confidence tier."""
+    return BRAND_CONFIDENCE_BY_SOURCE.get(source, BRAND_CONFIDENCE_LOW)
+
+
+def _brand_candidate(brand: str, source: str) -> BrandCandidate:
+    return BrandCandidate(
+        brand=brand,
+        source=source,
+        priority=_PRIORITY_BY_SOURCE[source],
+        confidence=brand_confidence_for_source(source),
+    )
 
 
 def _normalize_brand_alias(alias: str) -> str:
@@ -71,11 +103,7 @@ def resolve_brand_from_reference(reference: str | None) -> BrandCandidate | None
 
     brand, confident = resolve_reference_brand_identity(reference)
     if confident and brand:
-        return BrandCandidate(
-            brand=brand,
-            source=BRAND_SOURCE_REFERENCE,
-            priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_REFERENCE],
-        )
+        return _brand_candidate(brand, BRAND_SOURCE_REFERENCE)
     return None
 
 
@@ -86,11 +114,7 @@ def resolve_brand_from_model(text: str, model: str | None = None) -> BrandCandid
         _alias_key, alias_entry = alias_match
         brand = alias_entry.get("brand")
         if isinstance(brand, str) and brand.strip():
-            return BrandCandidate(
-                brand=brand.strip(),
-                source=BRAND_SOURCE_MODEL,
-                priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_MODEL],
-            )
+            return _brand_candidate(brand.strip(), BRAND_SOURCE_MODEL)
 
     if not model or not isinstance(model, str):
         return None
@@ -104,11 +128,7 @@ def resolve_brand_from_model(text: str, model: str | None = None) -> BrandCandid
         _alias_key, alias_entry = alias_match
         brand = alias_entry.get("brand")
         if isinstance(brand, str) and brand.strip():
-            return BrandCandidate(
-                brand=brand.strip(),
-                source=BRAND_SOURCE_MODEL,
-                priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_MODEL],
-            )
+            return _brand_candidate(brand.strip(), BRAND_SOURCE_MODEL)
     return None
 
 
@@ -119,11 +139,7 @@ def resolve_brand_from_explicit(explicit_brand: str | None) -> BrandCandidate | 
     cleaned = explicit_brand.strip()
     if not cleaned:
         return None
-    return BrandCandidate(
-        brand=cleaned,
-        source=BRAND_SOURCE_EXPLICIT,
-        priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_EXPLICIT],
-    )
+    return _brand_candidate(cleaned, BRAND_SOURCE_EXPLICIT)
 
 
 def resolve_brand_from_inherited(inherited_brand: str | None) -> BrandCandidate | None:
@@ -133,11 +149,7 @@ def resolve_brand_from_inherited(inherited_brand: str | None) -> BrandCandidate 
     cleaned = inherited_brand.strip()
     if not cleaned:
         return None
-    return BrandCandidate(
-        brand=cleaned,
-        source=BRAND_SOURCE_INHERITED,
-        priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_INHERITED],
-    )
+    return _brand_candidate(cleaned, BRAND_SOURCE_INHERITED)
 
 
 def resolve_brand_from_identification(identification_brand: str | None) -> BrandCandidate | None:
@@ -147,11 +159,7 @@ def resolve_brand_from_identification(identification_brand: str | None) -> Brand
     cleaned = identification_brand.strip()
     if not cleaned:
         return None
-    return BrandCandidate(
-        brand=cleaned,
-        source=BRAND_SOURCE_IDENTIFICATION,
-        priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_IDENTIFICATION],
-    )
+    return _brand_candidate(cleaned, BRAND_SOURCE_IDENTIFICATION)
 
 
 def infer_brand_from_reference_heuristic(reference: str) -> str | None:
@@ -159,6 +167,7 @@ def infer_brand_from_reference_heuristic(reference: str) -> str | None:
     from brand_knowledge import extract_reference_from_brand_knowledge
     from fpj_model_knowledge import is_blocked_year_reference
     from reference_knowledge import (
+        is_vacheron_overseas_f_suffix_reference,
         is_vacheron_overseas_reference,
         record_generic_override_blocked,
         resolve_authoritative_reference_brand,
@@ -184,17 +193,17 @@ def infer_brand_from_reference_heuristic(reference: str) -> str | None:
         return "A. Lange & Söhne"
     if normalized.startswith("RM"):
         return "Richard Mille"
-    if "/" in normalized:
+    if is_vacheron_overseas_reference(reference) or is_vacheron_overseas_f_suffix_reference(reference):
+        return "Vacheron Constantin"
+    if re.fullmatch(r"\d{4}/[0-9A-Z]+(?:-[0-9A-Z]+)?", normalized):
         return "Patek Philippe"
     if re.fullmatch(r"[12]\d{5}[A-Z]{0,4}", normalized):
         return "Rolex"
     if re.fullmatch(r"[12]\d{4}", normalized):
         return "Rolex"
-    if is_vacheron_overseas_reference(reference):
-        return "Vacheron Constantin"
     if re.fullmatch(r"\d{5}[A-Z]{2,4}", normalized):
         return "Audemars Piguet"
-    if re.fullmatch(r"\d{4}(?![V])[A-Z]{1,4}", normalized):
+    if re.fullmatch(r"\d{4}(?![VF])[A-Z]{1,4}", normalized):
         return "Audemars Piguet"
     if re.fullmatch(r"[3456]\d{3}", normalized):
         return "Patek Philippe"
@@ -210,11 +219,7 @@ def resolve_brand_from_reference_inference(reference: str | None) -> BrandCandid
     brand = infer_brand_from_reference_heuristic(reference)
     if not brand:
         return None
-    return BrandCandidate(
-        brand=brand,
-        source=BRAND_SOURCE_REFERENCE_INFERENCE,
-        priority=_PRIORITY_BY_SOURCE[BRAND_SOURCE_REFERENCE_INFERENCE],
-    )
+    return _brand_candidate(brand, BRAND_SOURCE_REFERENCE_INFERENCE)
 
 
 def _append_trace(
@@ -340,12 +345,19 @@ def resolve_watch_brand(
         _append_trace(trace, step="final", brand=None, source=None)
         return BrandResolution(trace=trace)
 
-    winner = min(candidates, key=lambda candidate: candidate.priority)
+    protected = [
+        candidate
+        for candidate in candidates
+        if candidate.confidence in PROTECTED_BRAND_CONFIDENCES
+    ]
+    winner_pool = protected if protected else candidates
+    winner = min(winner_pool, key=lambda candidate: candidate.priority)
     _append_trace(
         trace,
         step="final",
         brand=winner.brand,
         source=winner.source,
+        confidence=winner.confidence,
         brand_before_normalization=brand_before_normalization,
     )
 
@@ -359,6 +371,7 @@ def resolve_watch_brand(
         brand=winner.brand,
         source=winner.source,
         priority=winner.priority,
+        confidence=winner.confidence,
         trace=trace,
     )
 
@@ -520,6 +533,7 @@ def apply_brand_resolution_to_watch(
     brand = resolution.brand
     enriched["brand"] = brand
     enriched["brand_source"] = resolution.source
+    enriched["brand_confidence"] = resolution.confidence
     enriched["brand_resolution_trace"] = list(resolution.trace)
 
     if (

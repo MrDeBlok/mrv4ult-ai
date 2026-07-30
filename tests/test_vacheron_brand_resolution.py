@@ -134,6 +134,51 @@ class TestVacheronConflictResolution:
         for reference in ("4300V", "4520V", "7900V", "7920V"):
             assert infer_brand_from_reference_heuristic(reference) == VACHERON
 
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "8005F/120A-B497",
+            "8005F/000R-B498",
+            "8005F/000R-B958",
+        ],
+    )
+    def test_overseas_f_suffix_references_resolve_to_vacheron(
+        self,
+        reference: str,
+    ) -> None:
+        watch = _enrich_line(f"{reference} 180k usd")
+
+        assert watch["reference"] == reference
+        assert watch["brand"] == VACHERON
+        assert watch.get("model") == "Overseas"
+        assert watch.get("brand_confidence") == "locked"
+        assert watch.get("brand_source") == BRAND_SOURCE_REFERENCE
+
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "8005F/120A-B497",
+            "8005F/000R-B498",
+            "8005F/000R-B958",
+        ],
+    )
+    def test_overseas_f_suffix_never_classified_as_ap(
+        self,
+        reference: str,
+    ) -> None:
+        assert infer_brand_from_reference_heuristic(reference) == VACHERON
+
+    def test_low_confidence_ap_heuristic_cannot_override_locked_reference_brand(self) -> None:
+        resolution = resolve_watch_brand(
+            reference="8005F/120A-B497",
+            text="8005F/120A-B497 180k usd",
+            brand_before_normalization="Audemars Piguet",
+        )
+
+        assert resolution.brand == VACHERON
+        assert resolution.confidence == "locked"
+        assert resolution.source == BRAND_SOURCE_REFERENCE
+
 
 class TestReferenceKnowledgeImport:
     def test_authoritative_dataset_resolves_vacheron_references(self) -> None:
@@ -150,8 +195,8 @@ class TestReferenceKnowledgeImport:
         )
 
         assert report["dry_run"] is True
-        assert report["imported"] == 9
-        assert len(report["proposed_mappings"]) == 9
+        assert report["imported"] == 12
+        assert len(report["proposed_mappings"]) == 12
 
     def test_find_suspicious_vacheron_ap_mappings(self) -> None:
         suspects = find_suspicious_vacheron_ap_mappings(

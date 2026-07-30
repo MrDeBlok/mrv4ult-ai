@@ -63,7 +63,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
         reference_patterns=(
             r"\bAP\s*(\d{4,5}[A-Za-z]{0,4})\b",
             r"\b(\d{5}(?!usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy)[A-Za-z]{2,4})\b",
-            r"\b(\d{4}(?![Vv])[A-Za-z]{1,4})\b",
+            r"\b(\d{4}(?![VvFf])[A-Za-z]{1,4})\b",
             r"\b(\d{5})\b",
         ),
         collection_aliases={
@@ -130,6 +130,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
         brand="Vacheron Constantin",
         reference_patterns=(
             r"\b(\d{4}V(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b",
+            r"\b(\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b",
         ),
         collection_aliases={
             "overseas": "Overseas",
@@ -138,7 +139,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
         },
         parsing_hints={
             "scan_without_brand_hint": True,
-            "reference_family": "overseas_v_suffix",
+            "reference_family": "overseas_v_f_suffix",
         },
     ),
 }
