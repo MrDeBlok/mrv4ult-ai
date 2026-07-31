@@ -8,8 +8,12 @@ from fastapi.testclient import TestClient
 
 from app import app, build_result_rows
 from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION
-from search import search_offers
-from tests.search_mock_helpers import mock_search_offers_client
+from search import (
+    SEARCH_ACTIVE_OFFERS_RPC,
+    SEARCH_OFFERS_PAGE_SIZE,
+    search_offers,
+)
+from tests.search_mock_helpers import mock_search_offers_client, mock_search_offers_full_scan_client
 
 
 def _watch(brand: str = "Rolex", reference: str = "126200") -> dict:
@@ -169,3 +173,159 @@ class TestSearchResultDisplay:
         assert "Dealer A" not in response.text
         mock_search_offers.assert_called_once()
         assert mock_search_offers.call_args.kwargs["condition"] == PRE_OWNED_CONDITION
+
+
+class TestSearchRpcArchitecture:
+    def _rm35_fixture(self) -> list[dict]:
+        return [
+            _offer(
+                watch_id="w-rm35",
+                condition="Used",
+                reference="RM35-01",
+            )
+            | {
+                "id": "offer-rm35",
+                "watches": _watch(brand="Richard Mille", reference="RM35-01"),
+            },
+            _offer(
+                watch_id="w-other",
+                condition="New",
+                reference="5711/1A",
+            )
+            | {
+                "id": "offer-other",
+                "watches": _watch(brand="Patek Philippe", reference="5711/1A"),
+            },
+        ]
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search._load_all_active_offers_for_diagnostics")
+    @patch("search.get_client")
+    def test_search_offers_does_not_use_diagnostic_full_scan_loader(
+        self,
+        mock_get_client: MagicMock,
+        mock_full_scan: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        mock_get_client.return_value = mock_search_offers_client(self._rm35_fixture())
+
+        offers, _ = search_offers("RM35")
+
+        mock_full_scan.assert_not_called()
+        mock_get_client.return_value.rpc.assert_called()
+        assert mock_get_client.return_value.table.call_count == 0
+        assert len(offers) == 1
+        assert offers[0]["watch"]["reference"] == "RM35-01"
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search.get_client")
+    def test_reference_search_rm35_returns_matching_offers(
+        self,
+        mock_get_client: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        mock_get_client.return_value = mock_search_offers_client(self._rm35_fixture())
+
+        offers, _ = search_offers("RM35")
+
+        assert len(offers) == 1
+        assert offers[0]["watch"]["brand"] == "Richard Mille"
+        assert offers[0]["watch"]["reference"] == "RM35-01"
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search.get_client")
+    def test_max_price_filter_still_works(
+        self,
+        mock_get_client: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        offers_fixture = [
+            _offer(watch_id="w-low", condition="New", reference="RM35-01")
+            | {
+                "usd_price": 200000,
+                "watches": _watch(brand="Richard Mille", reference="RM35-01"),
+            },
+            _offer(watch_id="w-high", condition="New", reference="RM35-02")
+            | {
+                "usd_price": 400000,
+                "watches": _watch(brand="Richard Mille", reference="RM35-02"),
+            },
+        ]
+        mock_get_client.return_value = mock_search_offers_client(offers_fixture)
+
+        offers, _ = search_offers("RM35 under 250000")
+
+        assert len(offers) == 1
+        assert offers[0]["watch_id"] == "w-low"
+        rpc_payload = mock_get_client.return_value.rpc.call_args.args[1]
+        assert rpc_payload["max_usd_price"] == 250000
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search.get_client")
+    def test_condition_filter_still_works_with_rpc_search(
+        self,
+        mock_get_client: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        offers_fixture = [
+            _offer(watch_id="w-new", condition="New", reference="RM35-01")
+            | {"watches": _watch(brand="Richard Mille", reference="RM35-01")},
+            _offer(watch_id="w-used", condition="Used", reference="RM35-01")
+            | {"watches": _watch(brand="Richard Mille", reference="RM35-01")},
+        ]
+        mock_get_client.return_value = mock_search_offers_client(offers_fixture)
+
+        offers, _ = search_offers("RM35", condition=NEW_CONDITION)
+
+        assert len(offers) == 1
+        assert offers[0]["watch_id"] == "w-new"
+        rpc_payload = mock_get_client.return_value.rpc.call_args.args[1]
+        assert rpc_payload["condition_filter"] == NEW_CONDITION
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search.get_client")
+    def test_rpc_pagination_is_bounded_to_matching_results(
+        self,
+        mock_get_client: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        offers_fixture = [
+            _offer(watch_id=f"w-{index}", condition="New", reference=f"RM35-0{index}")
+            | {
+                "id": f"offer-{index}",
+                "watches": _watch(brand="Richard Mille", reference=f"RM35-0{index}"),
+            }
+            for index in range(SEARCH_OFFERS_PAGE_SIZE + 5)
+        ]
+        mock_get_client.return_value = mock_search_offers_client(
+            offers_fixture,
+            total_count=len(offers_fixture),
+        )
+
+        offers, _ = search_offers("RM35")
+
+        assert len(offers) == SEARCH_OFFERS_PAGE_SIZE + 5
+        rpc_calls = mock_get_client.return_value.rpc.call_args_list
+        assert len(rpc_calls) == 2
+        assert rpc_calls[0].args[0] == SEARCH_ACTIVE_OFFERS_RPC
+        assert rpc_calls[0].args[1]["page_offset"] == 0
+        assert rpc_calls[1].args[1]["page_offset"] == SEARCH_OFFERS_PAGE_SIZE
+
+    @patch("search.contact_type_column_supported", return_value=True)
+    @patch("search.get_client")
+    def test_diagnostic_full_scan_still_available_for_trace_tooling(
+        self,
+        mock_get_client: MagicMock,
+        _mock_contact_type: MagicMock,
+    ) -> None:
+        from search import _load_all_active_offers_for_diagnostics
+
+        offers_fixture = [_offer(watch_id="w-1", condition="New")]
+        mock_get_client.return_value = mock_search_offers_full_scan_client(offers_fixture)
+
+        loaded, total_count = _load_all_active_offers_for_diagnostics()
+
+        assert len(loaded) == 1
+        assert total_count == 1
+        mock_get_client.return_value.table.assert_called_with("offers")
+        mock_get_client.return_value.rpc.assert_not_called()

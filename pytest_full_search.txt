@@ -1,0 +1,49 @@
+﻿........................................................................ [  3%]
+........................................................................ [  7%]
+........................................................................ [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 30%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 42%]
+........................................................................ [ 46%]
+........................................................................ [ 49%]
+........................................................................ [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 65%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 76%]
+........................................................................ [ 80%]
+........................................................................ [ 84%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 95%]
+........................................................................ [ 99%]
+......                                                                   [100%]
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_sprint_43_0.py::TestPerformanceReportRoute::test_admin_report_lists_all_pages
+tests/test_sprint_43_0.py::TestBuildPerformanceReport::test_build_performance_report_returns_seven_rows
+tests/test_sprint_43_0.py::TestProfilerDatabaseInstrumentation::test_dashboard_profile_records_non_zero_database_metrics
+tests/test_sprint_43_0.py::TestProfilerDatabaseInstrumentation::test_parser_review_profile_records_non_zero_database_metrics
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\httpx\_client.py:1053: StarletteDeprecationWarning: You should not use the 'timeout' argument with the TestClient. See https://github.com/Kludex/starlette/issues/1108 for more information.
+    return self.request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1878 passed, 7 warnings in 55.61s

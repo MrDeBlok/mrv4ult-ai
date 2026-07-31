@@ -851,8 +851,8 @@ class TestDeleteBatchSizing:
 
 
 class TestSearchAfterReset:
-    @patch("search._load_active_offers_for_search", return_value=([], 0))
-    def test_search_empty_when_no_active_offers(self, _mock_load: MagicMock) -> None:
+    @patch("search._fetch_offers_from_search_rpc", return_value=([], 0))
+    def test_search_empty_when_no_active_offers(self, _mock_fetch: MagicMock) -> None:
         offers, _cheapest = search_offers("5711")
 
         assert offers == []

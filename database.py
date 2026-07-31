@@ -70,6 +70,8 @@ IMPORT_LOG_QUICK_FIX_COLUMNS = "id, message_id, summary"
 MESSAGE_PREVIEW_COLUMNS = "id, raw_text"
 IMPORT_LOG_SUMMARY_BATCH_SIZE = 100
 IMPORT_LOG_SUMMARY_BATCH_TIMEOUT_SECONDS = 30
+IMPORT_LOG_MESSAGE_IDS_BATCH_SIZE = 150
+IMPORT_LOG_SOURCE_RESOLUTION_IDS_BATCH_SIZE = 150
 
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -578,7 +580,7 @@ def get_import_logs_by_message_ids(message_ids: list[str]) -> dict[str, Record]:
     if not message_ids:
         return {}
 
-    unique_ids = list(dict.fromkeys(str(message_id) for message_id in message_ids if message_id))
+    unique_ids = _normalize_lookup_ids(message_ids, require_uuid=True)
     if not unique_ids:
         return {}
 
@@ -586,20 +588,23 @@ def get_import_logs_by_message_ids(message_ids: list[str]) -> dict[str, Record]:
     if user_ownership_columns_supported():
         columns += ", imported_by_user_id"
 
-    response = execute_postgrest_read(
-        "get_import_logs_by_message_ids",
-        lambda: get_client()
-        .table("import_logs")
-        .select(columns)
-        .in_("message_id", unique_ids)
-        .order("import_time", desc=True)
-        .execute(),
-    )
     by_message_id: dict[str, Record] = {}
-    for row in response.data or []:
-        message_id = _normalize_uuid_key(row.get("message_id"))
-        if message_id and message_id not in by_message_id:
-            by_message_id[message_id] = row
+    for offset in range(0, len(unique_ids), IMPORT_LOG_MESSAGE_IDS_BATCH_SIZE):
+        chunk = unique_ids[offset : offset + IMPORT_LOG_MESSAGE_IDS_BATCH_SIZE]
+        batch_index = offset // IMPORT_LOG_MESSAGE_IDS_BATCH_SIZE
+        response = execute_postgrest_read(
+            f"get_import_logs_by_message_ids.batch.{batch_index}",
+            lambda chunk=chunk: get_client()
+            .table("import_logs")
+            .select(columns)
+            .in_("message_id", chunk)
+            .order("import_time", desc=True)
+            .execute(),
+        )
+        for row in response.data or []:
+            message_id = _normalize_uuid_key(row.get("message_id"))
+            if message_id and message_id not in by_message_id:
+                by_message_id[message_id] = row
     return by_message_id
 
 
@@ -866,7 +871,16 @@ def get_request_matches_for_offer_ids(offer_ids: list[str]) -> list[Record]:
 
 
 def _import_log_source_select_columns() -> str:
+    """Columns for import-log lookups that require summary row indexing."""
     columns = "id, message_id, watches_parsed, status, summary"
+    if user_ownership_columns_supported():
+        columns += ", imported_by_user_id"
+    return columns
+
+
+def _import_log_source_resolution_select_columns() -> str:
+    """Lightweight columns for watch-detail source URL visibility checks."""
+    columns = "id, watches_parsed, status"
     if user_ownership_columns_supported():
         columns += ", imported_by_user_id"
     return columns
@@ -881,18 +895,30 @@ def get_import_logs_for_source_resolution(import_log_ids: list[str]) -> dict[str
     if not unique_ids:
         return {}
 
-    response = execute_postgrest_read(
-        "get_import_logs_for_source_resolution",
-        lambda: get_client()
-        .table("import_logs")
-        .select(_import_log_source_select_columns())
-        .in_("id", unique_ids)
-        .execute(),
-    )
-    return {str(row["id"]): row for row in response.data or [] if row.get("id")}
+    by_id: dict[str, Record] = {}
+    for offset in range(0, len(unique_ids), IMPORT_LOG_SOURCE_RESOLUTION_IDS_BATCH_SIZE):
+        chunk = unique_ids[offset : offset + IMPORT_LOG_SOURCE_RESOLUTION_IDS_BATCH_SIZE]
+        batch_index = offset // IMPORT_LOG_SOURCE_RESOLUTION_IDS_BATCH_SIZE
+        response = execute_postgrest_read(
+            f"get_import_logs_for_source_resolution.batch.{batch_index}",
+            lambda chunk=chunk: get_client()
+            .table("import_logs")
+            .select(_import_log_source_resolution_select_columns())
+            .in_("id", chunk)
+            .execute(),
+        )
+        for row in response.data or []:
+            import_log_id = str(row.get("id") or "")
+            if import_log_id:
+                by_id[import_log_id] = row
+    return by_id
 
 
-def get_import_logs_by_offer_ids(offer_ids: list[str]) -> dict[str, Record]:
+def get_import_logs_by_offer_ids(
+    offer_ids: list[str],
+    *,
+    include_summary_fallback: bool = True,
+) -> dict[str, Record]:
     """Return import logs keyed by offer id via request_matches and summary rows."""
     if not offer_ids:
         return {}
@@ -928,8 +954,9 @@ def get_import_logs_by_offer_ids(offer_ids: list[str]) -> dict[str, Record]:
             by_offer_id[offer_id] = import_log
 
     unresolved_offer_ids = [offer_id for offer_id in unique_offer_ids if offer_id not in by_offer_id]
-    for offer_id, import_log in find_import_logs_by_summary_offer_ids(unresolved_offer_ids).items():
-        by_offer_id.setdefault(offer_id, import_log)
+    if include_summary_fallback:
+        for offer_id, import_log in find_import_logs_by_summary_offer_ids(unresolved_offer_ids).items():
+            by_offer_id.setdefault(offer_id, import_log)
 
     return by_offer_id
 

@@ -1,0 +1,80 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\caspe\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Development\MRVAULT AI
+plugins: anyio-4.14.1, xdist-3.8.0
+collecting ... collected 5 items
+
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_empty_input_skips_database_call PASSED [ 20%]
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_duplicate_and_empty_ids_are_deduplicated FAILED [ 40%]
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_large_message_id_list_is_queried_in_bounded_batches FAILED [ 60%]
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_batches_are_merged_and_latest_log_per_message_is_kept PASSED [ 80%]
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_database_errors_are_not_swallowed FAILED [100%]
+
+================================== FAILURES ===================================
+_ TestGetImportLogsByMessageIds.test_duplicate_and_empty_ids_are_deduplicated _
+tests\test_import_log_lookup.py:94: in test_duplicate_and_empty_ids_are_deduplicated
+    assert mock_get_client.return_value.table.return_value.select.return_value.in_.order.call_count == 1
+E   AssertionError: assert 0 == 1
+E    +  where 0 = <MagicMock name='get_client().table().select().in_.order' id='2429383966800'>.call_count
+E    +    where <MagicMock name='get_client().table().select().in_.order' id='2429383966800'> = <MagicMock name='get_client().table().select().in_' id='2429381278560'>.order
+E    +      where <MagicMock name='get_client().table().select().in_' id='2429381278560'> = <MagicMock name='get_client().table().select()' id='2429381276880'>.in_
+E    +        where <MagicMock name='get_client().table().select()' id='2429381276880'> = <MagicMock name='get_client().table().select' id='2429381278224'>.return_value
+E    +          where <MagicMock name='get_client().table().select' id='2429381278224'> = <MagicMock name='get_client().table()' id='2429381276544'>.select
+E    +            where <MagicMock name='get_client().table()' id='2429381276544'> = <MagicMock name='get_client().table' id='2429381277888'>.return_value
+E    +              where <MagicMock name='get_client().table' id='2429381277888'> = <MagicMock name='get_client()' id='2429381276208'>.table
+E    +                where <MagicMock name='get_client()' id='2429381276208'> = <MagicMock name='get_client' id='2429381275536'>.return_value
+_ TestGetImportLogsByMessageIds.test_large_message_id_list_is_queried_in_bounded_batches _
+tests\test_import_log_lookup.py:112: in test_large_message_id_list_is_queried_in_bounded_batches
+    assert (
+E   AssertionError: assert 0 == 3
+E    +  where 0 = <MagicMock name='get_client().table().select().in_.order' id='2429383972848'>.call_count
+E    +    where <MagicMock name='get_client().table().select().in_.order' id='2429383972848'> = <MagicMock name='get_client().table().select().in_' id='2429383971840'>.order
+E    +      where <MagicMock name='get_client().table().select().in_' id='2429383971840'> = <MagicMock name='get_client().table().select()' id='2429383970160'>.in_
+E    +        where <MagicMock name='get_client().table().select()' id='2429383970160'> = <MagicMock name='get_client().table().select' id='2429383971504'>.return_value
+E    +          where <MagicMock name='get_client().table().select' id='2429383971504'> = <MagicMock name='get_client().table()' id='2429383969824'>.select
+E    +            where <MagicMock name='get_client().table()' id='2429383969824'> = <MagicMock name='get_client().table' id='2429383971168'>.return_value
+E    +              where <MagicMock name='get_client().table' id='2429383971168'> = <MagicMock name='get_client()' id='2429383969488'>.table
+E    +                where <MagicMock name='get_client()' id='2429383969488'> = <MagicMock name='get_client' id='2429383967472'>.return_value
+____ TestGetImportLogsByMessageIds.test_database_errors_are_not_swallowed _____
+tests\test_import_log_lookup.py:180: in test_database_errors_are_not_swallowed
+    get_import_logs_by_message_ids([MESSAGE_ID_1])
+database.py:594: in get_import_logs_by_message_ids
+    response = execute_postgrest_read(
+database_availability.py:229: in execute_postgrest_read
+    return fn()
+           ^^^^
+database.py:601: in <lambda>
+    .execute(),
+     ^^^^^^^^^
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1169: in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1173: in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1236: in _execute_mock_call
+    result = next(effect)
+             ^^^^^^^^^^^^
+E   StopIteration
+------------------------------ Captured log call ------------------------------
+WARNING  database_availability:database_availability.py:203 database_unavailable operation=get_import_logs_by_message_ids.batch.0 route=- status=- upstream_host=pqkqwcbgizgjpekhcdea.supabase.co exception_type=RuntimeError request_id=- attempt=1 summary=JSON could not be generated
+============================== warnings summary ===============================
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_empty_input_skips_database_call
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_empty_input_skips_database_call
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_empty_input_skips_database_call
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_duplicate_and_empty_ids_are_deduplicated
+FAILED tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_large_message_id_list_is_queried_in_bounded_batches
+FAILED tests/test_import_log_lookup.py::TestGetImportLogsByMessageIds::test_database_errors_are_not_swallowed
+=================== 3 failed, 2 passed, 3 warnings in 1.69s ===================

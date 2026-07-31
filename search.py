@@ -20,6 +20,7 @@ from condition_normalizer import (
 Record = dict[str, Any]
 WatchGroup = dict[str, Any]
 SEARCH_OFFERS_PAGE_SIZE = 1000
+SEARCH_ACTIVE_OFFERS_RPC = "search_active_offers"
 
 WATCH_SEARCH_FIELDS = ("brand", "reference", "model", "dial", "bracelet")
 
@@ -63,10 +64,8 @@ def search_offers(
 ) -> tuple[list[Record], bool]:
     """Search active offers by watch fields matching all query tokens."""
     tokens, max_usd_price, cheapest_only = parse_query(query)
-    offers, _total_count = _load_active_offers_for_search()
-    matches = _filter_search_offers(
-        offers,
-        tokens=tokens,
+    matches, _total_count = _search_offers_via_rpc(
+        tokens,
         max_usd_price=max_usd_price,
         condition=condition,
     )
@@ -81,8 +80,110 @@ def _search_dealer_fields() -> str:
     )
 
 
-def _load_active_offers_for_search() -> tuple[list[Record], int | None]:
-    """Load active offers for search, paginating past PostgREST row limits."""
+def _build_rpc_search_tokens(tokens: list[str]) -> list[Record]:
+    """Build token payloads for the server-side search RPC."""
+    payload: list[Record] = []
+    for token in tokens:
+        if is_reference_like_token(token):
+            payload.append(
+                {
+                    "reference_like": True,
+                    "token": token,
+                    "normalized": _normalize_search_reference(token),
+                }
+            )
+            continue
+
+        expanded = expand_search_token(token)
+        brand_alias = BRAND_ALIASES.get(token.lower())
+        if brand_alias:
+            expanded.add(brand_alias.lower())
+        term_alias = TERM_ALIASES.get(token.lower())
+        if term_alias:
+            expanded.add(term_alias.lower())
+        payload.append(
+            {
+                "reference_like": False,
+                "token": token,
+                "terms": sorted(expanded),
+            }
+        )
+    return payload
+
+
+def _search_offers_via_rpc(
+    tokens: list[str],
+    *,
+    max_usd_price: int | None,
+    condition: str | None,
+) -> tuple[list[Record], int | None]:
+    """Load matching active offers through the server-side search RPC."""
+    loaded, total_count = _fetch_offers_from_search_rpc(
+        tokens,
+        max_usd_price=max_usd_price,
+        condition=condition,
+    )
+    matches = _filter_search_offers(
+        loaded,
+        tokens=tokens,
+        max_usd_price=max_usd_price,
+        condition=condition,
+    )
+    return matches, total_count
+
+
+def _fetch_offers_from_search_rpc(
+    tokens: list[str],
+    *,
+    max_usd_price: int | None,
+    condition: str | None,
+) -> tuple[list[Record], int | None]:
+    """Fetch RPC search pages without the final Python validation pass."""
+    loaded: list[Record] = []
+    total_count: int | None = None
+    offset = 0
+    rpc_tokens = _build_rpc_search_tokens(tokens)
+    base_payload = {
+        "search_tokens": rpc_tokens,
+        "max_usd_price": max_usd_price,
+        "condition_filter": condition,
+        "page_limit": SEARCH_OFFERS_PAGE_SIZE,
+        "filter_business_dealers": contact_type_column_supported(),
+    }
+
+    while True:
+        payload = {
+            **base_payload,
+            "page_offset": offset,
+        }
+        response = get_client().rpc(SEARCH_ACTIVE_OFFERS_RPC, payload).execute()
+        result = _rpc_search_result(response.data)
+        batch = result.get("offers") or []
+        if total_count is None:
+            total_count = result.get("total_count")
+        loaded.extend(batch)
+        if len(batch) < SEARCH_OFFERS_PAGE_SIZE:
+            break
+        offset += SEARCH_OFFERS_PAGE_SIZE
+
+    return loaded, total_count
+
+
+def _rpc_search_result(data: Any) -> Record:
+    if isinstance(data, list):
+        if not data:
+            return {"offers": [], "total_count": 0}
+        first = data[0]
+        if isinstance(first, dict):
+            return first
+        return {"offers": [], "total_count": 0}
+    if isinstance(data, dict):
+        return data
+    return {"offers": [], "total_count": 0}
+
+
+def _load_all_active_offers_for_diagnostics() -> tuple[list[Record], int | None]:
+    """Diagnostic-only full scan of active offers for trace_search_query()."""
     watch_fields = ", ".join(WATCH_SEARCH_FIELDS)
     select_fields = (
         "id, dealer_id, watch_id, original_price, original_currency, usd_price, card_date, condition, "
@@ -113,6 +214,10 @@ def _load_active_offers_for_search() -> tuple[list[Record], int | None]:
         offset += SEARCH_OFFERS_PAGE_SIZE
 
     return loaded, total_count
+
+
+# Backward-compatible alias for diagnostic tooling and tests.
+_load_active_offers_for_search = _load_all_active_offers_for_diagnostics
 
 
 def _resolve_search_watch(
@@ -210,11 +315,19 @@ def trace_search_query(
     condition: str | None = None,
     offers: list[Record] | None = None,
     total_count: int | None = None,
+    full_scan: bool = False,
 ) -> Record:
     """Return staged search filter counts and metadata for one query."""
     tokens, max_usd_price, cheapest_only = parse_query(query)
     if offers is None:
-        offers, total_count = _load_active_offers_for_search()
+        if full_scan:
+            offers, total_count = _load_all_active_offers_for_diagnostics()
+        else:
+            offers, total_count = _fetch_offers_from_search_rpc(
+                tokens,
+                max_usd_price=max_usd_price,
+                condition=condition,
+            )
 
     watch_cache: dict[str, Record] = {}
     dealer_cache: dict[str, Record] = {}

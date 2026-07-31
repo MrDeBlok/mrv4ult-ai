@@ -1,0 +1,60 @@
+﻿........................................................................ [  3%]
+........................................................................ [  7%]
+........................................................................ [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 30%]
+..............................................F.F.F..................... [ 34%]
+........................................................................ [ 38%]
+......................................................................F. [ 42%]
+........................................................................ [ 46%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+....F................................................................... [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 65%]
+...................F.................................................... [ 69%]
+..............................FFFF...................................... [ 73%]
+........................................................................ [ 76%]
+........................................................................ [ 80%]
+........................................................................ [ 84%]
+........................................................................ [ 88%]
+...................F.................................................... [ 92%]
+........................................................................ [ 96%]
+........................................................................ [100%]
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_sprint_43_0.py::TestPerformanceReportRoute::test_admin_report_lists_all_pages
+tests/test_sprint_43_0.py::TestBuildPerformanceReport::test_build_performance_report_returns_seven_rows
+tests/test_sprint_43_0.py::TestProfilerDatabaseInstrumentation::test_dashboard_profile_records_non_zero_database_metrics
+tests/test_sprint_43_0.py::TestProfilerDatabaseInstrumentation::test_parser_review_profile_records_non_zero_database_metrics
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\httpx\_client.py:1053: StarletteDeprecationWarning: You should not use the 'timeout' argument with the TestClient. See https://github.com/Kludex/starlette/issues/1108 for more information.
+    return self.request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_dutch_chat_with_amount_classified_as_noise
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_english_chat_with_amount_classified_as_noise
+FAILED tests/test_sprint_40_0.py::TestDealerListNicknameLearning::test_single_offer_still_learns_unknown_nicknames
+FAILED tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[5123 120k]
+FAILED tests/test_sprint_47_11.py::TestDaytona16520BrandResolution::test_reference_only_16520_resolves_to_rolex
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_brand_header_applies_to_following_offer_lines
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[De Bethune]
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[DeBethune]
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[debethune]
+FAILED tests/test_watch_parser.py::TestAlsBrandDetection::test_dutch_als_is_not_treated_as_brand
+11 failed, 1861 passed, 7 warnings in 53.13s

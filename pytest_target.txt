@@ -1,0 +1,68 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\caspe\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Development\MRVAULT AI
+plugins: anyio-4.14.1, xdist-3.8.0
+collecting ... collected 31 items
+
+tests/test_sprint_32_4.py::TestNoiseClassification::test_price_only_line_is_noise PASSED [  3%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored FAILED [  6%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_price_only_message_classified_as_noise PASSED [  9%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_dutch_chat_with_amount_classified_as_noise PASSED [ 12%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_dutch_chat_without_watch_line_is_not_needs_review PASSED [ 16%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_english_chat_with_amount_classified_as_noise PASSED [ 19%]
+tests/test_sprint_40_0.py::TestDealerListNicknameLearning::test_single_offer_still_learns_unknown_nicknames PASSED [ 22%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[5123 120k] PASSED [ 25%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[PP 5123 full set 180k] PASSED [ 29%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[Patek Philippe 5123 120k] PASSED [ 32%]
+tests/test_sprint_47_11.py::TestDaytona16520BrandResolution::test_reference_only_16520_resolves_to_rolex PASSED [ 35%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_brand_header_applies_to_following_offer_lines FAILED [ 38%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[De Bethune] PASSED [ 41%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[DeBethune] PASSED [ 45%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[debethune] PASSED [ 48%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_propagated_brand_applies_to_reference_only_line PASSED [ 51%]
+tests/test_watch_parser.py::TestAlsBrandDetection::test_dutch_als_is_not_treated_as_brand PASSED [ 54%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_identity_line_for_rm_reference PASSED [ 58%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_year_set_metadata_line PASSED [ 61%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[USDT:253000] PASSED [ 64%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[USDT 253000] PASSED [ 67%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[253000 USDT] PASSED [ 70%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[US$253,000] PASSED [ 74%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_exact_three_line_input_parses_one_watch PASSED [ 77%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016Full set\nUSDT:253000-253000-USDT] PASSED [ 80%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016 Full Set\nUSDT 253000-253000-USDT] PASSED [ 83%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016 Full Set\n253000 USDT-253000-USDT] PASSED [ 87%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[rm35-01 ntpt\n2016 full set\nusdt:253000-253000-USDT] PASSED [ 90%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_no_phantom_ap_or_rolex_records PASSED [ 93%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_ntpt_does_not_corrupt_reference PASSED [ 96%]
+tests/test_multiline_offer_grouping.py::TestMultipleWatchesWithFollowingMetadata::test_two_watches_each_with_metadata_lines PASSED [100%]
+
+================================== FAILURES ===================================
+__________ TestNoiseClassification.test_numeric_only_message_ignored __________
+tests\test_sprint_32_4.py:73: in test_numeric_only_message_ignored
+    assert summary["saved"] is False
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'saved'
+_ TestDeBethuneHeaderPropagation.test_brand_header_applies_to_following_offer_lines _
+tests\test_sprint_47_9.py:65: in test_brand_header_applies_to_following_offer_lines
+    assert len(watches) == 2
+E   AssertionError: assert 3 == 2
+E    +  where 3 = len([{'brand': 'De Bethune', 'reference': None, 'model': None, 'nickname': None, ...}, {'brand': 'De Bethune', 'reference': None, 'model': None, 'nickname': None, ...}, {'brand': 'Rolex', 'reference': '126500LN', 'model': 'Cosmograph Daytona', 'nickname': None, ...}])
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_sprint_32_4.py::TestNoiseClassification::test_price_only_line_is_noise
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_brand_header_applies_to_following_offer_lines
+================== 2 failed, 29 passed, 3 warnings in 3.73s ===================

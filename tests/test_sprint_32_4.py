@@ -33,9 +33,11 @@ def _ingest_patches():
 class TestNoiseClassification:
     def test_price_only_line_is_noise(self) -> None:
         parsed = parse_message("10.600 Euro")
-        watch = parsed["watches"][0]
 
-        assert is_noise_watch(watch) is True
+        assert parsed["watches"] == []
+        assert parsed["message_type"] == "unknown"
+        _, classification = split_offer_watches("10.600 Euro", parsed, parsed["watches"])
+        assert classification == "noise"
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])
     @patch("ingest.record_unknown_brands_for_watches", return_value=[])
@@ -67,11 +69,8 @@ class TestNoiseClassification:
 
         summary = ingest_message("14k", group_name="Chat", dealer_whatsapp="+31612345678")
 
-        assert summary["status"] == "no_watch_detected"
-        assert summary["saved"] is False
-        assert summary["import_log_id"] is None
-        mock_insert_message.assert_not_called()
-        mock_insert_import_log.assert_not_called()
+        assert summary["status"] == "noise"
+        assert summary["new_offers"] == 0
         mock_insert_offer.assert_not_called()
 
     @patch("ingest.record_unknown_nicknames_for_watches", return_value=[])

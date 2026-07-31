@@ -96,7 +96,7 @@ class TestOfferSourceResolutionHelpers:
         self,
         mock_by_message_ids: MagicMock,
         mock_for_source: MagicMock,
-        _mock_by_offer_ids: MagicMock,
+        mock_by_offer_ids: MagicMock,
     ) -> None:
         mock_by_message_ids.return_value = {"msg-1": _import_log("log-message", message_id="msg-1")}
         mock_for_source.return_value = {"log-message": _import_log("log-message", message_id="msg-1")}
@@ -113,6 +113,262 @@ class TestOfferSourceResolutionHelpers:
         assert by_message_id["msg-1"]["id"] == "log-message"
         assert by_id["log-message"]["id"] == "log-message"
         assert by_offer_id == {}
+        mock_by_offer_ids.assert_not_called()
+
+    @patch("database.get_import_logs_by_offer_ids")
+    @patch("database.get_import_logs_for_source_resolution")
+    @patch("database.get_import_logs_by_message_ids")
+    def test_load_offer_source_import_log_lookups_skips_summary_fallback_for_direct_import_log(
+        self,
+        mock_by_message_ids: MagicMock,
+        mock_for_source: MagicMock,
+        mock_by_offer_ids: MagicMock,
+    ) -> None:
+        mock_by_message_ids.return_value = {}
+        mock_for_source.return_value = {
+            "log-direct": {
+                "id": "log-direct",
+                "watches_parsed": 1,
+                "status": "success",
+                "imported_by_user_id": "owner-1",
+            }
+        }
+
+        offers = [normalize_watch_detail_offer(_detail_offer(
+            watch_id="w-1",
+            dealer_id="dealer-1",
+            usd_price=180000,
+            condition="New",
+            message_id=None,
+            import_log_id="log-direct",
+        ))]
+
+        by_message_id, by_id, by_offer_id = load_offer_source_import_log_lookups(offers)
+
+        assert by_id["log-direct"]["id"] == "log-direct"
+        assert by_offer_id == {}
+        mock_by_offer_ids.assert_not_called()
+
+    @patch("database.get_import_logs_by_offer_ids", return_value={})
+    @patch("database.get_import_logs_for_source_resolution")
+    @patch("database.get_import_logs_by_message_ids")
+    def test_load_offer_source_import_log_lookups_unresolved_offers_do_not_crash(
+        self,
+        mock_by_message_ids: MagicMock,
+        mock_for_source: MagicMock,
+        _mock_by_offer_ids: MagicMock,
+    ) -> None:
+        mock_by_message_ids.return_value = {}
+        mock_for_source.return_value = {}
+
+        offer = normalize_watch_detail_offer(_detail_offer(
+            watch_id="w-1",
+            dealer_id="dealer-1",
+            usd_price=180000,
+            condition="New",
+            message_id=None,
+        ))
+
+        by_message_id, by_id, by_offer_id = load_offer_source_import_log_lookups([offer])
+        enriched = attach_dealer_offer_source_urls(
+            [offer],
+            by_message_id,
+            user=ADMIN_USER,
+            import_logs_by_id=by_id,
+            import_logs_by_offer_id=by_offer_id,
+        )
+
+        assert by_offer_id == {}
+        assert enriched[0]["source_url"] is None
+
+    @patch("database.get_import_logs_by_offer_ids")
+    @patch("database.get_import_logs_for_source_resolution")
+    @patch("database.get_import_logs_by_message_ids")
+    def test_load_offer_source_import_log_lookups_resolves_via_request_matches_only(
+        self,
+        mock_by_message_ids: MagicMock,
+        mock_for_source: MagicMock,
+        mock_by_offer_ids: MagicMock,
+    ) -> None:
+        mock_by_message_ids.return_value = {}
+        mock_for_source.return_value = {}
+        mock_by_offer_ids.return_value = {
+            "offer-request-match": _import_log("log-request-match"),
+        }
+
+        offers = [normalize_watch_detail_offer(_detail_offer(
+            offer_id="offer-request-match",
+            watch_id="w-1",
+            dealer_id="dealer-1",
+            usd_price=180000,
+            condition="New",
+            message_id=None,
+        ))]
+
+        by_message_id, by_id, by_offer_id = load_offer_source_import_log_lookups(offers)
+
+        mock_by_offer_ids.assert_called_once_with(
+            ["offer-request-match"],
+            include_summary_fallback=False,
+        )
+        assert by_offer_id["offer-request-match"]["id"] == "log-request-match"
+        enriched = attach_dealer_offer_source_urls(
+            offers,
+            by_message_id,
+            user=ADMIN_USER,
+            import_logs_by_id=by_id,
+            import_logs_by_offer_id=by_offer_id,
+        )
+        assert enriched[0]["source_url"] == "/activity/log-request-match"
+
+    @patch("database.find_import_logs_by_summary_offer_ids", side_effect=RuntimeError("timeout"))
+    @patch("database.get_import_logs_by_offer_ids", return_value={})
+    @patch("database.get_import_logs_for_source_resolution")
+    @patch("database.get_import_logs_by_message_ids")
+    def test_watch_detail_lookup_does_not_call_summary_jsonb_fallback(
+        self,
+        mock_by_message_ids: MagicMock,
+        mock_for_source: MagicMock,
+        mock_by_offer_ids: MagicMock,
+        mock_summary_fallback: MagicMock,
+    ) -> None:
+        mock_by_message_ids.return_value = {}
+        mock_for_source.return_value = {}
+
+        orphan = normalize_watch_detail_offer(_detail_offer(
+            offer_id="offer-orphan",
+            watch_id="w-1",
+            dealer_id="dealer-1",
+            usd_price=180000,
+            condition="New",
+            message_id="msg-missing-log",
+        ))
+        resolved = normalize_watch_detail_offer(_detail_offer(
+            offer_id="offer-resolved",
+            watch_id="w-1",
+            dealer_id="dealer-2",
+            usd_price=190000,
+            condition="New",
+            import_log_id="log-direct",
+        ))
+
+        by_message_id, by_id, by_offer_id = load_offer_source_import_log_lookups([orphan, resolved])
+
+        mock_by_offer_ids.assert_called_once_with(
+            ["offer-orphan"],
+            include_summary_fallback=False,
+        )
+        mock_summary_fallback.assert_not_called()
+        enriched = attach_dealer_offer_source_urls(
+            [orphan, resolved],
+            by_message_id,
+            user=ADMIN_USER,
+            import_logs_by_id={
+                **by_id,
+                "log-direct": _import_log("log-direct"),
+            },
+            import_logs_by_offer_id=by_offer_id,
+        )
+        assert enriched[0]["source_url"] is None
+        assert enriched[1]["source_url"] == "/activity/log-direct"
+
+    @patch("database.get_import_logs_by_offer_ids", return_value={})
+    @patch("database.get_import_logs_for_source_resolution")
+    @patch("database.get_import_logs_by_message_ids")
+    def test_orphan_offers_do_not_block_resolved_source_urls(
+        self,
+        mock_by_message_ids: MagicMock,
+        mock_for_source: MagicMock,
+        mock_by_offer_ids: MagicMock,
+    ) -> None:
+        mock_by_message_ids.return_value = {
+            "msg-1": _import_log("log-message", message_id="msg-1"),
+        }
+        mock_for_source.return_value = {
+            "log-message": _import_log("log-message", message_id="msg-1"),
+        }
+
+        resolved_message = normalize_watch_detail_offer(_detail_offer(
+            offer_id="offer-message",
+            watch_id="w-1",
+            dealer_id="dealer-1",
+            usd_price=180000,
+            condition="New",
+        ))
+        orphan = normalize_watch_detail_offer(_detail_offer(
+            offer_id="offer-orphan",
+            watch_id="w-1",
+            dealer_id="dealer-2",
+            usd_price=190000,
+            condition="Used",
+            message_id="msg-missing-log",
+        ))
+
+        by_message_id, by_id, by_offer_id = load_offer_source_import_log_lookups([resolved_message, orphan])
+        enriched = attach_dealer_offer_source_urls(
+            [resolved_message, orphan],
+            by_message_id,
+            user=ADMIN_USER,
+            import_logs_by_id=by_id,
+            import_logs_by_offer_id=by_offer_id,
+        )
+
+        assert enriched[0]["source_url"] == "/activity/log-message"
+        assert enriched[1]["source_url"] is None
+        mock_by_offer_ids.assert_called_once_with(
+            ["offer-orphan"],
+            include_summary_fallback=False,
+        )
+
+    @patch("database.find_import_logs_by_summary_offer_ids", return_value={})
+    @patch("database.get_import_logs_for_source_resolution", return_value={})
+    @patch("database.execute_postgrest_read", side_effect=lambda _operation, fn, **kwargs: fn())
+    @patch("database.get_client")
+    def test_get_import_logs_by_offer_ids_keeps_summary_fallback_for_cold_path(
+        self,
+        mock_get_client: MagicMock,
+        _mock_execute_read: MagicMock,
+        _mock_for_source: MagicMock,
+        mock_summary_fallback: MagicMock,
+    ) -> None:
+        from database import get_import_logs_by_offer_ids
+
+        mock_table = MagicMock()
+        mock_select = MagicMock()
+        mock_in = MagicMock()
+        mock_get_client.return_value.table.return_value = mock_table
+        mock_table.select.return_value = mock_select
+        mock_select.in_.return_value = mock_in
+        mock_in.execute.return_value = MagicMock(data=[])
+
+        get_import_logs_by_offer_ids(["offer-cold-path"], include_summary_fallback=True)
+
+        mock_summary_fallback.assert_called_once_with(["offer-cold-path"])
+
+    @patch("database.find_import_logs_by_summary_offer_ids", return_value={})
+    @patch("database.get_import_logs_for_source_resolution", return_value={})
+    @patch("database.execute_postgrest_read", side_effect=lambda _operation, fn, **kwargs: fn())
+    @patch("database.get_client")
+    def test_get_import_logs_by_offer_ids_skips_summary_fallback_when_disabled(
+        self,
+        mock_get_client: MagicMock,
+        _mock_execute_read: MagicMock,
+        _mock_for_source: MagicMock,
+        mock_summary_fallback: MagicMock,
+    ) -> None:
+        from database import get_import_logs_by_offer_ids
+
+        mock_table = MagicMock()
+        mock_select = MagicMock()
+        mock_in = MagicMock()
+        mock_get_client.return_value.table.return_value = mock_table
+        mock_table.select.return_value = mock_select
+        mock_select.in_.return_value = mock_in
+        mock_in.execute.return_value = MagicMock(data=[])
+
+        get_import_logs_by_offer_ids(["offer-fast-path"], include_summary_fallback=False)
+
+        mock_summary_fallback.assert_not_called()
 
     def test_attach_source_url_from_direct_import_log_id(self) -> None:
         offer = normalize_watch_detail_offer(_detail_offer(

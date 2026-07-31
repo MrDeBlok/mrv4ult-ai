@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from import_status import is_discarded_no_watch_import
 from search import _display_value, _nested_record, _sort_key_usd_price, format_price, format_usd_price
 from timezone_utils import DISPLAY_TIMEZONE, format_display_timestamp, parse_utc_timestamp
 from user_visibility import can_view_import
+
+logger = logging.getLogger(__name__)
 
 Record = dict[str, Any]
 
@@ -636,23 +639,46 @@ def load_offer_source_import_log_lookups(
             normalized_import_logs_by_message_id[normalized_key] = import_log
     import_logs_by_message_id = normalized_import_logs_by_message_id
 
-    import_logs_by_offer_id = index_import_logs_by_summary_offer_id(list(import_logs_by_id.values()))
     unresolved_offer_ids: list[str] = []
+    direct_fk_resolved_count = 0
+    message_resolved_count = 0
     for offer in offers:
         offer_id = _normalize_uuid_key(offer.get("id"))
-        if not offer_id or offer_id in import_logs_by_offer_id:
+        if not offer_id:
             continue
         if _offer_direct_import_log_id(offer):
+            direct_fk_resolved_count += 1
             continue
         message_id = _normalize_uuid_key(offer.get("message_id"))
         if message_id and import_logs_by_message_id.get(message_id):
+            message_resolved_count += 1
             continue
         unresolved_offer_ids.append(offer_id)
-    for offer_id, import_log in get_import_logs_by_offer_ids(unresolved_offer_ids).items():
-        import_logs_by_offer_id.setdefault(offer_id, import_log)
-        import_log_id = str(import_log.get("id") or "")
-        if import_log_id:
-            import_logs_by_id.setdefault(import_log_id, import_log)
+
+    import_logs_by_offer_id: dict[str, Record] = {}
+    request_match_resolved_count = 0
+    if unresolved_offer_ids:
+        for offer_id, import_log in get_import_logs_by_offer_ids(
+            unresolved_offer_ids,
+            include_summary_fallback=False,
+        ).items():
+            import_logs_by_offer_id.setdefault(offer_id, import_log)
+            import_log_id = str(import_log.get("id") or "")
+            if import_log_id:
+                import_logs_by_id.setdefault(import_log_id, import_log)
+            request_match_resolved_count += 1
+
+    unresolved_count = len(unresolved_offer_ids) - request_match_resolved_count
+    if offers:
+        logger.info(
+            "watch_detail_source_resolution total=%d direct_fk=%d message=%d "
+            "request_match=%d unresolved=%d",
+            len(offers),
+            direct_fk_resolved_count,
+            message_resolved_count,
+            request_match_resolved_count,
+            unresolved_count,
+        )
 
     return import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id
 

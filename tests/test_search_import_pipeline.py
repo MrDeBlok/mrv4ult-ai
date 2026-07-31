@@ -233,7 +233,7 @@ class TestFreshImportSearchPipeline:
                 return_value=[offer_row],
             ),
             patch(
-                "search._load_active_offers_for_search",
+                "search._load_all_active_offers_for_diagnostics",
                 return_value=([loaded_offer], 1),
             ),
             patch("database.get_watch_by_id", return_value=None),
@@ -285,7 +285,7 @@ class TestFreshImportSearchPipeline:
                 return_value=[offer_row],
             ),
             patch(
-                "search._load_active_offers_for_search",
+                "search._load_all_active_offers_for_diagnostics",
                 return_value=([loaded_offer], 1),
             ),
             patch("database.get_watch_by_id", return_value=watch_row),

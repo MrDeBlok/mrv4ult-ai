@@ -1,0 +1,140 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\caspe\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Development\MRVAULT AI
+plugins: anyio-4.14.1, xdist-3.8.0
+collecting ... collected 14 items
+
+tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored FAILED [  7%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_dutch_chat_with_amount_classified_as_noise FAILED [ 14%]
+tests/test_sprint_32_4.py::TestNoiseClassification::test_english_chat_with_amount_classified_as_noise FAILED [ 21%]
+tests/test_sprint_40_0.py::TestDealerListNicknameLearning::test_single_offer_still_learns_unknown_nicknames FAILED [ 28%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[5123 120k] FAILED [ 35%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[PP 5123 full set 180k] PASSED [ 42%]
+tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[Patek Philippe 5123 120k] PASSED [ 50%]
+tests/test_sprint_47_11.py::TestDaytona16520BrandResolution::test_reference_only_16520_resolves_to_rolex FAILED [ 57%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_brand_header_applies_to_following_offer_lines FAILED [ 64%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[De Bethune] FAILED [ 71%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[DeBethune] FAILED [ 78%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[debethune] FAILED [ 85%]
+tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_propagated_brand_applies_to_reference_only_line PASSED [ 92%]
+tests/test_watch_parser.py::TestAlsBrandDetection::test_dutch_als_is_not_treated_as_brand FAILED [100%]
+
+================================== FAILURES ===================================
+__________ TestNoiseClassification.test_numeric_only_message_ignored __________
+tests\test_sprint_32_4.py:72: in test_numeric_only_message_ignored
+    assert summary["status"] == "no_watch_detected"
+E   AssertionError: assert 'noise' == 'no_watch_detected'
+E     
+E     - no_watch_detected
+E     + noise
+___ TestNoiseClassification.test_dutch_chat_with_amount_classified_as_noise ___
+tests\test_sprint_32_4.py:148: in test_dutch_chat_with_amount_classified_as_noise
+    assert summary["status"] == "noise"
+E   AssertionError: assert 'no_watch_detected' == 'noise'
+E     
+E     - noise
+E     + no_watch_detected
+__ TestNoiseClassification.test_english_chat_with_amount_classified_as_noise __
+tests\test_sprint_32_4.py:222: in test_english_chat_with_amount_classified_as_noise
+    assert summary["status"] == "noise"
+E   AssertionError: assert 'no_watch_detected' == 'noise'
+E     
+E     - noise
+E     + no_watch_detected
+_ TestDealerListNicknameLearning.test_single_offer_still_learns_unknown_nicknames _
+tests\test_sprint_40_0.py:236: in test_single_offer_still_learns_unknown_nicknames
+    assert len(recorded) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestPatekStandaloneStillWorks.test_patek_5123_without_wrong_brand_context[5123 120k] _
+tests\test_sprint_45_1.py:74: in test_patek_5123_without_wrong_brand_context
+    assert watch["brand"] == "Patek Philippe"
+E   AssertionError: assert None == 'Patek Philippe'
+_ TestDaytona16520BrandResolution.test_reference_only_16520_resolves_to_rolex _
+tests\test_sprint_47_11.py:49: in test_reference_only_16520_resolves_to_rolex
+    assert watch["brand"] == "Rolex"
+E   AssertionError: assert None == 'Rolex'
+_ TestDeBethuneHeaderPropagation.test_brand_header_applies_to_following_offer_lines _
+tests\test_sprint_47_9.py:65: in test_brand_header_applies_to_following_offer_lines
+    assert len(watches) == 2
+E   AssertionError: assert 1 == 2
+E    +  where 1 = len([{'brand': 'Rolex', 'reference': '126500LN', 'model': 'Cosmograph Daytona', 'nickname': None, ...}])
+_ TestDeBethuneHeaderPropagation.test_glued_header_spellings_establish_brand_context[De Bethune] _
+tests\test_sprint_47_9.py:78: in test_glued_header_spellings_establish_brand_context
+    assert len(watches) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestDeBethuneHeaderPropagation.test_glued_header_spellings_establish_brand_context[DeBethune] _
+tests\test_sprint_47_9.py:78: in test_glued_header_spellings_establish_brand_context
+    assert len(watches) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestDeBethuneHeaderPropagation.test_glued_header_spellings_establish_brand_context[debethune] _
+tests\test_sprint_47_9.py:78: in test_glued_header_spellings_establish_brand_context
+    assert len(watches) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+________ TestAlsBrandDetection.test_dutch_als_is_not_treated_as_brand _________
+tests\test_watch_parser.py:33: in test_dutch_als_is_not_treated_as_brand
+    result = parse_message("ik ga pas eten als iedereen er is")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:598: in parse_message
+    blocks, header_brand = _group_offer_lines(iter_content_lines(text))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:661: in _group_offer_lines
+    if brand_only := _is_brand_only_line(line):
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:783: in _is_brand_only_line
+    brand = _extract_brand(cleaned) or _extract_brand(line)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:1558: in _extract_brand
+    return _extract_als_brand(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:1573: in _extract_als_brand
+    if _extract_reference(text)[0]:
+       ^^^^^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:1637: in _extract_reference
+    if not skip_price_dominant_guard and is_price_dominant_line(text):
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+offer_line_classifier.py:76: in is_price_dominant_line
+    if has_watch_identity_evidence(text):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+offer_line_classifier.py:147: in has_watch_identity_evidence
+    explicit_brand = _extract_brand(text)
+                     ^^^^^^^^^^^^^^^^^^^^
+offer_line_classifier.py:53: in _extract_brand
+    return _extract_brand(text)
+           ^^^^^^^^^^^^^^^^^^^^
+watch_parser.py:1558: in _extract_brand
+    return _extract_als_brand(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+E   RecursionError: maximum recursion depth exceeded
+!!! Recursion detected (same locals & position)
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_numeric_only_message_ignored
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_dutch_chat_with_amount_classified_as_noise
+FAILED tests/test_sprint_32_4.py::TestNoiseClassification::test_english_chat_with_amount_classified_as_noise
+FAILED tests/test_sprint_40_0.py::TestDealerListNicknameLearning::test_single_offer_still_learns_unknown_nicknames
+FAILED tests/test_sprint_45_1.py::TestPatekStandaloneStillWorks::test_patek_5123_without_wrong_brand_context[5123 120k]
+FAILED tests/test_sprint_47_11.py::TestDaytona16520BrandResolution::test_reference_only_16520_resolves_to_rolex
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_brand_header_applies_to_following_offer_lines
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[De Bethune]
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[DeBethune]
+FAILED tests/test_sprint_47_9.py::TestDeBethuneHeaderPropagation::test_glued_header_spellings_establish_brand_context[debethune]
+FAILED tests/test_watch_parser.py::TestAlsBrandDetection::test_dutch_als_is_not_treated_as_brand
+================== 11 failed, 3 passed, 3 warnings in 2.59s ===================

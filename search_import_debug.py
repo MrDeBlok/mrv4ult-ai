@@ -176,7 +176,7 @@ def trace_fresh_offer_searchability(
             active_offers.append(offer_row)
 
     tokens, max_usd_price, cheapest_only = parse_query(reference_query)
-    loaded_offers, total_count = search_module._load_active_offers_for_search()
+    loaded_offers, total_count = search_module._load_all_active_offers_for_diagnostics()
     search_trace = trace_search_query(
         reference_query,
         condition=condition,

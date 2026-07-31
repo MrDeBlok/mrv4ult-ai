@@ -1,0 +1,37 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\caspe\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Development\MRVAULT AI
+plugins: anyio-4.14.1, xdist-3.8.0
+collecting ... collected 14 items
+
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_identity_line_for_rm_reference PASSED [  7%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_year_set_metadata_line PASSED [ 14%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[USDT:253000] PASSED [ 21%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[USDT 253000] PASSED [ 28%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[253000 USDT] PASSED [ 35%]
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_price_lines[US$253,000] PASSED [ 42%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_exact_three_line_input_parses_one_watch PASSED [ 50%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016Full set\nUSDT:253000-253000-USDT] PASSED [ 57%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016 Full Set\nUSDT 253000-253000-USDT] PASSED [ 64%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[RM35-01 ntpt\n2016 Full Set\n253000 USDT-253000-USDT] PASSED [ 71%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_price_and_metadata_variants[rm35-01 ntpt\n2016 full set\nusdt:253000-253000-USDT] PASSED [ 78%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_no_phantom_ap_or_rolex_records PASSED [ 85%]
+tests/test_multiline_offer_grouping.py::TestRm35MultilineOffer::test_ntpt_does_not_corrupt_reference PASSED [ 92%]
+tests/test_multiline_offer_grouping.py::TestMultipleWatchesWithFollowingMetadata::test_two_watches_each_with_metadata_lines PASSED [100%]
+
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_multiline_offer_grouping.py::TestOfferLineClassification::test_identity_line_for_rm_reference
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 14 passed, 3 warnings in 2.28s ========================

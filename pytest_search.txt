@@ -1,0 +1,54 @@
+﻿.....FFFFFF......................                                        [100%]
+================================== FAILURES ===================================
+_ TestSearchRpcArchitecture.test_search_offers_does_not_use_diagnostic_full_scan_loader _
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_search_offers_does_not_use_diagnostic_full_scan_loader() takes 3 positional arguments but 4 were given
+_ TestSearchRpcArchitecture.test_reference_search_rm35_returns_matching_offers _
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_reference_search_rm35_returns_matching_offers() takes 2 positional arguments but 3 were given
+_________ TestSearchRpcArchitecture.test_max_price_filter_still_works _________
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_max_price_filter_still_works() takes 2 positional arguments but 3 were given
+_ TestSearchRpcArchitecture.test_condition_filter_still_works_with_rpc_search _
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_condition_filter_still_works_with_rpc_search() takes 2 positional arguments but 3 were given
+_ TestSearchRpcArchitecture.test_rpc_pagination_is_bounded_to_matching_results _
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_rpc_pagination_is_bounded_to_matching_results() takes 2 positional arguments but 3 were given
+_ TestSearchRpcArchitecture.test_diagnostic_full_scan_still_available_for_trace_tooling _
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\unittest\mock.py:1432: in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: TestSearchRpcArchitecture.test_diagnostic_full_scan_still_available_for_trace_tooling() takes 2 positional arguments but 3 were given
+============================== warnings summary ===============================
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309
+  C:\Users\caspe\AppData\Local\Programs\Python\Python313\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_search_offers_does_not_use_diagnostic_full_scan_loader
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_reference_search_rm35_returns_matching_offers
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_max_price_filter_still_works
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_condition_filter_still_works_with_rpc_search
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_rpc_pagination_is_bounded_to_matching_results
+FAILED tests/test_search.py::TestSearchRpcArchitecture::test_diagnostic_full_scan_still_available_for_trace_tooling
+6 failed, 27 passed, 3 warnings in 2.87s
