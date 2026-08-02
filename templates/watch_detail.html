@@ -69,6 +69,9 @@
             <input type="hidden" name="reference" value="{{ reference_value }}">
             <input type="hidden" name="condition" value="{{ condition_filter }}">
             <input type="hidden" name="date" value="custom">
+            {% if sort_filter %}
+            <input type="hidden" name="sort" value="{{ sort_filter }}">
+            {% endif %}
             <div class="col-12 col-sm-auto">
                 <label for="date_from" class="form-label small text-muted mb-1">From</label>
                 <input id="date_from" type="date" name="date_from" value="{{ date_from }}" class="form-control form-control-sm">
@@ -79,6 +82,29 @@
             </div>
             <div class="col-12 col-sm-auto">
                 <button type="submit" class="btn btn-sm {% if date_filter == 'custom' %}btn-primary{% else %}btn-outline-primary{% endif %}">Custom range</button>
+            </div>
+        </form>
+
+        <form method="get" action="/watch-reference" class="d-flex flex-wrap align-items-end gap-2 mb-3">
+            <input type="hidden" name="brand" value="{{ brand_value }}">
+            <input type="hidden" name="reference" value="{{ reference_value }}">
+            <input type="hidden" name="condition" value="{{ condition_filter }}">
+            {% if date_filter != 'all' %}
+            <input type="hidden" name="date" value="{{ date_filter }}">
+            {% endif %}
+            {% if date_from %}
+            <input type="hidden" name="date_from" value="{{ date_from }}">
+            {% endif %}
+            {% if date_to %}
+            <input type="hidden" name="date_to" value="{{ date_to }}">
+            {% endif %}
+            <div>
+                <label for="offer_sort" class="form-label small text-muted mb-1">Sort offers</label>
+                <select id="offer_sort" name="sort" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="" {% if not sort_filter %}selected{% endif %}>Default</option>
+                    <option value="price_asc" {% if sort_filter == 'price_asc' %}selected{% endif %}>Price: low to high</option>
+                    <option value="price_desc" {% if sort_filter == 'price_desc' %}selected{% endif %}>Price: high to low</option>
+                </select>
             </div>
         </form>
 

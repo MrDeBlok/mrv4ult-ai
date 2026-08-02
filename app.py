@@ -308,8 +308,9 @@ from watch_detail_filters import (
     enrich_watch_detail_offer_recency,
     offer_matches_watch_detail_date_filter,
     parse_watch_detail_date_filter,
+    parse_watch_detail_sort_filter,
     resolve_watch_detail_date_range,
-    sort_key_watch_detail_offer,
+    sort_offers_for_watch_detail,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -994,6 +995,7 @@ def build_watch_reference_url(
     date: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    sort: str | None = None,
 ) -> str | None:
     """Build the canonical brand + reference watch detail URL."""
     if not brand or not reference:
@@ -1012,6 +1014,9 @@ def build_watch_reference_url(
                 params["date_from"] = date_from.strip()
             if date_to and date_to.strip():
                 params["date_to"] = date_to.strip()
+    sort_value = parse_watch_detail_sort_filter(sort)
+    if sort_value:
+        params["sort"] = sort_value
     return f"/watch-reference?{urlencode(params)}"
 
 
@@ -1023,6 +1028,7 @@ def build_watch_reference_filter_urls(
     date: str = "all",
     date_from: str = "",
     date_to: str = "",
+    sort: str = "",
 ) -> dict[str, str]:
     """Build watch detail filter URLs preserving the other active dimension."""
     def _build(
@@ -1031,6 +1037,7 @@ def build_watch_reference_filter_urls(
         date_value: str | None = None,
         date_from_value: str | None = None,
         date_to_value: str | None = None,
+        sort_value: str | None = None,
     ) -> str:
         return (
             build_watch_reference_url(
@@ -1040,6 +1047,7 @@ def build_watch_reference_filter_urls(
                 date=date_value if date_value is not None else date,
                 date_from=date_from_value if date_from_value is not None else date_from,
                 date_to=date_to_value if date_to_value is not None else date_to,
+                sort=sort_value if sort_value is not None else sort,
             )
             or "/"
         )
@@ -1065,6 +1073,7 @@ def build_watch_reference_condition_urls(
     date: str = "all",
     date_from: str = "",
     date_to: str = "",
+    sort: str = "",
 ) -> dict[str, str]:
     """Backward-compatible condition URL helper."""
     filter_urls = build_watch_reference_filter_urls(
@@ -1074,6 +1083,7 @@ def build_watch_reference_condition_urls(
         date=date,
         date_from=date_from,
         date_to=date_to,
+        sort=sort,
     )
     return {
         "all": filter_urls["condition_all"],
@@ -1202,11 +1212,15 @@ def format_received_at(value: str | None) -> str:
     return format_display_timestamp(value)
 
 
-def build_offer_rows(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_offer_rows(
+    offers: list[dict[str, Any]],
+    *,
+    sort_filter: str = "",
+) -> list[dict[str, Any]]:
     """Format active offers for the watch detail table."""
     rows: list[dict[str, Any]] = []
 
-    for offer in sorted(offers, key=sort_key_watch_detail_offer):
+    for offer in sort_offers_for_watch_detail(offers, sort_filter):
         dealer = offer.get("dealer") or {}
         watch = offer.get("watch") or {}
         rows.append(
@@ -1284,6 +1298,7 @@ def _render_watch_reference_detail(
     date_filter_input: str,
     date_from_input: str,
     date_to_input: str,
+    sort_filter_input: str = "",
 ) -> HTMLResponse:
     try:
         condition_filter = parse_watch_detail_condition_filter(condition_filter_input)
@@ -1303,6 +1318,7 @@ def _render_watch_reference_detail(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    sort_filter = parse_watch_detail_sort_filter(sort_filter_input)
     detail_base_url = build_watch_reference_url(brand, reference) or "/"
     filter_urls = build_watch_reference_filter_urls(
         brand,
@@ -1311,6 +1327,7 @@ def _render_watch_reference_detail(
         date=date_filter,
         date_from=date_from_input,
         date_to=date_to_input,
+        sort=sort_filter,
     )
     condition_urls = build_watch_reference_condition_urls(
         brand,
@@ -1319,6 +1336,7 @@ def _render_watch_reference_detail(
         date=date_filter,
         date_from=date_from_input,
         date_to=date_to_input,
+        sort=sort_filter,
     )
     template_context = {
         "watch": build_reference_detail_display(brand, reference, []),
@@ -1328,6 +1346,7 @@ def _render_watch_reference_detail(
         "date_filter": date_filter,
         "date_from": date_from_input,
         "date_to": date_to_input,
+        "sort_filter": sort_filter,
         "detail_base_url": detail_base_url,
         "condition_urls": condition_urls,
         "filter_urls": filter_urls,
@@ -1342,32 +1361,37 @@ def _render_watch_reference_detail(
             normalize_watch_detail_offer(offer)
             for offer in get_active_offers_for_brand_reference(brand, reference)
         ]
-        user = get_current_user(request)
+        condition_filtered_offers = [
+            offer
+            for offer in offers
+            if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+        ]
         import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
-            offers
+            condition_filtered_offers
         )
-        offers = attach_dealer_offer_source_urls(
-            offers,
-            import_logs_by_message_id,
-            user=user,
-            import_logs_by_id=import_logs_by_id,
-            import_logs_by_offer_id=import_logs_by_offer_id,
-        )
-        offers = enrich_watch_detail_offer_recency(
-            offers,
+        condition_filtered_offers = enrich_watch_detail_offer_recency(
+            condition_filtered_offers,
             import_logs_by_message_id=import_logs_by_message_id,
             import_logs_by_id=import_logs_by_id,
             import_logs_by_offer_id=import_logs_by_offer_id,
         )
         filtered_offers = [
             offer
-            for offer in offers
-            if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
-            and offer_matches_watch_detail_date_filter(offer, date_range)
+            for offer in condition_filtered_offers
+            if offer_matches_watch_detail_date_filter(offer, date_range)
         ]
         template_context["watch"] = build_reference_detail_display(brand, reference, offers)
         template_context["stats"] = build_watch_stats(filtered_offers)
-        template_context["offers"] = build_offer_rows(filtered_offers)
+
+        user = get_current_user(request)
+        display_offers = attach_dealer_offer_source_urls(
+            filtered_offers,
+            import_logs_by_message_id,
+            user=user,
+            import_logs_by_id=import_logs_by_id,
+            import_logs_by_offer_id=import_logs_by_offer_id,
+        )
+        template_context["offers"] = build_offer_rows(display_offers, sort_filter=sort_filter)
     except DatabaseUnavailableError as exc:
         root_exc = exc.__cause__ or exc
         log_database_availability_error(
@@ -3712,6 +3736,7 @@ async def watch_reference_detail(
     date: str = "all",
     date_from: str = "",
     date_to: str = "",
+    sort: str | None = None,
 ) -> HTMLResponse:
     brand_value = brand.strip()
     reference_value = reference.strip()
@@ -3727,6 +3752,7 @@ async def watch_reference_detail(
         date_filter_input=date.strip().lower() or "all",
         date_from_input=date_from.strip(),
         date_to_input=date_to.strip(),
+        sort_filter_input=(sort or "").strip(),
     )
 
 

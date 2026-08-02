@@ -179,6 +179,65 @@ def sort_key_watch_detail_offer(offer: Record) -> tuple[int, float, float]:
     return recency_rank, recency_sort, price_sort
 
 
+WATCH_DETAIL_SORT_DEFAULT = ""
+WATCH_DETAIL_SORT_PRICE_ASC = "price_asc"
+WATCH_DETAIL_SORT_PRICE_DESC = "price_desc"
+WATCH_DETAIL_SORT_VALUES = frozenset(
+    {WATCH_DETAIL_SORT_PRICE_ASC, WATCH_DETAIL_SORT_PRICE_DESC}
+)
+
+
+def parse_watch_detail_sort_filter(sort_value: str | None) -> str:
+    """Parse and validate the watch detail sort query value."""
+    cleaned = (sort_value or WATCH_DETAIL_SORT_DEFAULT).strip().lower()
+    if cleaned in WATCH_DETAIL_SORT_VALUES:
+        return cleaned
+    return WATCH_DETAIL_SORT_DEFAULT
+
+
+def _watch_detail_offer_recency_tiebreak(offer: Record) -> tuple[float, str]:
+    recency = offer_recency_timestamp(offer)
+    recency_sort = -recency.timestamp() if recency is not None else 0.0
+    return recency_sort, str(offer.get("id") or "")
+
+
+def sort_key_watch_detail_offer_price_asc(offer: Record) -> tuple[int, int, float, str]:
+    """Sort priced offers first by ascending USD price, then recency desc, then id asc."""
+    usd_price = offer.get("usd_price")
+    if usd_price is None:
+        price_rank = 1
+        price_sort = 0
+    else:
+        price_rank = 0
+        price_sort = int(usd_price)
+    recency_sort, offer_id = _watch_detail_offer_recency_tiebreak(offer)
+    return price_rank, price_sort, recency_sort, offer_id
+
+
+def sort_key_watch_detail_offer_price_desc(offer: Record) -> tuple[int, int, float, str]:
+    """Sort priced offers first by descending USD price, then recency desc, then id asc."""
+    usd_price = offer.get("usd_price")
+    if usd_price is None:
+        price_rank = 1
+        price_sort = 0
+    else:
+        price_rank = 0
+        price_sort = -int(usd_price)
+    recency_sort, offer_id = _watch_detail_offer_recency_tiebreak(offer)
+    return price_rank, price_sort, recency_sort, offer_id
+
+
+def sort_offers_for_watch_detail(offers: list[Record], sort_filter: str) -> list[Record]:
+    """Return offers sorted for the active watch detail sort filter."""
+    if sort_filter == WATCH_DETAIL_SORT_PRICE_ASC:
+        sort_key = sort_key_watch_detail_offer_price_asc
+    elif sort_filter == WATCH_DETAIL_SORT_PRICE_DESC:
+        sort_key = sort_key_watch_detail_offer_price_desc
+    else:
+        sort_key = sort_key_watch_detail_offer
+    return sorted(offers, key=sort_key)
+
+
 def _parse_filter_date(value: str | None) -> date | None:
     if value is None:
         return None
