@@ -10,6 +10,7 @@ from app import app, build_result_rows
 from condition_normalizer import PRE_OWNED_CONDITION
 from dealer_intelligence import attach_dealer_offer_source_urls
 from tests.conftest import TRADER_ONE, TRADER_TWO
+from tests.search_mock_helpers import search_groups_page_from_offers
 
 
 def _watch_group(
@@ -72,14 +73,12 @@ class TestSearchResultSourceLinks:
         assert "source_url" not in rows[0]
         assert "dealer_url" not in rows[0]
 
-    @patch("app.get_import_logs_by_message_ids")
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_reference_links_to_activity_detail(
         self,
-        mock_search_offers: MagicMock,
-        mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "watch-1",
@@ -99,10 +98,8 @@ class TestSearchResultSourceLinks:
                         "phone_number": "+85291234567",
                     },
                 }
-            ],
-            False,
+            ]
         )
-        mock_get_import_logs.return_value = {"msg-1": _import_log("log-offer-1")}
 
         client = TestClient(app)
         response = client.get("/?q=126200")
@@ -113,14 +110,12 @@ class TestSearchResultSourceLinks:
         assert 'href="/activity/log-offer-1"' not in response.text
         assert "View original" not in response.text
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_without_source_renders_plain_reference(
         self,
-        mock_search_offers: MagicMock,
-        _mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "watch-1",
@@ -136,8 +131,7 @@ class TestSearchResultSourceLinks:
                     },
                     "dealer": {"display_name": "Dealer A"},
                 }
-            ],
-            False,
+            ]
         )
 
         client = TestClient(app)
@@ -149,15 +143,13 @@ class TestSearchResultSourceLinks:
         assert "View original" not in response.text
 
     @patch("app.get_current_user", return_value=TRADER_ONE)
-    @patch("app.get_import_logs_by_message_ids")
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_visibility_hides_forbidden_source_links(
         self,
-        mock_search_offers: MagicMock,
-        mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
         _mock_current_user: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "watch-1",
@@ -173,17 +165,8 @@ class TestSearchResultSourceLinks:
                     },
                     "dealer": {"display_name": "Dealer A"},
                 }
-            ],
-            False,
+            ]
         )
-        mock_get_import_logs.return_value = {
-            "msg-private": _import_log(
-                "log-private",
-                status="noise",
-                watches_parsed=0,
-                imported_by_user_id=TRADER_TWO["id"],
-            )
-        }
 
         client = TestClient(app)
         response = client.get("/?q=126200")
@@ -192,14 +175,12 @@ class TestSearchResultSourceLinks:
         assert 'href="/activity/log-private"' not in response.text
         assert "View original" not in response.text
 
-    @patch("app.get_import_logs_by_message_ids")
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_discarded_import_does_not_create_source_link(
         self,
-        mock_search_offers: MagicMock,
-        mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "watch-1",
@@ -215,12 +196,8 @@ class TestSearchResultSourceLinks:
                     },
                     "dealer": {"display_name": "Dealer A"},
                 }
-            ],
-            False,
+            ]
         )
-        mock_get_import_logs.return_value = {
-            "msg-1": _import_log("log-discarded", watches_parsed=0, status="warning")
-        }
 
         client = TestClient(app)
         response = client.get("/?q=126200")
@@ -239,32 +216,28 @@ class TestSearchResultSourceLinks:
 
 
 class TestSearchFiltersUnchanged:
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_condition_filter_still_passed_to_search(
         self,
-        mock_search_offers: MagicMock,
-        _mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = ([], False)
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers([])
 
         client = TestClient(app)
         response = client.get("/?q=126200&condition=pre-owned&cheapest=1&max_price=80000")
 
         assert response.status_code == 200
-        mock_search_offers.assert_called_once()
-        assert mock_search_offers.call_args.kwargs["condition"] == PRE_OWNED_CONDITION
-        assert "cheapest" in mock_search_offers.call_args.args[0]
-        assert "80000" in mock_search_offers.call_args.args[0]
+        mock_search_offer_groups_page.assert_called_once()
+        assert mock_search_offer_groups_page.call_args.kwargs["condition"] == PRE_OWNED_CONDITION
+        assert "cheapest" in mock_search_offer_groups_page.call_args.args[0]
+        assert "80000" in mock_search_offer_groups_page.call_args.args[0]
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_page_renders_reference_index_not_dealer_rows(
         self,
-        mock_search_offers: MagicMock,
-        _mock_get_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "watch-1",
@@ -284,8 +257,7 @@ class TestSearchFiltersUnchanged:
                         "phone_number": "+85291234567",
                     },
                 }
-            ],
-            False,
+            ]
         )
 
         client = TestClient(app)

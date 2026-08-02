@@ -141,14 +141,14 @@ class TestSearchResultDisplay:
         assert rows[0]["conditions_label"] == "New / Pre-Owned"
         assert rows[0]["watch_url"] == "/watch-reference?brand=Rolex&reference=126200"
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_page_renders_grouped_reference_index(
         self,
-        mock_search_offers: MagicMock,
-        _mock_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (
+        from tests.search_mock_helpers import search_groups_page_from_offers
+
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(
             [
                 {
                     "watch_id": "w-new",
@@ -159,8 +159,7 @@ class TestSearchResultDisplay:
                     "watch": _watch(),
                     "dealer": {"display_name": "Dealer A", "phone_number": "+85291234567"},
                 }
-            ],
-            False,
+            ]
         )
 
         client = TestClient(app)
@@ -171,8 +170,8 @@ class TestSearchResultDisplay:
         assert "126200" in response.text
         assert "Active offers" in response.text
         assert "Dealer A" not in response.text
-        mock_search_offers.assert_called_once()
-        assert mock_search_offers.call_args.kwargs["condition"] == PRE_OWNED_CONDITION
+        mock_search_offer_groups_page.assert_called_once()
+        assert mock_search_offer_groups_page.call_args.kwargs["condition"] == PRE_OWNED_CONDITION
 
 
 class TestSearchRpcArchitecture:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from tests.search_mock_helpers import search_groups_page_from_offers
+
 from fastapi.testclient import TestClient
 
 from app import app, build_offer_rows, build_result_rows, build_watch_reference_condition_urls, build_watch_reference_url, build_watch_stats
@@ -158,14 +160,12 @@ class TestGroupedReferenceSearch:
         assert row["conditions_label"] == "New / Pre-Owned"
         assert row["watch_url"] == build_watch_reference_url("Patek Philippe", "5711/1R")
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_page_renders_grouped_reference_rows(
         self,
-        mock_search_offers: MagicMock,
-        _mock_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (PAtek_5711_OFFERS, False)
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(PAtek_5711_OFFERS)
 
         client = TestClient(app)
         response = client.get("/?q=5711")
@@ -179,19 +179,17 @@ class TestGroupedReferenceSearch:
         assert "Active offers" in response.text
         assert "Dealer A" not in response.text
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_exact_reference_search_shows_one_grouped_row(
         self,
-        mock_search_offers: MagicMock,
-        _mock_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
         exact_offers = [
             offer
             for offer in PAtek_5711_OFFERS
             if offer["watch"]["reference"] == "5711/1R" and offer["watch"]["brand"] == "Patek Philippe"
         ]
-        mock_search_offers.return_value = (exact_offers, False)
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(exact_offers)
 
         client = TestClient(app)
         response = client.get("/?q=5711/1R")

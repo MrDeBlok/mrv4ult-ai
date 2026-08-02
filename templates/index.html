@@ -81,8 +81,31 @@
 <div class="alert alert-secondary" role="alert">No matching references found.</div>
 {% elif results %}
 <div class="card shadow-sm">
-    <div class="card-header bg-white py-3">
-        <h2 class="h5 mb-0">{{ results|length }} reference result{{ '' if results|length == 1 else 's' }}</h2>
+    <div class="card-header bg-white py-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <h2 class="h5 mb-0">Page {{ page }} · {{ results|length }} reference result{{ '' if results|length == 1 else 's' }}</h2>
+        {% if has_previous or has_next %}
+        <nav aria-label="Search results pagination">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item {% if not has_previous %}disabled{% endif %}">
+                    {% if has_previous %}
+                    <a class="page-link" href="{{ previous_page_url }}">Previous</a>
+                    {% else %}
+                    <span class="page-link">Previous</span>
+                    {% endif %}
+                </li>
+                <li class="page-item active" aria-current="page">
+                    <span class="page-link">Page {{ page }}</span>
+                </li>
+                <li class="page-item {% if not has_next %}disabled{% endif %}">
+                    {% if has_next %}
+                    <a class="page-link" href="{{ next_page_url }}">Next</a>
+                    {% else %}
+                    <span class="page-link">Next</span>
+                    {% endif %}
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
     </div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -115,6 +138,31 @@
             </tbody>
         </table>
     </div>
+    {% if has_previous or has_next %}
+    <div class="card-footer bg-white d-flex justify-content-end">
+        <nav aria-label="Search results pagination footer">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item {% if not has_previous %}disabled{% endif %}">
+                    {% if has_previous %}
+                    <a class="page-link" href="{{ previous_page_url }}">Previous</a>
+                    {% else %}
+                    <span class="page-link">Previous</span>
+                    {% endif %}
+                </li>
+                <li class="page-item active" aria-current="page">
+                    <span class="page-link">Page {{ page }}</span>
+                </li>
+                <li class="page-item {% if not has_next %}disabled{% endif %}">
+                    {% if has_next %}
+                    <a class="page-link" href="{{ next_page_url }}">Next</a>
+                    {% else %}
+                    <span class="page-link">Next</span>
+                    {% endif %}
+                </li>
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 

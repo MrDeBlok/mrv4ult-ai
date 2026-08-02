@@ -1,0 +1,96 @@
+[
+  {
+    "route": "Search (empty)",
+    "path": "/",
+    "test_case": "search empty",
+    "status": "ok",
+    "status_code": 200,
+    "total_duration_ms": 75.83,
+    "db_query_count": 1,
+    "db_time_ms": 51.24,
+    "python_time_ms": 0.0,
+    "render_time_ms": 55.55,
+    "payload_bytes": 16824,
+    "slowest_query": "GET notifications?select=id&is_read=eq.False&limit=0",
+    "slowest_query_ms": 51.24,
+    "duplicate_query_count": 0,
+    "repeated_table_queries": {},
+    "query_table_counts": {
+      "notifications": 1
+    },
+    "n_plus_one_candidates": [],
+    "error_message": "\u2014"
+  },
+  {
+    "route": "Search",
+    "path": "/?q=Rolex",
+    "test_case": "broad search: Rolex",
+    "status": "ok",
+    "status_code": 200,
+    "total_duration_ms": 4792.51,
+    "db_query_count": 6,
+    "db_time_ms": 4784.44,
+    "python_time_ms": 0.0,
+    "render_time_ms": 55.29,
+    "payload_bytes": 45368,
+    "slowest_query": "POST rpc/search_active_offer_groups",
+    "slowest_query_ms": 4557.49,
+    "duplicate_query_count": 0,
+    "repeated_table_queries": {},
+    "query_table_counts": {
+      "nickname_aliases": 2,
+      "unknown_nicknames": 1,
+      "dealers": 1,
+      "rpc/search_active_offer_groups": 1,
+      "notifications": 1
+    },
+    "n_plus_one_candidates": [],
+    "error_message": "\u2014"
+  },
+  {
+    "route": "Search",
+    "path": "/?q=RM35",
+    "test_case": "reference search: RM35",
+    "status": "ok",
+    "status_code": 200,
+    "total_duration_ms": 385.27,
+    "db_query_count": 2,
+    "db_time_ms": 378.29,
+    "python_time_ms": 0.0,
+    "render_time_ms": 49.5,
+    "payload_bytes": 33647,
+    "slowest_query": "POST rpc/search_active_offer_groups",
+    "slowest_query_ms": 329.42,
+    "duplicate_query_count": 0,
+    "repeated_table_queries": {},
+    "query_table_counts": {
+      "rpc/search_active_offer_groups": 1,
+      "notifications": 1
+    },
+    "n_plus_one_candidates": [],
+    "error_message": "\u2014"
+  },
+  {
+    "route": "Search",
+    "path": "/?q=126500",
+    "test_case": "reference search: 126500",
+    "status": "ok",
+    "status_code": 200,
+    "total_duration_ms": 368.61,
+    "db_query_count": 2,
+    "db_time_ms": 359.9,
+    "python_time_ms": 0.0,
+    "render_time_ms": 39.78,
+    "payload_bytes": 24518,
+    "slowest_query": "POST rpc/search_active_offer_groups",
+    "slowest_query_ms": 320.68,
+    "duplicate_query_count": 0,
+    "repeated_table_queries": {},
+    "query_table_counts": {
+      "rpc/search_active_offer_groups": 1,
+      "notifications": 1
+    },
+    "n_plus_one_candidates": [],
+    "error_message": "\u2014"
+  }
+]

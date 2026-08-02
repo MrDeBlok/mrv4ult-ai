@@ -299,6 +299,8 @@ from search import (
     format_price,
     format_usd_price,
     group_offers_by_brand_reference,
+    normalize_search_page,
+    search_offer_groups_page,
     search_offers,
     summarize_conditions_available,
 )
@@ -1107,6 +1109,32 @@ def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
 
     return rows
+
+
+def build_search_page_url(
+    *,
+    page: int,
+    search_text: str = "",
+    cheapest_only: bool = False,
+    max_price: str = "",
+    condition_filter: str = "all",
+) -> str:
+    """Build a paginated search URL preserving active filters."""
+    from urllib.parse import urlencode
+
+    params: dict[str, str] = {}
+    if search_text.strip():
+        params["q"] = search_text.strip()
+    if condition_filter and condition_filter != "all":
+        params["condition"] = condition_filter
+    if cheapest_only:
+        params["cheapest"] = "1"
+    if max_price.strip():
+        params["max_price"] = max_price.strip()
+    if page > 1:
+        params["page"] = str(page)
+    query = urlencode(params)
+    return f"/?{query}" if query else "/"
 
 
 def build_search_query(search_text: str, *, cheapest_only: bool, max_price: int | None) -> str:
@@ -3718,14 +3746,20 @@ async def home(
     cheapest: str | None = None,
     max_price: str = "",
     condition: str = "all",
+    page: str = "",
 ) -> HTMLResponse:
     search_text = q.strip()
     cheapest_only = _parse_cheapest_only(cheapest)
     max_price_input = max_price.strip()
     condition_filter_input = condition.strip().lower() or "all"
+    search_page_number = normalize_search_page(page)
     searched = bool(request.query_params)
     error: str | None = None
     results: list[dict[str, Any]] = []
+    has_previous = False
+    has_next = False
+    previous_page_url: str | None = None
+    next_page_url: str | None = None
 
     if searched:
         try:
@@ -3736,30 +3770,30 @@ async def home(
                 cheapest_only=cheapest_only,
                 max_price=max_price_value,
             )
-            offers, cheapest_only_flag = search_offers(query, condition=condition_filter)
-            enrich_offers_dealer_contacts(offers)
-            groups = group_offers_by_brand_reference(offers, cheapest_only=cheapest_only_flag)
-            user = get_current_user(request)
-            message_ids = [
-                str(offer.get("message_id"))
-                for group in groups
-                for offer in group.get("offers") or []
-                if offer.get("message_id")
-            ]
-            import_logs_by_message_id = get_import_logs_by_message_ids(message_ids)
-            enriched_groups: list[dict[str, Any]] = []
-            for group in groups:
-                enriched_groups.append(
-                    {
-                        **group,
-                        "offers": attach_dealer_offer_source_urls(
-                            group.get("offers") or [],
-                            import_logs_by_message_id,
-                            user=user,
-                        ),
-                    }
+            search_page = search_offer_groups_page(
+                query,
+                page=search_page_number,
+                condition=condition_filter,
+            )
+            results = build_result_rows(search_page.groups)
+            has_previous = search_page.page > 1
+            has_next = search_page.has_more
+            if has_previous:
+                previous_page_url = build_search_page_url(
+                    page=search_page.page - 1,
+                    search_text=search_text,
+                    cheapest_only=cheapest_only,
+                    max_price=max_price_input,
+                    condition_filter=condition_filter_input,
                 )
-            results = build_result_rows(enriched_groups)
+            if has_next:
+                next_page_url = build_search_page_url(
+                    page=search_page.page + 1,
+                    search_text=search_text,
+                    cheapest_only=cheapest_only,
+                    max_price=max_price_input,
+                    condition_filter=condition_filter_input,
+                )
         except ValueError as exc:
             error = str(exc)
 
@@ -3774,6 +3808,11 @@ async def home(
             "results": results,
             "searched": searched,
             "error": error,
+            "page": search_page_number,
+            "has_previous": has_previous,
+            "has_next": has_next,
+            "previous_page_url": previous_page_url,
+            "next_page_url": next_page_url,
         },
     )
 

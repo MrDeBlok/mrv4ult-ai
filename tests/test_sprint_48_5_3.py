@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from tests.search_mock_helpers import search_groups_page_from_offers
+
 from fastapi.testclient import TestClient
 
 from app import (
@@ -239,14 +241,12 @@ class TestReferenceLevelWatchDetail:
             condition="new",
         )
 
-    @patch("app.get_import_logs_by_message_ids", return_value={})
-    @patch("app.search_offers")
+    @patch("app.search_offer_groups_page")
     def test_search_page_links_grouped_row_to_reference_route(
         self,
-        mock_search_offers: MagicMock,
-        _mock_import_logs: MagicMock,
+        mock_search_offer_groups_page: MagicMock,
     ) -> None:
-        mock_search_offers.return_value = (PAtek_5990_OFFERS[:5], False)
+        mock_search_offer_groups_page.return_value = search_groups_page_from_offers(PAtek_5990_OFFERS[:5])
 
         client = TestClient(app)
         response = client.get("/?q=5990%2F1A")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 from database import contact_type_column_supported, get_client, is_business_dealer_relation
@@ -20,7 +21,9 @@ from condition_normalizer import (
 Record = dict[str, Any]
 WatchGroup = dict[str, Any]
 SEARCH_OFFERS_PAGE_SIZE = 1000
+SEARCH_GROUP_PAGE_SIZE = 50
 SEARCH_ACTIVE_OFFERS_RPC = "search_active_offers"
+SEARCH_ACTIVE_OFFER_GROUPS_RPC = "search_active_offer_groups"
 
 WATCH_SEARCH_FIELDS = ("brand", "reference", "model", "dial", "bracelet")
 
@@ -55,6 +58,99 @@ def read_query() -> str:
         print("Error: empty search query.", file=sys.stderr)
         sys.exit(1)
     return query
+
+
+@dataclass(frozen=True)
+class SearchGroupsPageResult:
+    """One page of brand+reference search groups for the web search index."""
+
+    groups: list[WatchGroup]
+    page: int
+    page_size: int
+    has_more: bool
+
+
+def normalize_search_page(value: str | int | None) -> int:
+    """Return a safe 1-based search page number."""
+    if value is None or value == "":
+        return 1
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, page)
+
+
+def search_offer_groups_page(
+    query: str,
+    *,
+    page: int = 1,
+    page_size: int = SEARCH_GROUP_PAGE_SIZE,
+    condition: str | None = None,
+) -> SearchGroupsPageResult:
+    """Load one page of grouped search results for the production web route."""
+    normalized_page = normalize_search_page(page)
+    safe_page_size = max(1, min(int(page_size), 200))
+    tokens, max_usd_price, cheapest_only = parse_query(query)
+    offset = (normalized_page - 1) * safe_page_size
+    payload = {
+        "search_tokens": _build_rpc_search_tokens(tokens),
+        "max_usd_price": max_usd_price,
+        "condition_filter": condition,
+        "page_limit": safe_page_size,
+        "page_offset": offset,
+        "filter_business_dealers": contact_type_column_supported(),
+        "cheapest_only": cheapest_only,
+    }
+    response = get_client().rpc(SEARCH_ACTIVE_OFFER_GROUPS_RPC, payload).execute()
+    result = _rpc_search_result(response.data)
+    raw_groups = result.get("groups") or []
+    groups = [
+        _convert_rpc_group_to_watch_group(raw_group)
+        for raw_group in raw_groups
+        if isinstance(raw_group, dict)
+    ]
+    return SearchGroupsPageResult(
+        groups=groups,
+        page=normalized_page,
+        page_size=safe_page_size,
+        has_more=bool(result.get("has_more")),
+    )
+
+
+def _convert_rpc_group_to_watch_group(raw_group: Record) -> WatchGroup:
+    brand = raw_group.get("brand") or ""
+    reference = raw_group.get("reference") or ""
+    return {
+        "watch_id": raw_group.get("watch_id"),
+        "watch": {
+            "brand": brand,
+            "reference": reference,
+        },
+        "offers": [],
+        "lowest_usd": raw_group.get("lowest_usd"),
+        "average_usd": None,
+        "highest_usd": None,
+        "offer_count": int(raw_group.get("offer_count") or 0),
+        "unique_dealers": int(raw_group.get("unique_dealers") or 0),
+        "conditions_available": _normalize_condition_categories(
+            raw_group.get("condition_categories")
+        ),
+    }
+
+
+def _normalize_condition_categories(categories: Any) -> list[str]:
+    if not categories:
+        return []
+    if isinstance(categories, str):
+        values = [categories]
+    elif isinstance(categories, list):
+        values = [str(value) for value in categories if value]
+    else:
+        return []
+    category_set = set(values)
+    order = (NEW_CONDITION, PRE_OWNED_CONDITION, UNKNOWN_CONDITION)
+    return [category for category in order if category in category_set]
 
 
 def search_offers(
