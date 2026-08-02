@@ -17,11 +17,12 @@ from reference_knowledge import (
     find_suspicious_vacheron_ap_mappings,
     import_reference_knowledge_dataset,
     invalidate_authoritative_reference_cache,
+    is_vacheron_overseas_e_suffix_reference,
     is_vacheron_overseas_reference,
     resolve_authoritative_reference_brand,
 )
 from watch_knowledge import enrich_parsed_watch, invalidate_reference_brand_mapping_cache, resolve_reference_brand_identity
-from watch_parser import parse_watch_line
+from watch_parser import parse_message, parse_watch_line
 
 VACHERON = "Vacheron Constantin"
 AUDEMARS = "Audemars Piguet"
@@ -180,6 +181,81 @@ class TestVacheronConflictResolution:
         assert resolution.source == BRAND_SOURCE_REFERENCE
 
 
+class TestVacheronOverseasESuffixReferences:
+    EXPECTED_REFERENCE = "4000E/000R-B438"
+
+    @pytest.mark.parametrize(
+        ("line", "expected_year", "expected_price", "expected_currency"),
+        [
+            ("4000E/000R-B438 2018 full HKD187k", 2018, 187000, "HKD"),
+            ("4000E/000R-B438 2019 full HKD190k", 2019, 190000, "HKD"),
+            ("4000E/000R-B438 2023 full HKD208k", 2023, 208000, "HKD"),
+            ("4000E/000R-B438 2024 full HKD233k", 2024, 233000, "HKD"),
+        ],
+    )
+    def test_full_reference_parses_from_offer_lines(
+        self,
+        line: str,
+        expected_year: int,
+        expected_price: int,
+        expected_currency: str,
+    ) -> None:
+        watch = _enrich_line(line, brand=VACHERON)
+
+        assert watch["reference"] == self.EXPECTED_REFERENCE
+        assert watch["brand"] == VACHERON
+        assert watch["production_year"] == expected_year
+        assert watch["original_price"] == expected_price
+        assert watch["original_currency"] == expected_currency
+        assert watch["reference"] != "4000E"
+
+    def test_lowercase_and_spaced_reference_normalizes_to_full_reference(self) -> None:
+        watch = _enrich_line(
+            "4000e / 000r-b438 2020 full hkd187k",
+            brand=VACHERON,
+        )
+
+        assert watch["reference"] == self.EXPECTED_REFERENCE
+        assert watch["brand"] == VACHERON
+        assert watch["original_price"] == 187000
+        assert watch["original_currency"] == "HKD"
+
+    def test_dealer_list_parses_all_four_offers_under_full_reference(self) -> None:
+        message = """Vacheron Constantin
+4000E/000R-B438 2018 full HKD187k
+4000E/000R-B438 2019 full HKD190k
+4000E/000R-B438 2023 full HKD208k
+4000E/000R-B438 2024 full HKD233k"""
+
+        watches = [enrich_parsed_watch(watch) for watch in parse_message(message)["watches"]]
+
+        assert len(watches) == 4
+        assert {watch["reference"] for watch in watches} == {self.EXPECTED_REFERENCE}
+        assert all(watch["brand"] == VACHERON for watch in watches)
+        assert [watch["production_year"] for watch in watches] == [2018, 2019, 2023, 2024]
+        assert [watch["original_price"] for watch in watches] == [187000, 190000, 208000, 233000]
+        assert all(watch["original_currency"] == "HKD" for watch in watches)
+        assert "4000E" not in {watch["reference"] for watch in watches}
+
+    def test_e_suffix_family_detection(self) -> None:
+        assert is_vacheron_overseas_e_suffix_reference(self.EXPECTED_REFERENCE) is True
+        assert is_vacheron_overseas_reference(self.EXPECTED_REFERENCE) is True
+
+    def test_authoritative_mapping_resolves_full_reference(self) -> None:
+        brand, confident = resolve_authoritative_reference_brand(self.EXPECTED_REFERENCE)
+
+        assert brand == VACHERON
+        assert confident is True
+
+    def test_full_brand_specific_reference_beats_generic_prefix(self) -> None:
+        watch = _enrich_line(f"{self.EXPECTED_REFERENCE} 180k usd")
+
+        assert watch["reference"] == self.EXPECTED_REFERENCE
+        assert watch["brand"] == VACHERON
+        assert watch["reference"] != "4000E"
+        assert infer_brand_from_reference_heuristic(self.EXPECTED_REFERENCE) == VACHERON
+
+
 class TestReferenceKnowledgeImport:
     def test_authoritative_dataset_resolves_vacheron_references(self) -> None:
         brand, confident = resolve_authoritative_reference_brand("4520V")
@@ -195,8 +271,8 @@ class TestReferenceKnowledgeImport:
         )
 
         assert report["dry_run"] is True
-        assert report["imported"] == 12
-        assert len(report["proposed_mappings"]) == 12
+        assert report["imported"] == 13
+        assert len(report["proposed_mappings"]) == 13
 
     def test_find_suspicious_vacheron_ap_mappings(self) -> None:
         suspects = find_suspicious_vacheron_ap_mappings(

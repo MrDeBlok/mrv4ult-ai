@@ -203,7 +203,7 @@ def infer_brand_from_reference_heuristic(reference: str) -> str | None:
         return "Rolex"
     if re.fullmatch(r"\d{5}[A-Z]{2,4}", normalized):
         return "Audemars Piguet"
-    if re.fullmatch(r"\d{4}(?![VF])[A-Z]{1,4}", normalized):
+    if re.fullmatch(r"\d{4}(?![VFE])[A-Z]{1,4}", normalized):
         return "Audemars Piguet"
     if re.fullmatch(r"[3456]\d{3}", normalized):
         return "Patek Philippe"

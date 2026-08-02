@@ -26,6 +26,10 @@ VACHERON_OVERSEAS_F_SUFFIX_PATTERN = re.compile(
     r"^\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?$",
     re.I,
 )
+VACHERON_OVERSEAS_E_SUFFIX_PATTERN = re.compile(
+    r"^\d{4}E(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?$",
+    re.I,
+)
 
 
 @dataclass
@@ -75,10 +79,20 @@ def is_vacheron_overseas_f_suffix_reference(reference: str | None) -> bool:
     return bool(VACHERON_OVERSEAS_F_SUFFIX_PATTERN.fullmatch(token))
 
 
+def is_vacheron_overseas_e_suffix_reference(reference: str | None) -> bool:
+    """Return True for the high-confidence Vacheron Overseas E-suffix family."""
+    token = normalize_reference_for_lookup(reference)
+    if not token:
+        return False
+    return bool(VACHERON_OVERSEAS_E_SUFFIX_PATTERN.fullmatch(token))
+
+
 def is_vacheron_overseas_reference(reference: str | None) -> bool:
-    """Return True for high-confidence Vacheron Overseas V- or F-suffix families."""
-    return is_vacheron_overseas_v_suffix_reference(reference) or is_vacheron_overseas_f_suffix_reference(
-        reference
+    """Return True for high-confidence Vacheron Overseas V-, F-, or E-suffix families."""
+    return (
+        is_vacheron_overseas_v_suffix_reference(reference)
+        or is_vacheron_overseas_f_suffix_reference(reference)
+        or is_vacheron_overseas_e_suffix_reference(reference)
     )
 
 
@@ -209,6 +223,13 @@ def resolve_authoritative_reference_brand(reference: str | None) -> tuple[str | 
             str(reference),
             VACHERON_CONSTANTIN,
             family="overseas_f_suffix",
+        )
+        return VACHERON_CONSTANTIN, True
+    if is_vacheron_overseas_e_suffix_reference(reference):
+        record_family_pattern_hit(
+            str(reference),
+            VACHERON_CONSTANTIN,
+            family="overseas_e_suffix",
         )
         return VACHERON_CONSTANTIN, True
     return None, False

@@ -246,6 +246,15 @@ def _normalize_parser_text(text: str) -> str:
     normalized = _normalize_glued_currency_amounts(normalized)
     return _normalize_glued_amount_currency_symbols(normalized)
 
+
+_REFERENCE_SEPARATOR_SPACING_PATTERN = re.compile(r"\s*([/-])\s*")
+
+
+def _normalize_reference_separators(text: str) -> str:
+    """Collapse spaces around slash/hyphen separators in reference tokens."""
+    return _REFERENCE_SEPARATOR_SPACING_PATTERN.sub(r"\1", text)
+
+
 REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b(\d{3}\.\d{3})\b"), "A. Lange & Söhne"),
     (re.compile(r"\b(RM\s?\d{2,3}(?:[-\s/]\d{2,3})?)\b", re.I), "Richard Mille"),
@@ -255,6 +264,7 @@ REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"\b([12]\d{5}[A-Za-z]{0,4})\b", re.I), "Rolex"),
     (re.compile(r"\b(\d{4}V(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b", re.I), "Vacheron Constantin"),
     (re.compile(r"\b(\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b", re.I), "Vacheron Constantin"),
+    (re.compile(r"\b(\d{4}E(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b", re.I), "Vacheron Constantin"),
     (
         re.compile(
             rf"\b(\d{{5}}(?!{CURRENCY_CODE_PATTERN}\b)[A-Za-z]{{2,4}})\b",
@@ -262,7 +272,7 @@ REFERENCE_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
         ),
         "Audemars Piguet",
     ),
-    (re.compile(r"\b(\d{4}(?![VvFf])[A-Za-z]{1,4})\b", re.I), None),
+    (re.compile(r"\b(\d{4}(?![VvFfEe])[A-Za-z]{1,4})\b", re.I), None),
     (re.compile(r"\b([3456]\d{3})\b", re.I), "Patek Philippe"),
     (re.compile(r"\b(\d{5})\b", re.I), None),
 ]
@@ -1642,7 +1652,7 @@ def _extract_reference(
     if not skip_price_dominant_guard and is_price_dominant_line(text):
         return None, None, False
 
-    normalized_text = normalize_glued_year_metadata(text)
+    normalized_text = _normalize_reference_separators(normalize_glued_year_metadata(text))
     ref_text = mask_year_suffix_spans(_mask_price_spans(normalized_text))
     price, _ = _extract_price(normalized_text)
 
@@ -1657,34 +1667,59 @@ def _extract_reference(
         if not _reference_is_blocked(reference, price, text=normalized_text):
             return reference, brand or brand_hint, True
 
-    for pattern, brand_hint_from_pattern in REFERENCE_PATTERNS:
-        match = pattern.search(ref_text)
-        if not match:
-            continue
-        if is_embedded_in_compound_reference_token(
-            ref_text,
-            match.start(1),
-            match.end(1),
-        ):
-            continue
-        reference = match.group(1).upper().replace("  ", " ").strip()
-        if _reference_is_blocked(reference, price, text=normalized_text):
-            continue
-        if is_blocked_year_reference(reference):
-            continue
-        from offer_line_classifier import _numeric_reference_is_price_artifact
-
-        if _numeric_reference_is_price_artifact(normalized_text, reference):
-            continue
-        inferred_brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
-        if enforce_brand_context and brand_hint:
-            if inferred_brand and inferred_brand != brand_hint:
+    pattern_candidates: list[tuple[bool, int, int, str, str | None, bool]] = []
+    for pattern_index, (pattern, brand_hint_from_pattern) in enumerate(REFERENCE_PATTERNS):
+        for match in pattern.finditer(ref_text):
+            if is_embedded_in_compound_reference_token(
+                ref_text,
+                match.start(1),
+                match.end(1),
+            ):
                 continue
-            return reference, brand_hint, False
-        brand = inferred_brand
-        if brand is None and brand_hint:
-            brand = brand_hint
-        return reference, brand, False
+            reference = match.group(1).upper().replace("  ", " ").strip()
+            if _reference_is_blocked(reference, price, text=normalized_text):
+                continue
+            if is_blocked_year_reference(reference):
+                continue
+            from offer_line_classifier import _numeric_reference_is_price_artifact
+
+            if _numeric_reference_is_price_artifact(normalized_text, reference):
+                continue
+            inferred_brand = brand_hint_from_pattern or _infer_brand_from_reference(reference)
+            if enforce_brand_context and brand_hint:
+                if inferred_brand and inferred_brand != brand_hint:
+                    continue
+                brand = brand_hint
+            else:
+                brand = inferred_brand
+                if brand is None and brand_hint:
+                    brand = brand_hint
+            pattern_candidates.append(
+                (
+                    brand_hint_from_pattern is not None,
+                    len(reference.replace(" ", "")),
+                    -pattern_index,
+                    reference,
+                    brand,
+                    False,
+                )
+            )
+
+    if pattern_candidates:
+        (
+            _brand_specific,
+            _length,
+            _pattern_index,
+            reference,
+            brand,
+            high_confidence,
+        ) = max(
+            pattern_candidates,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+        if enforce_brand_context and brand_hint:
+            return reference, brand_hint, high_confidence
+        return reference, brand, high_confidence
     if enforce_brand_context and brand_hint:
         return None, None, False
     return None, None, False

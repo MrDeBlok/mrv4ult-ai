@@ -131,6 +131,7 @@ BRAND_KNOWLEDGE: dict[str, BrandKnowledge] = {
         reference_patterns=(
             r"\b(\d{4}V(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b",
             r"\b(\d{4}F(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b",
+            r"\b(\d{4}E(?:/[A-Z0-9]+)?(?:-[A-Z0-9]+)?)\b",
         ),
         collection_aliases={
             "overseas": "Overseas",

@@ -130,5 +130,16 @@
     "source": "authority_vacheron_overseas",
     "source_confidence": "high",
     "status": "active"
+  },
+  {
+    "brand": "Vacheron Constantin",
+    "reference": "4000E/000R-B438",
+    "normalized_reference": "4000E/000R-B438",
+    "collection": "Overseas",
+    "model": "Overseas Ultra-thin",
+    "reference_family": "overseas_e_suffix",
+    "source": "authority_vacheron_overseas",
+    "source_confidence": "high",
+    "status": "active"
   }
 ]
