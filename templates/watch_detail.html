@@ -141,15 +141,71 @@
     </div>
 </section>
 
-<section class="card shadow-sm">
-    <div class="card-header bg-white py-3">
+<section class="card shadow-sm" id="activeOffersSection" data-selection-storage-key="mrvault:watch-detail-selection:{{ watch.brand }}:{{ watch.reference }}">
+    <div class="card-header bg-white py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
         <h2 class="h5 mb-0">Active offers</h2>
+        {% if is_admin(current_user(request)) and offers %}
+        <div id="bulkOfferActions" class="d-flex align-items-center gap-3">
+            <span id="selectedOfferCount" class="text-muted small" aria-live="polite" hidden>0 offers selected</span>
+            <div class="dropdown">
+                <button
+                    class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                    type="button"
+                    id="bulkActionsMenuButton"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                    disabled
+                >
+                    Actions
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li>
+                        <button
+                            type="button"
+                            class="dropdown-item text-danger"
+                            id="bulkRemoveMenuItem"
+                            data-bs-toggle="modal"
+                            data-bs-target="#bulkRemoveOfferModal"
+                            disabled
+                        >
+                            Remove selected offers
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        {% endif %}
     </div>
+    {% if offer_removed %}
+    <div class="card-body pb-0">
+        <div class="alert alert-success mb-0" role="alert">Offer removed from active market data.</div>
+    </div>
+    {% endif %}
+    {% if offer_bulk_removed_count %}
+    <div class="card-body pb-0">
+        <div class="alert alert-success mb-0" role="alert">{{ offer_bulk_removed_count }} offers removed from active market data.</div>
+    </div>
+    {% endif %}
+    {% if offer_remove_error %}
+    <div class="card-body pb-0">
+        <div class="alert alert-danger mb-0" role="alert">{{ offer_remove_error }}</div>
+    </div>
+    {% endif %}
     {% if offers %}
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
+                    {% if is_admin(current_user(request)) %}
+                    <th scope="col" class="text-center" style="width: 2.5rem;">
+                        <input
+                            type="checkbox"
+                            class="form-check-input"
+                            id="selectAllOffersOnPage"
+                            aria-label="Select all on this page"
+                        >
+                    </th>
+                    {% endif %}
                     <th scope="col">Dealer name</th>
                     <th scope="col">Dealer WhatsApp</th>
                     <th scope="col">Group</th>
@@ -160,11 +216,27 @@
                     <th scope="col">Condition</th>
                     <th scope="col">Received at</th>
                     <th scope="col">Source</th>
+                    {% if is_admin(current_user(request)) %}
+                    <th scope="col">Actions</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
                 {% for offer in offers %}
                 <tr>
+                    {% if is_admin(current_user(request)) %}
+                    <td class="text-center">
+                        <input
+                            type="checkbox"
+                            class="form-check-input offer-select-checkbox"
+                            value="{{ offer.offer_id }}"
+                            aria-label="Select offer from {{ offer.dealer_name }}"
+                            data-dealer-name="{{ offer.dealer_name }}"
+                            data-brand="{{ watch.brand }}"
+                            data-reference="{{ watch.reference }}"
+                        >
+                    </td>
+                    {% endif %}
                     <td>{{ offer.dealer_name }}</td>
                     <td>{{ offer.dealer_whatsapp }}</td>
                     <td>{{ offer.group_name }}</td>
@@ -181,15 +253,365 @@
                         <span class="text-muted">—</span>
                         {% endif %}
                     </td>
+                    {% if is_admin(current_user(request)) %}
+                    <td class="text-nowrap">
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-outline-danger remove-offer-button"
+                            data-bs-toggle="modal"
+                            data-bs-target="#removeOfferModal"
+                            data-offer-id="{{ offer.offer_id }}"
+                            data-dealer-name="{{ offer.dealer_name }}"
+                            data-brand="{{ watch.brand }}"
+                            data-reference="{{ watch.reference }}"
+                            data-original-price="{{ offer.original_price }}"
+                            data-received-at="{{ offer.received_at }}"
+                            data-source-url="{{ offer.source_url or '' }}"
+                        >
+                            Remove offer
+                        </button>
+                    </td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+    {% set pagination = pagination | default({}) %}
+    {% if pagination.total_pages | default(1) > 1 or pagination.total_items | default(0) > 0 %}
+    <div class="card-footer bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-3">
+        <div class="text-muted small">{{ pagination.range_label | default('') }}</div>
+        <nav aria-label="Active offers pagination">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item {% if not pagination.previous_url %}disabled{% endif %}">
+                    {% if pagination.previous_url %}
+                    <a class="page-link" href="{{ pagination.previous_url }}">Previous</a>
+                    {% else %}
+                    <span class="page-link">Previous</span>
+                    {% endif %}
+                </li>
+                <li class="page-item active" aria-current="page">
+                    <span class="page-link">Page {{ pagination.page | default(1) }}</span>
+                </li>
+                <li class="page-item {% if not pagination.next_url %}disabled{% endif %}">
+                    {% if pagination.next_url %}
+                    <a class="page-link" href="{{ pagination.next_url }}">Next</a>
+                    {% else %}
+                    <span class="page-link">Next</span>
+                    {% endif %}
+                </li>
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+    {% if is_admin(current_user(request)) %}
+    <div class="modal fade" id="bulkRemoveOfferModal" tabindex="-1" aria-labelledby="bulkRemoveOfferModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" id="bulkRemoveOfferForm" action="/offers/bulk-remove">
+                    <input type="hidden" name="confirm" value="1">
+                    <input type="hidden" name="return_to" value="{{ watch_detail_return_url | default(detail_base_url) }}">
+                    <div id="bulkRemoveOfferIds"></div>
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="bulkRemoveOfferModalLabel">Remove selected offers</h2>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">
+                            This removes the selected offers from active market data without deleting the database records.
+                        </p>
+                        <div class="alert alert-warning small" role="alert">
+                            This action affects active market data for <strong id="bulkRemoveOfferCount">0</strong> offers.
+                        </div>
+                        <ul id="bulkRemoveOfferPreview" class="small mb-3"></ul>
+                        <div class="mb-3">
+                            <label for="bulk_removal_reason" class="form-label">Reason</label>
+                            <select id="bulk_removal_reason" name="removal_reason" class="form-select" required>
+                                <option value="" selected disabled>Select a reason</option>
+                                {% for value, label in removal_reasons | default([]) %}
+                                <option value="{{ value }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-0">
+                            <label for="bulk_removal_reason_other" class="form-label">Other details</label>
+                            <input id="bulk_removal_reason_other" type="text" name="removal_reason_other" class="form-control" placeholder="Required when Other is selected">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Remove selected offers</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="removeOfferModal" tabindex="-1" aria-labelledby="removeOfferModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" id="removeOfferForm" action="">
+                    <input type="hidden" name="confirm" value="1">
+                    <input type="hidden" name="return_to" value="{{ watch_detail_return_url | default(detail_base_url) }}">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="removeOfferModalLabel">Remove offer</h2>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">
+                            This removes the offer from active market data without deleting the database record.
+                        </p>
+                        <dl class="row mb-3 small">
+                            <dt class="col-sm-4">Dealer</dt>
+                            <dd class="col-sm-8" id="removeOfferDealer">—</dd>
+                            <dt class="col-sm-4">Brand / reference</dt>
+                            <dd class="col-sm-8" id="removeOfferReference">—</dd>
+                            <dt class="col-sm-4">Original price</dt>
+                            <dd class="col-sm-8" id="removeOfferPrice">—</dd>
+                            <dt class="col-sm-4">Received</dt>
+                            <dd class="col-sm-8" id="removeOfferReceived">—</dd>
+                            <dt class="col-sm-4">Source</dt>
+                            <dd class="col-sm-8" id="removeOfferSource">—</dd>
+                        </dl>
+                        <div class="mb-3">
+                            <label for="removal_reason" class="form-label">Reason</label>
+                            <select id="removal_reason" name="removal_reason" class="form-select" required>
+                                <option value="" selected disabled>Select a reason</option>
+                                {% for value, label in removal_reasons | default([]) %}
+                                <option value="{{ value }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-0">
+                            <label for="removal_reason_other" class="form-label">Other details</label>
+                            <input id="removal_reason_other" type="text" name="removal_reason_other" class="form-control" placeholder="Required when Other is selected">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Remove offer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     {% else %}
     <div class="card-body">
         <p class="text-muted mb-0">No active offers for this filter.</p>
     </div>
     {% endif %}
 </section>
+{% if is_admin(current_user(request)) %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    var section = document.getElementById("activeOffersSection");
+    var storageKey = section ? section.getAttribute("data-selection-storage-key") : "";
+    var checkboxes = Array.prototype.slice.call(document.querySelectorAll(".offer-select-checkbox"));
+    var selectAll = document.getElementById("selectAllOffersOnPage");
+    var selectedCountNode = document.getElementById("selectedOfferCount");
+    var bulkActionsButton = document.getElementById("bulkActionsMenuButton");
+    var bulkRemoveMenuItem = document.getElementById("bulkRemoveMenuItem");
+    var bulkRemoveModal = document.getElementById("bulkRemoveOfferModal");
+    var bulkRemoveForm = document.getElementById("bulkRemoveOfferForm");
+    var bulkRemoveIdsNode = document.getElementById("bulkRemoveOfferIds");
+    var bulkRemoveCountNode = document.getElementById("bulkRemoveOfferCount");
+    var bulkRemovePreviewNode = document.getElementById("bulkRemoveOfferPreview");
+    var removedOfferIds = {{ removed_offer_ids | default([]) | tojson }};
+
+    function getVisibleOfferIds() {
+        return checkboxes.map(function (checkbox) {
+            return checkbox.value;
+        });
+    }
+
+    function getSelectedIdsOnPage() {
+        return checkboxes.filter(function (checkbox) {
+            return checkbox.checked;
+        }).map(function (checkbox) {
+            return checkbox.value;
+        });
+    }
+
+    function mergeStoredSelectionWithPage() {
+        var visibleIds = getVisibleOfferIds();
+        var stored = readStoredSelection();
+        var offPageSelected = stored.filter(function (offerId) {
+            return visibleIds.indexOf(offerId) === -1;
+        });
+        return offPageSelected.concat(getSelectedIdsOnPage()).filter(function (offerId, index, array) {
+            return array.indexOf(offerId) === index;
+        });
+    }
+
+    function removeIdsFromStoredSelection(idsToRemove) {
+        if (!idsToRemove.length) {
+            return;
+        }
+        var removeSet = {};
+        idsToRemove.forEach(function (offerId) {
+            removeSet[offerId] = true;
+        });
+        writeStoredSelection(readStoredSelection().filter(function (offerId) {
+            return !removeSet[offerId];
+        }));
+    }
+
+    function readStoredSelection() {
+        if (!storageKey || !window.sessionStorage) {
+            return [];
+        }
+        try {
+            var raw = window.sessionStorage.getItem(storageKey);
+            if (!raw) {
+                return [];
+            }
+            var parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function writeStoredSelection(selectedIds) {
+        if (!storageKey || !window.sessionStorage) {
+            return;
+        }
+        window.sessionStorage.setItem(storageKey, JSON.stringify(selectedIds));
+    }
+
+    function getSelectedIds() {
+        return mergeStoredSelectionWithPage();
+    }
+
+    function updateSelectionUi() {
+        var mergedSelection = mergeStoredSelectionWithPage();
+        writeStoredSelection(mergedSelection);
+        var selectedCount = mergedSelection.length;
+        var onPageSelectedCount = getSelectedIdsOnPage().length;
+
+        if (selectedCountNode) {
+            if (selectedCount > 0) {
+                selectedCountNode.hidden = false;
+                selectedCountNode.textContent = selectedCount + (selectedCount === 1 ? " offer selected" : " offers selected");
+            } else {
+                selectedCountNode.hidden = true;
+                selectedCountNode.textContent = "0 offers selected";
+            }
+        }
+        if (bulkActionsButton) {
+            bulkActionsButton.disabled = selectedCount === 0;
+        }
+        if (bulkRemoveMenuItem) {
+            bulkRemoveMenuItem.disabled = selectedCount === 0;
+        }
+        if (selectAll) {
+            var visibleCount = checkboxes.length;
+            var allSelected = visibleCount > 0 && onPageSelectedCount === visibleCount;
+            selectAll.checked = allSelected;
+            selectAll.indeterminate = onPageSelectedCount > 0 && !allSelected;
+        }
+    }
+
+    function restoreSelectionFromStorage() {
+        var storedIds = readStoredSelection();
+        if (!storedIds.length) {
+            return;
+        }
+        var storedSet = {};
+        storedIds.forEach(function (offerId) {
+            storedSet[offerId] = true;
+        });
+        checkboxes.forEach(function (checkbox) {
+            checkbox.checked = !!storedSet[checkbox.value];
+        });
+    }
+
+    function populateBulkRemoveModal() {
+        var selectedIds = readStoredSelection();
+        if (bulkRemoveCountNode) {
+            bulkRemoveCountNode.textContent = String(selectedIds.length);
+        }
+        if (bulkRemovePreviewNode) {
+            bulkRemovePreviewNode.innerHTML = "";
+            var previewCheckboxes = checkboxes.filter(function (checkbox) {
+                return selectedIds.indexOf(checkbox.value) !== -1;
+            });
+            previewCheckboxes.slice(0, 5).forEach(function (checkbox) {
+                var item = document.createElement("li");
+                var brand = checkbox.getAttribute("data-brand") || "";
+                var reference = checkbox.getAttribute("data-reference") || "";
+                var dealer = checkbox.getAttribute("data-dealer-name") || "Unknown dealer";
+                item.textContent = dealer + " — " + (brand + " " + reference).trim();
+                bulkRemovePreviewNode.appendChild(item);
+            });
+            if (selectedIds.length > previewCheckboxes.slice(0, 5).length) {
+                var remainder = document.createElement("li");
+                remainder.textContent = "…and " + (selectedIds.length - Math.min(5, previewCheckboxes.length)) + " more";
+                bulkRemovePreviewNode.appendChild(remainder);
+            }
+        }
+    }
+
+    removeIdsFromStoredSelection(removedOfferIds);
+    restoreSelectionFromStorage();
+    updateSelectionUi();
+
+    checkboxes.forEach(function (checkbox) {
+        checkbox.addEventListener("change", updateSelectionUi);
+    });
+    if (selectAll) {
+        selectAll.addEventListener("change", function () {
+            checkboxes.forEach(function (checkbox) {
+                checkbox.checked = selectAll.checked;
+            });
+            updateSelectionUi();
+        });
+    }
+    if (bulkRemoveModal) {
+        bulkRemoveModal.addEventListener("show.bs.modal", populateBulkRemoveModal);
+    }
+    if (bulkRemoveForm && bulkRemoveIdsNode) {
+        bulkRemoveForm.addEventListener("submit", function () {
+            bulkRemoveIdsNode.innerHTML = "";
+            readStoredSelection().forEach(function (offerId) {
+                var input = document.createElement("input");
+                input.type = "hidden";
+                input.name = "offer_ids";
+                input.value = offerId;
+                bulkRemoveIdsNode.appendChild(input);
+            });
+        });
+    }
+
+    var modal = document.getElementById("removeOfferModal");
+    if (!modal) {
+        return;
+    }
+    modal.addEventListener("show.bs.modal", function (event) {
+        var button = event.relatedTarget;
+        if (!button) {
+            return;
+        }
+        var offerId = button.getAttribute("data-offer-id") || "";
+        var form = document.getElementById("removeOfferForm");
+        if (form) {
+            form.action = "/offers/" + encodeURIComponent(offerId) + "/remove";
+        }
+        document.getElementById("removeOfferDealer").textContent = button.getAttribute("data-dealer-name") || "—";
+        var brand = button.getAttribute("data-brand") || "";
+        var reference = button.getAttribute("data-reference") || "";
+        document.getElementById("removeOfferReference").textContent = (brand + " " + reference).trim() || "—";
+        document.getElementById("removeOfferPrice").textContent = button.getAttribute("data-original-price") || "—";
+        document.getElementById("removeOfferReceived").textContent = button.getAttribute("data-received-at") || "—";
+        var sourceUrl = button.getAttribute("data-source-url") || "";
+        var sourceNode = document.getElementById("removeOfferSource");
+        if (sourceUrl) {
+            sourceNode.innerHTML = '<a href="' + sourceUrl + '">View original</a>';
+        } else {
+            sourceNode.textContent = "—";
+        }
+    });
+});
+</script>
+{% endif %}
 {% endblock %}

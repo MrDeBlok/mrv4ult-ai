@@ -103,6 +103,8 @@ from database import (
     get_client_profile,
     get_dealer_by_id,
     get_import_log,
+    get_offer_by_id,
+    get_offer_statuses_by_ids,
     get_import_logs_by_ids,
     get_import_logs_by_message_ids,
     get_message_by_id,
@@ -157,6 +159,9 @@ from database import (
     OfferSourceIdentityConflictError,
     resolve_unknown_brand_with_alias,
     resolve_unknown_nickname_with_alias,
+    restore_offer,
+    soft_remove_offer,
+    bulk_soft_remove_offers,
     watch_knowledge_supported,
     watch_identification_supported,
     parser_learning_rules_supported,
@@ -210,7 +215,7 @@ from dealer_intelligence import (
     paginate_dealer_list_rows,
 )
 from dashboard_data import load_trading_desk
-from performance_profiler import PROFILE_PAGES, build_performance_report
+from performance_profiler import PROFILE_PAGES, build_performance_report, record_profiler_phase
 from market_requests import load_market_request_detail, load_market_request_rows
 from match_detail import load_match_detail
 from knowledge_intelligence import build_unknown_brand_rows, build_unknown_nickname_rows
@@ -281,6 +286,7 @@ from user_visibility import (
     filter_contacts_page_for_user,
     filter_imports_for_user,
 )
+from offer_removal import OFFER_REMOVAL_REASON_OPTIONS, is_manually_removed_offer, normalize_removal_reason
 from request_profit import (
     attach_profit_to_matches,
     build_request_profit_summary,
@@ -305,11 +311,16 @@ from search import (
     summarize_conditions_available,
 )
 from watch_detail_filters import (
+    WATCH_DETAIL_PAGE_SIZE,
     enrich_watch_detail_offer_recency,
     offer_matches_watch_detail_date_filter,
+    offers_missing_received_at,
+    paginate_watch_detail_offers,
     parse_watch_detail_date_filter,
+    parse_watch_detail_page,
     parse_watch_detail_sort_filter,
     resolve_watch_detail_date_range,
+    resolve_watch_detail_page,
     sort_offers_for_watch_detail,
 )
 
@@ -996,6 +1007,7 @@ def build_watch_reference_url(
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str | None = None,
+    page: int | None = None,
 ) -> str | None:
     """Build the canonical brand + reference watch detail URL."""
     if not brand or not reference:
@@ -1017,6 +1029,9 @@ def build_watch_reference_url(
     sort_value = parse_watch_detail_sort_filter(sort)
     if sort_value:
         params["sort"] = sort_value
+    page_value = parse_watch_detail_page(page) if page is not None else 1
+    if page_value > 1:
+        params["page"] = str(page_value)
     return f"/watch-reference?{urlencode(params)}"
 
 
@@ -1091,6 +1106,94 @@ def build_watch_reference_condition_urls(
         "pre-owned": filter_urls["condition_pre_owned"],
         "unknown": filter_urls["condition_unknown"],
     }
+
+
+def build_watch_detail_pagination(
+    *,
+    brand: str,
+    reference: str,
+    condition: str,
+    date: str,
+    date_from: str,
+    date_to: str,
+    sort: str,
+    page: int,
+    total_pages: int,
+    total_items: int,
+    page_size: int = WATCH_DETAIL_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Build pagination metadata and navigation URLs for watch detail offers."""
+    start_index = ((page - 1) * page_size) + 1 if total_items else 0
+    end_index = min(page * page_size, total_items)
+
+    def _page_url(target_page: int) -> str:
+        return (
+            build_watch_reference_url(
+                brand,
+                reference,
+                condition=condition,
+                date=date,
+                date_from=date_from,
+                date_to=date_to,
+                sort=sort,
+                page=target_page,
+            )
+            or "/"
+        )
+
+    return {
+        "page": page,
+        "total_pages": total_pages,
+        "total_items": total_items,
+        "page_size": page_size,
+        "start_index": start_index,
+        "end_index": end_index,
+        "range_label": (
+            f"{start_index}–{end_index} of {total_items} offers"
+            if total_items
+            else "0 offers"
+        ),
+        "previous_url": _page_url(page - 1) if page > 1 else None,
+        "next_url": _page_url(page + 1) if page < total_pages else None,
+        "current_url": _page_url(page),
+    }
+
+
+def filter_watch_detail_offers_for_stats(
+    brand: str,
+    reference: str,
+    *,
+    condition_filter: str | None,
+    date_range: Any,
+) -> list[dict[str, Any]]:
+    """Return filtered watch-detail offers without source enrichment."""
+    offers = [
+        normalize_watch_detail_offer(offer)
+        for offer in get_active_offers_for_brand_reference(brand, reference)
+    ]
+    condition_filtered_offers = [
+        offer
+        for offer in offers
+        if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+    ]
+    if date_range is not None:
+        recency_targets = offers_missing_received_at(condition_filtered_offers)
+        if recency_targets:
+            import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = (
+                load_offer_source_import_log_lookups(recency_targets)
+            )
+            condition_filtered_offers = enrich_watch_detail_offer_recency(
+                condition_filtered_offers,
+                import_logs_by_message_id=import_logs_by_message_id,
+                import_logs_by_id=import_logs_by_id,
+                import_logs_by_offer_id=import_logs_by_offer_id,
+            )
+    filtered_offers = [
+        offer
+        for offer in condition_filtered_offers
+        if offer_matches_watch_detail_date_filter(offer, date_range)
+    ]
+    return filtered_offers
 
 
 def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1225,6 +1328,7 @@ def build_offer_rows(
         watch = offer.get("watch") or {}
         rows.append(
             {
+                "offer_id": offer.get("id"),
                 "dealer_name": dealer.get("display_name") or "Unknown dealer",
                 "dealer_whatsapp": dealer.get("phone_number") or dealer.get("whatsapp_id") or "N/A",
                 "group_name": offer.get("group_name") or "N/A",
@@ -1299,6 +1403,7 @@ def _render_watch_reference_detail(
     date_from_input: str,
     date_to_input: str,
     sort_filter_input: str = "",
+    page_input: str = "1",
 ) -> HTMLResponse:
     try:
         condition_filter = parse_watch_detail_condition_filter(condition_filter_input)
@@ -1319,6 +1424,20 @@ def _render_watch_reference_detail(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     sort_filter = parse_watch_detail_sort_filter(sort_filter_input)
+    requested_page = parse_watch_detail_page(page_input)
+    watch_detail_return_url = (
+        build_watch_reference_url(
+            brand,
+            reference,
+            condition=condition_filter_input,
+            date=date_filter,
+            date_from=date_from_input,
+            date_to=date_to_input,
+            sort=sort_filter,
+            page=requested_page,
+        )
+        or "/"
+    )
     detail_base_url = build_watch_reference_url(brand, reference) or "/"
     filter_urls = build_watch_reference_filter_urls(
         brand,
@@ -1342,6 +1461,18 @@ def _render_watch_reference_detail(
         "watch": build_reference_detail_display(brand, reference, []),
         "stats": build_watch_stats([]),
         "offers": [],
+        "pagination": build_watch_detail_pagination(
+            brand=brand,
+            reference=reference,
+            condition=condition_filter_input,
+            date=date_filter,
+            date_from=date_from_input,
+            date_to=date_to_input,
+            sort=sort_filter,
+            page=1,
+            total_pages=1,
+            total_items=0,
+        ),
         "condition_filter": condition_filter_input,
         "date_filter": date_filter,
         "date_from": date_from_input,
@@ -1352,45 +1483,96 @@ def _render_watch_reference_detail(
         "filter_urls": filter_urls,
         "brand_value": brand,
         "reference_value": reference,
+        "watch_detail_return_url": watch_detail_return_url,
+        "removal_reasons": OFFER_REMOVAL_REASON_OPTIONS,
+        "offer_removed": request.query_params.get("removed") == "1",
+        "offer_bulk_removed_count": _parse_positive_int(request.query_params.get("bulk_removed")),
+        "offer_remove_error": request.query_params.get("remove_error"),
+        "removed_offer_ids": _parse_removed_offer_ids(request.query_params),
         "database_unavailable": False,
         "database_unavailable_message": DATABASE_UNAVAILABLE_MESSAGE,
     }
 
     try:
-        offers = [
-            normalize_watch_detail_offer(offer)
-            for offer in get_active_offers_for_brand_reference(brand, reference)
-        ]
-        condition_filtered_offers = [
-            offer
-            for offer in offers
-            if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
-        ]
-        import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = load_offer_source_import_log_lookups(
-            condition_filtered_offers
-        )
-        condition_filtered_offers = enrich_watch_detail_offer_recency(
-            condition_filtered_offers,
-            import_logs_by_message_id=import_logs_by_message_id,
-            import_logs_by_id=import_logs_by_id,
-            import_logs_by_offer_id=import_logs_by_offer_id,
-        )
-        filtered_offers = [
-            offer
-            for offer in condition_filtered_offers
-            if offer_matches_watch_detail_date_filter(offer, date_range)
-        ]
-        template_context["watch"] = build_reference_detail_display(brand, reference, offers)
-        template_context["stats"] = build_watch_stats(filtered_offers)
+        with record_profiler_phase("load_offers"):
+            offers = [
+                normalize_watch_detail_offer(offer)
+                for offer in get_active_offers_for_brand_reference(brand, reference)
+            ]
+        with record_profiler_phase("condition_filter"):
+            condition_filtered_offers = [
+                offer
+                for offer in offers
+                if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
+            ]
+        if date_range is not None:
+            with record_profiler_phase("recency_enrichment"):
+                recency_targets = offers_missing_received_at(condition_filtered_offers)
+                if recency_targets:
+                    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = (
+                        load_offer_source_import_log_lookups(recency_targets)
+                    )
+                    condition_filtered_offers = enrich_watch_detail_offer_recency(
+                        condition_filtered_offers,
+                        import_logs_by_message_id=import_logs_by_message_id,
+                        import_logs_by_id=import_logs_by_id,
+                        import_logs_by_offer_id=import_logs_by_offer_id,
+                    )
+        with record_profiler_phase("date_filter"):
+            filtered_offers = [
+                offer
+                for offer in condition_filtered_offers
+                if offer_matches_watch_detail_date_filter(offer, date_range)
+            ]
+        with record_profiler_phase("statistics"):
+            template_context["watch"] = build_reference_detail_display(brand, reference, offers)
+            template_context["stats"] = build_watch_stats(filtered_offers)
+        with record_profiler_phase("sorting"):
+            sorted_offers = sort_offers_for_watch_detail(filtered_offers, sort_filter)
+        with record_profiler_phase("pagination"):
+            page_offers, page, total_pages, total_items = paginate_watch_detail_offers(
+                sorted_offers,
+                page_input=requested_page,
+            )
+            template_context["pagination"] = build_watch_detail_pagination(
+                brand=brand,
+                reference=reference,
+                condition=condition_filter_input,
+                date=date_filter,
+                date_from=date_from_input,
+                date_to=date_to_input,
+                sort=sort_filter,
+                page=page,
+                total_pages=total_pages,
+                total_items=total_items,
+            )
+            template_context["watch_detail_return_url"] = (
+                build_watch_reference_url(
+                    brand,
+                    reference,
+                    condition=condition_filter_input,
+                    date=date_filter,
+                    date_from=date_from_input,
+                    date_to=date_to_input,
+                    sort=sort_filter,
+                    page=page,
+                )
+                or "/"
+            )
 
         user = get_current_user(request)
-        display_offers = attach_dealer_offer_source_urls(
-            filtered_offers,
-            import_logs_by_message_id,
-            user=user,
-            import_logs_by_id=import_logs_by_id,
-            import_logs_by_offer_id=import_logs_by_offer_id,
-        )
+        with record_profiler_phase("import_log_lookups"):
+            import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = (
+                load_offer_source_import_log_lookups(page_offers)
+            )
+        with record_profiler_phase("source_enrichment"):
+            display_offers = attach_dealer_offer_source_urls(
+                page_offers,
+                import_logs_by_message_id,
+                user=user,
+                import_logs_by_id=import_logs_by_id,
+                import_logs_by_offer_id=import_logs_by_offer_id,
+            )
         template_context["offers"] = build_offer_rows(display_offers, sort_filter=sort_filter)
     except DatabaseUnavailableError as exc:
         root_exc = exc.__cause__ or exc
@@ -1553,7 +1735,142 @@ def _build_watch_offer_card(
         "results": row.get("results") or [],
         "matched_requests": _matched_request_fields(row, enriched_watch),
         "market_price_debug": market_price_debug,
+        "offer_id": row.get("offer_id"),
     }
+
+
+def _attach_live_offer_status_to_watch_cards(
+    watch_cards: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach live offer status metadata to import activity cards."""
+    offer_ids = [str(row.get("offer_id")) for row in rows if row.get("offer_id")]
+    statuses = get_offer_statuses_by_ids(offer_ids)
+    enriched_cards: list[dict[str, Any]] = []
+    for index, card in enumerate(watch_cards):
+        updated = dict(card)
+        row = rows[index] if index < len(rows) else {}
+        offer_id = str(row.get("offer_id") or updated.get("offer_id") or "")
+        status_row = statuses.get(offer_id, {})
+        updated["offer_id"] = offer_id or None
+        updated["offer_status"] = status_row.get("status") or "active"
+        updated["removal_reason"] = status_row.get("removal_reason")
+        updated["is_manually_removed"] = is_manually_removed_offer(status_row)
+        updated["can_restore"] = updated["is_manually_removed"]
+        enriched_cards.append(updated)
+    return enriched_cards
+
+
+def _safe_return_url(value: str | None, *, fallback: str) -> str:
+    cleaned = (value or "").strip()
+    if cleaned.startswith("/") and not cleaned.startswith("//"):
+        return cleaned
+    return fallback
+
+
+def _append_query_param(url: str, key: str, value: str) -> str:
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{urlencode({key: value})}"
+
+
+def _parse_positive_int(value: str | None) -> int | None:
+    cleaned = (value or "").strip()
+    if not cleaned or not cleaned.isdigit():
+        return None
+    parsed = int(cleaned)
+    return parsed if parsed > 0 else None
+
+
+def _parse_removed_offer_ids(query_params: Any) -> list[str]:
+    removed_ids: list[str] = []
+    single_id = (query_params.get("removed_id") or "").strip()
+    if single_id:
+        removed_ids.append(single_id)
+    bulk_ids = (query_params.get("removed_ids") or "").strip()
+    if bulk_ids:
+        removed_ids.extend(
+            offer_id.strip()
+            for offer_id in bulk_ids.split(",")
+            if offer_id.strip()
+        )
+    return list(dict.fromkeys(removed_ids))
+
+
+def _parse_watch_detail_query_params(url: str) -> dict[str, str]:
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(url)
+    raw = parse_qs(parsed.query, keep_blank_values=True)
+    return {key: values[-1] if values else "" for key, values in raw.items()}
+
+
+def _adjust_watch_detail_return_url_after_removal(
+    return_url: str,
+    *,
+    removed_count: int,
+) -> str:
+    if removed_count <= 0:
+        return return_url
+
+    params = _parse_watch_detail_query_params(return_url)
+    brand = (params.get("brand") or "").strip()
+    reference = (params.get("reference") or "").strip()
+    if not brand or not reference:
+        return return_url
+
+    try:
+        condition_filter = parse_watch_detail_condition_filter(params.get("condition") or "all")
+        date_filter = parse_watch_detail_date_filter(
+            params.get("date") or "all",
+            date_from=params.get("date_from") or "",
+            date_to=params.get("date_to") or "",
+        )
+        date_range = resolve_watch_detail_date_range(
+            date_filter,
+            date_from=params.get("date_from") or "",
+            date_to=params.get("date_to") or "",
+        )
+    except ValueError:
+        return return_url
+
+    current_page = parse_watch_detail_page(params.get("page"))
+    sort_filter = parse_watch_detail_sort_filter(params.get("sort"))
+
+    filtered_offers = filter_watch_detail_offers_for_stats(
+        brand,
+        reference,
+        condition_filter=condition_filter,
+        date_range=date_range,
+    )
+    remaining_total = max(0, len(filtered_offers) - removed_count)
+    adjusted_page, _total_pages = resolve_watch_detail_page(
+        current_page,
+        total_items=remaining_total,
+    )
+
+    adjusted_url = (
+        build_watch_reference_url(
+            brand,
+            reference,
+            condition=params.get("condition") or "all",
+            date=date_filter,
+            date_from=params.get("date_from") or "",
+            date_to=params.get("date_to") or "",
+            sort=sort_filter,
+            page=adjusted_page,
+        )
+        or return_url
+    )
+    return adjusted_url
+
+
+def _append_removed_offer_ids_to_url(url: str, removed_ids: tuple[str, ...] | list[str]) -> str:
+    cleaned_ids = [str(offer_id).strip() for offer_id in removed_ids if str(offer_id or "").strip()]
+    if not cleaned_ids:
+        return url
+    if len(cleaned_ids) == 1:
+        return _append_query_param(url, "removed_id", cleaned_ids[0])
+    return _append_query_param(url, "removed_ids", ",".join(cleaned_ids))
 
 
 def _matched_request_fields(
@@ -2341,7 +2658,10 @@ def build_activity_detail(
         "parser_quality": parser_quality,
         "raw_message": raw_message,
         "deal_analyses": build_deal_analysis_cards(summary, include_debug=show_deal_debug),
-        "watch_cards": build_watch_offer_cards(summary, show_deal_debug=show_deal_debug),
+        "watch_cards": _attach_live_offer_status_to_watch_cards(
+            build_watch_offer_cards(summary, show_deal_debug=show_deal_debug),
+            rows,
+        ),
         "rows": rows,
         "show_deal_debug": show_deal_debug,
         "parser_review": parser_review,
@@ -3624,7 +3944,10 @@ async def activity_detail(request: Request, import_id: str) -> HTMLResponse:
                 message,
                 show_deal_debug=can_access_admin_tools(user),
                 show_parser_review=can_access_admin_tools(user),
-            )
+            ),
+            "offer_removed": request.query_params.get("removed") == "1",
+            "offer_restored": request.query_params.get("restored") == "1",
+            "offer_remove_error": request.query_params.get("remove_error"),
         },
     )
 
@@ -3737,6 +4060,7 @@ async def watch_reference_detail(
     date_from: str = "",
     date_to: str = "",
     sort: str | None = None,
+    page: str = "1",
 ) -> HTMLResponse:
     brand_value = brand.strip()
     reference_value = reference.strip()
@@ -3753,6 +4077,7 @@ async def watch_reference_detail(
         date_from_input=date_from.strip(),
         date_to_input=date_to.strip(),
         sort_filter_input=(sort or "").strip(),
+        page_input=page.strip() or "1",
     )
 
 
@@ -3763,6 +4088,159 @@ async def watch_detail(
     condition: str = "all",
 ) -> RedirectResponse:
     return redirect_watch_id_to_reference(watch_id, condition=condition)
+
+
+@app.post("/offers/bulk-remove")
+async def bulk_remove_offers_from_market(
+    request: Request,
+    offer_ids: list[str] = Form(default=[]),
+    confirm: str = Form(...),
+    removal_reason: str = Form(...),
+    removal_reason_other: str = Form(""),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    fallback = "/"
+    return_url = _safe_return_url(return_to, fallback=fallback)
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "remove_error", "Confirmation required"),
+            status_code=303,
+        )
+
+    user = get_current_user(request)
+    try:
+        reason = normalize_removal_reason(removal_reason, removal_reason_other)
+        with record_profiler_phase("db_update"):
+            result = bulk_soft_remove_offers(
+                offer_ids,
+                removed_by_user_id=user["id"] if user else None,
+                removal_reason=reason,
+            )
+    except ValueError as exc:
+        with record_profiler_phase("redirect"):
+            return RedirectResponse(
+                url=_append_query_param(return_url, "remove_error", str(exc)),
+                status_code=303,
+            )
+    except RuntimeError as exc:
+        with record_profiler_phase("redirect"):
+            return RedirectResponse(
+                url=_append_query_param(return_url, "remove_error", str(exc)),
+                status_code=303,
+            )
+
+    if result.success_count <= 0:
+        with record_profiler_phase("redirect"):
+            return RedirectResponse(
+                url=_append_query_param(return_url, "remove_error", "No offers were removed"),
+                status_code=303,
+            )
+
+    adjusted_url = _adjust_watch_detail_return_url_after_removal(
+        return_url,
+        removed_count=result.success_count,
+    )
+    adjusted_url = _append_query_param(adjusted_url, "bulk_removed", str(result.success_count))
+    adjusted_url = _append_removed_offer_ids_to_url(adjusted_url, result.removed_ids)
+
+    with record_profiler_phase("redirect"):
+        return RedirectResponse(
+            url=adjusted_url,
+            status_code=303,
+        )
+
+
+@app.post("/offers/{offer_id}/remove")
+async def remove_offer_from_market(
+    request: Request,
+    offer_id: str,
+    confirm: str = Form(...),
+    removal_reason: str = Form(...),
+    removal_reason_other: str = Form(""),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    fallback = "/"
+    return_url = _safe_return_url(return_to, fallback=fallback)
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "remove_error", "Confirmation required"),
+            status_code=303,
+        )
+
+    user = get_current_user(request)
+    try:
+        reason = normalize_removal_reason(removal_reason, removal_reason_other)
+        with record_profiler_phase("db_update"):
+            soft_remove_offer(
+                offer_id,
+                removed_by_user_id=user["id"] if user else None,
+                removal_reason=reason,
+            )
+    except ValueError as exc:
+        with record_profiler_phase("redirect"):
+            return RedirectResponse(
+                url=_append_query_param(return_url, "remove_error", str(exc)),
+                status_code=303,
+            )
+    except RuntimeError as exc:
+        with record_profiler_phase("redirect"):
+            return RedirectResponse(
+                url=_append_query_param(return_url, "remove_error", str(exc)),
+                status_code=303,
+            )
+
+    with record_profiler_phase("redirect"):
+        adjusted_url = _adjust_watch_detail_return_url_after_removal(
+            return_url,
+            removed_count=1,
+        )
+        adjusted_url = _append_query_param(adjusted_url, "removed", "1")
+        adjusted_url = _append_removed_offer_ids_to_url(adjusted_url, (offer_id,))
+        return RedirectResponse(
+            url=adjusted_url,
+            status_code=303,
+        )
+
+
+@app.post("/offers/{offer_id}/restore")
+async def restore_offer_to_market(
+    request: Request,
+    offer_id: str,
+    confirm: str = Form(...),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    fallback = "/activity"
+    return_url = _safe_return_url(return_to, fallback=fallback)
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "remove_error", "Confirmation required"),
+            status_code=303,
+        )
+
+    user = get_current_user(request)
+    try:
+        restore_offer(
+            offer_id,
+            restored_by_user_id=user["id"] if user else None,
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "remove_error", str(exc)),
+            status_code=303,
+        )
+    except RuntimeError as exc:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "remove_error", str(exc)),
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        url=_append_query_param(return_url, "restored", "1"),
+        status_code=303,
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

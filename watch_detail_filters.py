@@ -263,3 +263,62 @@ def _start_of_next_filter_day(value: date | None) -> datetime | None:
     if start is None:
         return None
     return start + timedelta(days=1)
+
+
+WATCH_DETAIL_PAGE_SIZE = 50
+
+
+def parse_watch_detail_page(value: str | int | None) -> int:
+    """Parse a watch detail page query value, defaulting invalid values to page 1."""
+    if value is None:
+        return 1
+    if isinstance(value, int):
+        return value if value >= 1 else 1
+    cleaned = str(value).strip()
+    if not cleaned.isdigit():
+        return 1
+    parsed = int(cleaned)
+    return parsed if parsed >= 1 else 1
+
+
+def resolve_watch_detail_page(
+    page_input: str | int | None,
+    *,
+    total_items: int,
+    page_size: int = WATCH_DETAIL_PAGE_SIZE,
+) -> tuple[int, int]:
+    """Return a safe page number and total page count for a filtered offer list."""
+    page = parse_watch_detail_page(page_input)
+    if total_items <= 0:
+        return 1, 1
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+    if page > total_pages:
+        page = total_pages
+    return page, total_pages
+
+
+def paginate_watch_detail_offers(
+    offers: list[Record],
+    *,
+    page_input: str | int | None,
+    page_size: int = WATCH_DETAIL_PAGE_SIZE,
+) -> tuple[list[Record], int, int, int]:
+    """Return the current page slice and pagination metadata."""
+    total_items = len(offers)
+    page, total_pages = resolve_watch_detail_page(
+        page_input,
+        total_items=total_items,
+        page_size=page_size,
+    )
+    start = (page - 1) * page_size
+    end = start + page_size
+    return offers[start:end], page, total_pages, total_items
+
+
+def offers_missing_received_at(offers: list[Record]) -> list[Record]:
+    """Return offers that need import-log lookup to resolve recency timestamps."""
+    missing: list[Record] = []
+    for offer in offers:
+        if parse_utc_timestamp(offer.get("received_at")) is None:
+            missing.append(offer)
+    return missing
