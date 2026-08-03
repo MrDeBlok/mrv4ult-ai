@@ -181,7 +181,7 @@ DIAL_PATTERN = re.compile(
     re.I,
 )
 
-CURRENCY_CODE_PATTERN = r"usdt|ustd|usd|hkd|eur|euro|chf|gbp|sgd|aed|jpy|cny|rmb|krw"
+CURRENCY_CODE_PATTERN = r"usdt|ustd|usd|hkd|eur|euros?|chf|gbp|sgd|aed|jpy|cny|rmb|krw"
 
 DOTTED_WATCH_REFERENCE_PATTERN = re.compile(r"\b\d{3}\.\d{3}\b")
 
@@ -202,6 +202,14 @@ _GLUED_BRAND_PREFIX_REPLACEMENTS = (
 
 _GLUED_CURRENCY_PRICE_PATTERN = re.compile(
     rf"\b({CURRENCY_CODE_PATTERN})(?=([\d.,]+)\s*([kKmM])?\b)",
+    re.I,
+)
+_GLUED_ABBREV_AMOUNT_CURRENCY_PATTERN = re.compile(
+    rf"\b(\d{{2,3}})(?=({CURRENCY_CODE_PATTERN})\b)",
+    re.I,
+)
+_EURO_SHORTHAND_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])\b(\d{2,3})e\b(?![A-Za-z0-9])",
     re.I,
 )
 _GLUED_AMOUNT_CURRENCY_SYMBOL_PATTERN = re.compile(
@@ -227,8 +235,11 @@ def _normalize_glued_brand_prefixes(text: str) -> str:
 
 
 def _normalize_glued_currency_amounts(text: str) -> str:
-    """Split glued currency tokens like HKD1.424m into HKD 1.424m."""
-    return _GLUED_CURRENCY_PRICE_PATTERN.sub(r"\1 ", text)
+    """Split glued currency tokens like HKD1.424m and 165EUR."""
+    normalized = _GLUED_CURRENCY_PRICE_PATTERN.sub(r"\1 ", text)
+    normalized = _GLUED_ABBREV_AMOUNT_CURRENCY_PATTERN.sub(r"\1 ", normalized)
+    normalized = _EURO_SHORTHAND_PATTERN.sub(r"\1 EUR", normalized)
+    return normalized
 
 
 def _normalize_glued_amount_currency_symbols(text: str) -> str:
@@ -382,7 +393,7 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (re.compile(r"HK\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "HKD"),
     (re.compile(r"US\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "USD"),
     (re.compile(r"(?<![A-Z])S\$\s*([\d.,]+)\s*(k|K|m|M)?", re.I), "SGD"),
-    (re.compile(r"€\s*([\d.,]+)\s*(k|K|m|M)?"), "EUR"),
+    (re.compile(r"€\s*([\d.,]+)\s*(k|K|m|M)?\+?"), "EUR"),
     (re.compile(r"£\s*([\d.,]+)\s*(k|K|m|M)?"), "GBP"),
     (re.compile(r"¥\s*([\d.,]+)\s*(k|K|m|M)?"), "JPY"),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*HK\$", re.I), "HKD"),
@@ -392,7 +403,7 @@ PRICE_WITH_CURRENCY_PATTERNS: list[tuple[re.Pattern[str], str | None]] = [
     (USD_SHORTHAND_U_GLUED_PATTERN, "USD"),
     (re.compile(r"\$\s*([\d.,]+)\s*(k|K|m|M)?\s*U\b(?!(?:SDT?|ST))", re.I), "USD"),
     (re.compile(r"\$\s*([\d.,]+)\s*(k|K|m|M)?"), None),
-    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*€"), "EUR"),
+    (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*€\+?"), "EUR"),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*\$"), None),
     (re.compile(r"([\d.,]+)\s*(k|K|m|M)?\s*£"), "GBP"),
     (
@@ -1084,12 +1095,24 @@ def _detect_wear_condition(text: str) -> str | None:
 
 def _extract_wear_condition(text: str) -> tuple[str | None, str]:
     """Detect wear condition and remove the matched phrase from the text."""
-    for pattern, value in WEAR_CONDITION_PATTERNS:
+    for pattern, value in (
+        (re.compile(r"🆕\s*(?:\(?\s*)?(19|20)\d{2}(?:y)?\b", re.I), "New"),
+        (re.compile(r"\b(19|20)\d{2}(?:y)?\s*🆕", re.I), "New"),
+        (re.compile(r"\b(19|20)\d{2}y\s*🆕", re.I), "New"),
+    ):
         match = pattern.search(text)
         if match:
             remaining = text[: match.start()] + " " + text[match.end() :]
             remaining = re.sub(r"\s+", " ", remaining).strip()
             return value, remaining
+
+    from condition_normalizer import NEW_CONDITION, extract_wear_condition_phrase
+
+    canonical, raw_label, remaining = extract_wear_condition_phrase(text)
+    if raw_label:
+        if canonical == NEW_CONDITION and raw_label.lower() == "new unworn":
+            return "New", remaining
+        return raw_label, remaining
     return None, text
 
 
@@ -1515,6 +1538,21 @@ def _apply_price_fields(watch: WatchDict, text: str) -> None:
         retail_prices,
         offer_prices,
     )
+
+    from price_normalization import normalize_watch_price
+
+    normalized_price, normalized_currency, price_metadata = normalize_watch_price(
+        original_price,
+        original_currency,
+        text=text,
+        brand=watch.get("brand"),
+        reference=watch.get("reference"),
+        model=watch.get("model"),
+    )
+    if price_metadata.get("price_normalization_applied"):
+        watch["price_normalization"] = price_metadata
+    original_price = normalized_price
+    original_currency = normalized_currency
 
     if retail_prices:
         retail_price, retail_currency = retail_prices[-1]
@@ -2081,7 +2119,7 @@ def _normalize_currency_code(currency_code: str | None) -> str | None:
     if currency_code is None:
         return None
     normalized = currency_code.upper()
-    if normalized == "EURO":
+    if normalized in {"EURO", "EUROS"}:
         return "EUR"
     if normalized in {"USDT", "USTD"}:
         return "USDT"
@@ -2097,7 +2135,13 @@ def _amount_before_currency_needs_signal(amount_text: str, suffix: str | None) -
     if "," in raw or re.fullmatch(r"\d{1,3}(?:\.\d{3})+", raw):
         return True
     normalized = _normalize_amount(raw, suffix)
-    return normalized is not None and normalized >= 10_000
+    if normalized is None:
+        return False
+    if normalized >= 10_000:
+        return True
+    from price_normalization import ABBREVIATED_PRICE_MAX, ABBREVIATED_PRICE_MIN
+
+    return ABBREVIATED_PRICE_MIN <= normalized <= ABBREVIATED_PRICE_MAX
 
 
 def _match_amount_suffix(match: re.Match[str]) -> str | None:

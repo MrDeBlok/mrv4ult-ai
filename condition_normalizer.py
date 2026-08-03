@@ -34,33 +34,6 @@ SECTION_HEADER_DECORATION_PATTERN = re.compile(
     r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\uFE0F]+|[\u2600-\u27BF]|✅|✔️|❤️|♥️|🦄",
 )
 
-NEW_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bsell\s+new\b", re.I), "Sell new"),
-    (re.compile(r"\bbrand\s+new\b", re.I), "Brand New"),
-    (re.compile(r"\b(?:bnib|unworn)\b", re.I), "Unworn"),
-    (re.compile(r"\bnew\s+arrivals?\b", re.I), "New Arrivals"),
-    (re.compile(r"\bnew\s+stock\b", re.I), "New Stock"),
-    (
-        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+new(?:\s|$)", re.I),
-        "Richard Mille NEW",
-    ),
-    (re.compile(r"(?:^|\s)rm\s+new(?:\s|$)", re.I), "RM NEW"),
-    (re.compile(r"(?:^|\s)new(?:\s|$)", re.I), "NEW"),
-]
-
-PRE_OWNED_SECTION_HEADER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bpre[-\s]?owned\b", re.I), "Pre-Owned"),
-    (re.compile(r"\bpreowned\b", re.I), "Preowned"),
-    (re.compile(r"\bsecond\s+hand\b", re.I), "Second Hand"),
-    (re.compile(r"\bused\s+stock\b", re.I), "Used stock"),
-    (
-        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+used(?:\s|$)", re.I),
-        "Richard Mille Used",
-    ),
-    (re.compile(r"(?:^|\s)rm\s+used(?:\s|$)", re.I), "RM Used"),
-    (re.compile(r"(?:^|\s)used(?:\s|$)", re.I), "Used"),
-]
-
 MESSAGE_ALL_BATCH_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\ball\s+new\b", re.I), "All new"),
     (re.compile(r"\ball\s+unworn\b", re.I), "All unworn"),
@@ -78,9 +51,13 @@ MESSAGE_NEW_YEAR_BATCH_PATTERN = re.compile(
 NEW_ALIASES: dict[str, str] = {
     "brand new": NEW_CONDITION,
     "brand new / unworn": NEW_CONDITION,
+    "factory new": NEW_CONDITION,
     "fresh new": NEW_CONDITION,
     "fresh new / unworn": NEW_CONDITION,
     "new / unworn": NEW_CONDITION,
+    "new & unworn": NEW_CONDITION,
+    "new and unworn": NEW_CONDITION,
+    "new unworn": NEW_CONDITION,
     "bn": NEW_CONDITION,
     "new": NEW_CONDITION,
     "unworn": NEW_CONDITION,
@@ -95,7 +72,12 @@ NEW_ALIASES: dict[str, str] = {
 
 PRE_OWNED_ALIASES: dict[str, str] = {
     "good condition": PRE_OWNED_CONDITION,
+    "used like new": PRE_OWNED_CONDITION,
     "like new": PRE_OWNED_CONDITION,
+    "as new": PRE_OWNED_CONDITION,
+    "almost new": PRE_OWNED_CONDITION,
+    "lightly used": PRE_OWNED_CONDITION,
+    "mint condition": PRE_OWNED_CONDITION,
     "mint": PRE_OWNED_CONDITION,
     "worn": PRE_OWNED_CONDITION,
     "pre owned": PRE_OWNED_CONDITION,
@@ -118,6 +100,106 @@ ACCESSORY_CONDITIONS = frozenset(
         "complete",
     }
 )
+
+WEAR_CONDITION_PHRASE_RULES: list[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"\bused\s*,?\s*like\s+new(?:\s+condition)?\b", re.I), PRE_OWNED_CONDITION, "Used Like New"),
+    (re.compile(r"\bused\s+like\s+new\b", re.I), PRE_OWNED_CONDITION, "Used Like New"),
+    (re.compile(r"\blike\s+new(?:\s+condition)?\b", re.I), PRE_OWNED_CONDITION, "Like New"),
+    (re.compile(r"\bas\s+new\b", re.I), PRE_OWNED_CONDITION, "As New"),
+    (re.compile(r"\balmost\s+new\b", re.I), PRE_OWNED_CONDITION, "Almost New"),
+    (re.compile(r"\blightly\s+used\b", re.I), PRE_OWNED_CONDITION, "Lightly Used"),
+    (re.compile(r"\bgood\s+condition\b", re.I), PRE_OWNED_CONDITION, "Good condition"),
+    (re.compile(r"\bpre[-\s]?owned\b", re.I), PRE_OWNED_CONDITION, "Pre-Owned"),
+    (re.compile(r"\bpreowned\b", re.I), PRE_OWNED_CONDITION, "Preowned"),
+    (re.compile(r"\bpre\s+owned\b", re.I), PRE_OWNED_CONDITION, "Pre owned"),
+    (re.compile(r"\bsecond\s+hand\b", re.I), PRE_OWNED_CONDITION, "Second hand"),
+    (re.compile(r"\bused\s+stock\b", re.I), PRE_OWNED_CONDITION, "Used stock"),
+    (
+        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+used(?:\s|$)", re.I),
+        PRE_OWNED_CONDITION,
+        "Richard Mille Used",
+    ),
+    (re.compile(r"(?:^|\s)rm\s+used(?:\s|$)", re.I), PRE_OWNED_CONDITION, "RM Used"),
+    (re.compile(r"\(used\)", re.I), PRE_OWNED_CONDITION, "Used"),
+    (re.compile(r"\bmint\s+condition\b", re.I), PRE_OWNED_CONDITION, "Mint Condition"),
+    (re.compile(r"\blnib\b", re.I), PRE_OWNED_CONDITION, "LNIB"),
+    (re.compile(r"\bmint\b", re.I), PRE_OWNED_CONDITION, "Mint"),
+    (re.compile(r"\bused\b", re.I), PRE_OWNED_CONDITION, "Used"),
+    (re.compile(r"\bworn\b", re.I), PRE_OWNED_CONDITION, "worn"),
+    (re.compile(r"\bsell\s+new\b", re.I), NEW_CONDITION, "Sell new"),
+    (re.compile(r"\bfactory\s+new\b", re.I), NEW_CONDITION, "Factory New"),
+    (re.compile(r"\bbrand\s+new\s*/\s*unworn\b", re.I), NEW_CONDITION, "Brand New / Unworn"),
+    (re.compile(r"\bfresh\s+new\s*/\s*unworn\b", re.I), NEW_CONDITION, "Fresh New / Unworn"),
+    (re.compile(r"\bnew\s*/\s*unworn\b", re.I), NEW_CONDITION, "New / Unworn"),
+    (re.compile(r"\bnew\s*(?:&|and)\s*unworn\b", re.I), NEW_CONDITION, "New & Unworn"),
+    (re.compile(r"\bnew\s+unworn\b", re.I), NEW_CONDITION, "New Unworn"),
+    (re.compile(r"\bfresh\s+new\b", re.I), NEW_CONDITION, "Fresh New"),
+    (re.compile(r"\bbrand\s+new\b", re.I), NEW_CONDITION, "Brand New"),
+    (re.compile(r"\bnew\s+arrivals?\b", re.I), NEW_CONDITION, "New Arrivals"),
+    (re.compile(r"\bnew\s+stock\b", re.I), NEW_CONDITION, "New Stock"),
+    (
+        re.compile(r"(?:^|\s)(?:richard\s+mille|rm)\s+new(?:\s|$)", re.I),
+        NEW_CONDITION,
+        "Richard Mille NEW",
+    ),
+    (re.compile(r"(?:^|\s)rm\s+new(?:\s|$)", re.I), NEW_CONDITION, "RM NEW"),
+    (re.compile(r"\bunworn\s+complete\b", re.I), NEW_CONDITION, "Unworn complete"),
+    (re.compile(r"\bunworn\b", re.I), NEW_CONDITION, "Unworn"),
+    (re.compile(r"\bbnib\b", re.I), NEW_CONDITION, "bnib"),
+    (re.compile(r"\bnos\b", re.I), NEW_CONDITION, "NOS"),
+    (re.compile(r"\bstickered\b", re.I), NEW_CONDITION, "stickered"),
+    (re.compile(r"\bfull\s+stickers?\b", re.I), NEW_CONDITION, "Full stickers"),
+    (re.compile(r"\bstickers?\b", re.I), NEW_CONDITION, "Sticker"),
+    (re.compile(r"\bbn\b", re.I), NEW_CONDITION, "BN"),
+    (re.compile(r"\bnew\b", re.I), NEW_CONDITION, "New"),
+]
+
+
+def find_best_wear_condition_phrase(
+    text: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Return canonical condition, display label, and matched phrase using longest match."""
+    best_match: re.Match[str] | None = None
+    best_canonical: str | None = None
+    best_label: str | None = None
+
+    for pattern, canonical, raw_label in WEAR_CONDITION_PHRASE_RULES:
+        match = pattern.search(text)
+        if not match:
+            continue
+        span = match.end() - match.start()
+        if best_match is None or span > (best_match.end() - best_match.start()):
+            best_match = match
+            best_canonical = canonical
+            best_label = raw_label
+
+    if best_match is None or best_canonical is None:
+        return None, None, None
+    return best_canonical, best_label, text[best_match.start() : best_match.end()]
+
+
+def extract_wear_condition_phrase(text: str) -> tuple[str | None, str | None, str]:
+    """Detect wear condition in line text and return remaining unparsed text."""
+    best_match: re.Match[str] | None = None
+    best_canonical: str | None = None
+    best_label: str | None = None
+
+    for pattern, canonical, raw_label in WEAR_CONDITION_PHRASE_RULES:
+        match = pattern.search(text)
+        if not match:
+            continue
+        span = match.end() - match.start()
+        if best_match is None or span > (best_match.end() - best_match.start()):
+            best_match = match
+            best_canonical = canonical
+            best_label = raw_label
+
+    if best_match is None or best_canonical is None:
+        return None, None, text
+
+    remaining = text[: best_match.start()] + " " + text[best_match.end() :]
+    remaining = re.sub(r"\s+", " ", remaining).strip()
+    return best_canonical, best_label, remaining
 
 
 def _condition_key(value: str) -> str:
@@ -143,10 +225,20 @@ def normalize_wear_condition(value: str | None) -> tuple[str | None, str | None]
         return NEW_CONDITION, raw_notation
 
     key = _condition_key(raw)
+    if raw in {NEW_CONDITION, PRE_OWNED_CONDITION}:
+        return raw, None
+
     normalized = NEW_ALIASES.get(key) or PRE_OWNED_ALIASES.get(key)
     if normalized:
         raw_condition = None if raw == normalized else raw
         return normalized, raw_condition
+
+    phrase_canonical, phrase_label, _matched = find_best_wear_condition_phrase(raw)
+    if phrase_canonical:
+        raw_condition = phrase_label if phrase_label and phrase_label != phrase_canonical else raw
+        if raw_condition == phrase_canonical:
+            raw_condition = raw if raw != phrase_canonical else None
+        return phrase_canonical, raw_condition
 
     if key in ACCESSORY_CONDITIONS:
         return None, raw
@@ -516,13 +608,11 @@ def _remainder_is_section_condition_only(remainder: str) -> bool:
     cleaned = _clean_section_header_line(remainder)
     if not cleaned:
         return False
-    for pattern, _ in NEW_SECTION_HEADER_PATTERNS:
-        if pattern.fullmatch(cleaned):
-            return True
-    for pattern, _ in PRE_OWNED_SECTION_HEADER_PATTERNS:
-        if pattern.fullmatch(cleaned):
-            return True
-    return False
+    canonical, _label, _matched = find_best_wear_condition_phrase(cleaned)
+    if canonical is None:
+        return False
+    recheck, _, matched = find_best_wear_condition_phrase(cleaned)
+    return recheck is not None and matched is not None and _condition_key(matched) == _condition_key(cleaned)
 
 
 def detect_section_condition_header(line: str) -> tuple[str | None, str | None]:
@@ -548,13 +638,9 @@ def detect_section_condition_header(line: str) -> tuple[str | None, str | None]:
     if not cleaned:
         return None, None
 
-    for pattern, raw_label in NEW_SECTION_HEADER_PATTERNS:
-        if pattern.search(cleaned):
-            return NEW_CONDITION, raw_label
-
-    for pattern, raw_label in PRE_OWNED_SECTION_HEADER_PATTERNS:
-        if pattern.search(cleaned):
-            return PRE_OWNED_CONDITION, raw_label
+    canonical, raw_label, _matched = find_best_wear_condition_phrase(cleaned)
+    if canonical:
+        return canonical, raw_label
 
     return None, None
 
