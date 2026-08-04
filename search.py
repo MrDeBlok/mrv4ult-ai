@@ -25,6 +25,21 @@ SEARCH_GROUP_PAGE_SIZE = 50
 SEARCH_ACTIVE_OFFERS_RPC = "search_active_offers"
 SEARCH_ACTIVE_OFFER_GROUPS_RPC = "search_active_offer_groups"
 
+SEARCH_CURRENCY_FILTER_CODES = frozenset(
+    {"EUR", "USD", "HKD", "CHF", "GBP", "JPY", "SGD", "CNY"}
+)
+SEARCH_CURRENCY_FILTER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("", "All currencies"),
+    ("EUR", "EUR"),
+    ("USD", "USD"),
+    ("HKD", "HKD"),
+    ("CHF", "CHF"),
+    ("GBP", "GBP"),
+    ("JPY", "JPY"),
+    ("SGD", "SGD"),
+    ("CNY", "CNY"),
+)
+
 WATCH_SEARCH_FIELDS = ("brand", "reference", "model", "dial", "bracelet")
 
 BRAND_ALIASES: dict[str, str] = {
@@ -81,12 +96,25 @@ def normalize_search_page(value: str | int | None) -> int:
     return max(1, page)
 
 
+def parse_search_currency_filter(value: str | None) -> str | None:
+    """Return a canonical search currency code or None when unset/invalid."""
+    if value is None:
+        return None
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return None
+    if normalized in SEARCH_CURRENCY_FILTER_CODES:
+        return normalized
+    return None
+
+
 def search_offer_groups_page(
     query: str,
     *,
     page: int = 1,
     page_size: int = SEARCH_GROUP_PAGE_SIZE,
     condition: str | None = None,
+    currency: str | None = None,
 ) -> SearchGroupsPageResult:
     """Load one page of grouped search results for the production web route."""
     normalized_page = normalize_search_page(page)
@@ -101,6 +129,7 @@ def search_offer_groups_page(
         "page_offset": offset,
         "filter_business_dealers": contact_type_column_supported(),
         "cheapest_only": cheapest_only,
+        "p_currency_filter": currency,
     }
     response = get_client().rpc(SEARCH_ACTIVE_OFFER_GROUPS_RPC, payload).execute()
     result = _rpc_search_result(response.data)

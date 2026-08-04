@@ -72,6 +72,9 @@
             {% if sort_filter %}
             <input type="hidden" name="sort" value="{{ sort_filter }}">
             {% endif %}
+            {% if currency_filter %}
+            <input type="hidden" name="currency" value="{{ currency_filter }}">
+            {% endif %}
             <div class="col-12 col-sm-auto">
                 <label for="date_from" class="form-label small text-muted mb-1">From</label>
                 <input id="date_from" type="date" name="date_from" value="{{ date_from }}" class="form-control form-control-sm">
@@ -98,12 +101,23 @@
             {% if date_to %}
             <input type="hidden" name="date_to" value="{{ date_to }}">
             {% endif %}
+            {% if currency_filter %}
+            <input type="hidden" name="currency" value="{{ currency_filter }}">
+            {% endif %}
             <div>
                 <label for="offer_sort" class="form-label small text-muted mb-1">Sort offers</label>
                 <select id="offer_sort" name="sort" class="form-select form-select-sm" onchange="this.form.submit()">
                     <option value="" {% if not sort_filter %}selected{% endif %}>Default</option>
                     <option value="price_asc" {% if sort_filter == 'price_asc' %}selected{% endif %}>Price: low to high</option>
                     <option value="price_desc" {% if sort_filter == 'price_desc' %}selected{% endif %}>Price: high to low</option>
+                </select>
+            </div>
+            <div>
+                <label for="offer_currency" class="form-label small text-muted mb-1">Currency</label>
+                <select id="offer_currency" name="currency" class="form-select form-select-sm" onchange="this.form.submit()">
+                    {% for value, label in currency_options | default([]) %}
+                    <option value="{{ value }}" {% if currency_filter == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
                 </select>
             </div>
         </form>
@@ -191,6 +205,16 @@
         <div class="alert alert-danger mb-0" role="alert">{{ offer_remove_error }}</div>
     </div>
     {% endif %}
+    {% if price_review_updated %}
+    <div class="card-body pb-0">
+        <div class="alert alert-success mb-0" role="alert">Price review updated.</div>
+    </div>
+    {% endif %}
+    {% if price_review_error %}
+    <div class="card-body pb-0">
+        <div class="alert alert-danger mb-0" role="alert">{{ price_review_error }}</div>
+    </div>
+    {% endif %}
     {% if offers %}
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -223,7 +247,7 @@
             </thead>
             <tbody>
                 {% for offer in offers %}
-                <tr>
+                <tr{% if offer.is_suspicious_price %} class="table-warning"{% endif %}>
                     {% if is_admin(current_user(request)) %}
                     <td class="text-center">
                         <input
@@ -241,7 +265,19 @@
                     <td>{{ offer.dealer_whatsapp }}</td>
                     <td>{{ offer.group_name }}</td>
                     <td>{{ offer.dial }}</td>
-                    <td>{{ offer.original_price }}</td>
+                    <td>
+                        {{ offer.original_price }}
+                        {% if offer.is_suspicious_price %}
+                        <div class="mt-1">
+                            <span class="badge text-bg-warning">Suspicious price</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            Likely intended: {{ offer.suggested_price_display or 'N/A' }}<br>
+                            Reason: {{ offer.price_review_reason or 'N/A' }}<br>
+                            Confidence: {{ offer.price_confidence or 'N/A' }}
+                        </div>
+                        {% endif %}
+                    </td>
                     <td class="fw-semibold">{{ offer.usd_price }}</td>
                     <td>{{ offer.card_date }}</td>
                     <td>{{ offer.condition }}</td>
@@ -255,6 +291,31 @@
                     </td>
                     {% if is_admin(current_user(request)) %}
                     <td class="text-nowrap">
+                        {% if price_review_enabled and offer.is_suspicious_price %}
+                        <form method="post" action="/offers/{{ offer.offer_id }}/price-review/confirm-original" class="d-inline">
+                            <input type="hidden" name="confirm" value="1">
+                            <input type="hidden" name="return_to" value="{{ watch_detail_return_url | default(detail_base_url) }}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary mb-1">Confirm original</button>
+                        </form>
+                        {% if offer.suggested_original_price %}
+                        <form method="post" action="/offers/{{ offer.offer_id }}/price-review/accept-suggested" class="d-inline">
+                            <input type="hidden" name="confirm" value="1">
+                            <input type="hidden" name="return_to" value="{{ watch_detail_return_url | default(detail_base_url) }}">
+                            <button type="submit" class="btn btn-sm btn-outline-primary mb-1">Accept suggestion</button>
+                        </form>
+                        {% endif %}
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-outline-primary mb-1 manual-price-correct-button"
+                            data-bs-toggle="modal"
+                            data-bs-target="#manualPriceCorrectModal"
+                            data-offer-id="{{ offer.offer_id }}"
+                            data-suggested-price="{{ offer.suggested_original_price or '' }}"
+                            data-suggested-currency="{{ offer.suggested_currency or '' }}"
+                        >
+                            Manual correct
+                        </button>
+                        {% endif %}
                         <button
                             type="button"
                             class="btn btn-sm btn-outline-danger remove-offer-button"
@@ -389,6 +450,34 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="submit" class="btn btn-danger">Remove offer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="manualPriceCorrectModal" tabindex="-1" aria-labelledby="manualPriceCorrectModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" id="manualPriceCorrectForm" action="">
+                    <input type="hidden" name="confirm" value="1">
+                    <input type="hidden" name="return_to" value="{{ watch_detail_return_url | default(detail_base_url) }}">
+                    <div class="modal-header">
+                        <h2 class="modal-title h5" id="manualPriceCorrectModalLabel">Manual price correction</h2>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="corrected_original_price" class="form-label">Corrected price</label>
+                            <input id="corrected_original_price" type="number" name="corrected_original_price" class="form-control" required>
+                        </div>
+                        <div class="mb-0">
+                            <label for="corrected_original_currency" class="form-label">Currency</label>
+                            <input id="corrected_original_currency" type="text" name="corrected_original_currency" class="form-control" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Apply correction</button>
                     </div>
                 </form>
             </div>
@@ -584,6 +673,28 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     var modal = document.getElementById("removeOfferModal");
+    var manualPriceModal = document.getElementById("manualPriceCorrectModal");
+    if (manualPriceModal) {
+        manualPriceModal.addEventListener("show.bs.modal", function (event) {
+            var button = event.relatedTarget;
+            if (!button) {
+                return;
+            }
+            var offerId = button.getAttribute("data-offer-id") || "";
+            var form = document.getElementById("manualPriceCorrectForm");
+            if (form) {
+                form.action = "/offers/" + encodeURIComponent(offerId) + "/price-review/manual-correct";
+            }
+            var priceInput = document.getElementById("corrected_original_price");
+            var currencyInput = document.getElementById("corrected_original_currency");
+            if (priceInput) {
+                priceInput.value = button.getAttribute("data-suggested-price") || "";
+            }
+            if (currencyInput) {
+                currencyInput.value = button.getAttribute("data-suggested-currency") || "";
+            }
+        });
+    }
     if (!modal) {
         return;
     }

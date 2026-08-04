@@ -95,7 +95,8 @@ from database import (
     create_request,
     delete_client_permanently,
     delete_request,
-    get_active_offers_for_brand_reference,
+    count_watch_reference_filtered_offers,
+    get_watch_reference_offers_page,
     get_active_offers_for_watch,
     get_active_offers_for_dealer,
     get_client,
@@ -162,6 +163,7 @@ from database import (
     restore_offer,
     soft_remove_offer,
     bulk_soft_remove_offers,
+    price_review_columns_supported,
     watch_knowledge_supported,
     watch_identification_supported,
     parser_learning_rules_supported,
@@ -306,9 +308,11 @@ from search import (
     format_usd_price,
     group_offers_by_brand_reference,
     normalize_search_page,
+    parse_search_currency_filter,
     search_offer_groups_page,
     search_offers,
     summarize_conditions_available,
+    SEARCH_CURRENCY_FILTER_OPTIONS,
 )
 from watch_detail_filters import (
     WATCH_DETAIL_PAGE_SIZE,
@@ -1007,6 +1011,7 @@ def build_watch_reference_url(
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str | None = None,
+    currency: str | None = None,
     page: int | None = None,
 ) -> str | None:
     """Build the canonical brand + reference watch detail URL."""
@@ -1029,6 +1034,9 @@ def build_watch_reference_url(
     sort_value = parse_watch_detail_sort_filter(sort)
     if sort_value:
         params["sort"] = sort_value
+    currency_value = parse_search_currency_filter(currency)
+    if currency_value:
+        params["currency"] = currency_value
     page_value = parse_watch_detail_page(page) if page is not None else 1
     if page_value > 1:
         params["page"] = str(page_value)
@@ -1044,6 +1052,7 @@ def build_watch_reference_filter_urls(
     date_from: str = "",
     date_to: str = "",
     sort: str = "",
+    currency: str = "",
 ) -> dict[str, str]:
     """Build watch detail filter URLs preserving the other active dimension."""
     def _build(
@@ -1053,6 +1062,7 @@ def build_watch_reference_filter_urls(
         date_from_value: str | None = None,
         date_to_value: str | None = None,
         sort_value: str | None = None,
+        currency_value: str | None = None,
     ) -> str:
         return (
             build_watch_reference_url(
@@ -1063,6 +1073,7 @@ def build_watch_reference_filter_urls(
                 date_from=date_from_value if date_from_value is not None else date_from,
                 date_to=date_to_value if date_to_value is not None else date_to,
                 sort=sort_value if sort_value is not None else sort,
+                currency=currency_value if currency_value is not None else currency,
             )
             or "/"
         )
@@ -1089,6 +1100,7 @@ def build_watch_reference_condition_urls(
     date_from: str = "",
     date_to: str = "",
     sort: str = "",
+    currency: str = "",
 ) -> dict[str, str]:
     """Backward-compatible condition URL helper."""
     filter_urls = build_watch_reference_filter_urls(
@@ -1099,6 +1111,7 @@ def build_watch_reference_condition_urls(
         date_from=date_from,
         date_to=date_to,
         sort=sort,
+        currency=currency,
     )
     return {
         "all": filter_urls["condition_all"],
@@ -1117,6 +1130,7 @@ def build_watch_detail_pagination(
     date_from: str,
     date_to: str,
     sort: str,
+    currency: str = "",
     page: int,
     total_pages: int,
     total_items: int,
@@ -1136,6 +1150,7 @@ def build_watch_detail_pagination(
                 date_from=date_from,
                 date_to=date_to,
                 sort=sort,
+                currency=currency,
                 page=target_page,
             )
             or "/"
@@ -1166,7 +1181,9 @@ def filter_watch_detail_offers_for_stats(
     condition_filter: str | None,
     date_range: Any,
 ) -> list[dict[str, Any]]:
-    """Return filtered watch-detail offers without source enrichment."""
+    """Diagnostic helper retained for tests; production uses RPC counts instead."""
+    from database import get_active_offers_for_brand_reference
+
     offers = [
         normalize_watch_detail_offer(offer)
         for offer in get_active_offers_for_brand_reference(brand, reference)
@@ -1188,12 +1205,31 @@ def filter_watch_detail_offers_for_stats(
                 import_logs_by_id=import_logs_by_id,
                 import_logs_by_offer_id=import_logs_by_offer_id,
             )
-    filtered_offers = [
+    return [
         offer
         for offer in condition_filtered_offers
         if offer_matches_watch_detail_date_filter(offer, date_range)
     ]
-    return filtered_offers
+
+
+def count_watch_detail_filtered_offers(
+    brand: str,
+    reference: str,
+    *,
+    condition_filter: str | None,
+    date_range: Any,
+    currency_filter: str | None = None,
+) -> int:
+    """Return filtered offer count via the bounded watch-detail RPC."""
+    date_from, date_to = _watch_detail_rpc_date_bounds(date_range)
+    return count_watch_reference_filtered_offers(
+        brand,
+        reference,
+        condition_filter=condition_filter,
+        date_from=date_from,
+        date_to=date_to,
+        currency_filter=currency_filter,
+    )
 
 
 def build_result_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1231,6 +1267,7 @@ def build_search_page_url(
     cheapest_only: bool = False,
     max_price: str = "",
     condition_filter: str = "all",
+    currency_filter: str = "",
 ) -> str:
     """Build a paginated search URL preserving active filters."""
     from urllib.parse import urlencode
@@ -1240,6 +1277,8 @@ def build_search_page_url(
         params["q"] = search_text.strip()
     if condition_filter and condition_filter != "all":
         params["condition"] = condition_filter
+    if currency_filter.strip():
+        params["currency"] = currency_filter.strip().upper()
     if cheapest_only:
         params["cheapest"] = "1"
     if max_price.strip():
@@ -1286,10 +1325,46 @@ def normalize_dealer_offer(offer: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def build_watch_stats_from_rpc(statistics: dict[str, Any]) -> dict[str, Any]:
+    """Format RPC aggregate statistics for the watch detail header."""
+    from condition_normalizer import NEW_CONDITION, PRE_OWNED_CONDITION, UNKNOWN_CONDITION
+
+    condition_counts = statistics.get("condition_counts") or {}
+    conditions = [
+        category
+        for category in (NEW_CONDITION, PRE_OWNED_CONDITION, UNKNOWN_CONDITION)
+        if int(condition_counts.get(category) or 0) > 0
+    ]
+    average_raw = statistics.get("average_usd_price")
+    average_usd = round(float(average_raw)) if average_raw is not None else None
+    return {
+        "lowest_usd": format_usd_price(statistics.get("lowest_usd_price")),
+        "average_usd": format_usd_price(average_usd),
+        "highest_usd": format_usd_price(statistics.get("highest_usd_price")),
+        "offer_count": int(statistics.get("active_offer_count") or 0),
+        "unique_dealers": int(statistics.get("unique_dealer_count") or 0),
+        "unique_groups": int(statistics.get("unique_group_count") or 0),
+        "conditions_available": conditions,
+        "conditions_label": " / ".join(conditions) if conditions else "N/A",
+    }
+
+
+def _watch_detail_rpc_date_bounds(date_range: Any) -> tuple[Any, Any]:
+    if date_range is None:
+        return None, None
+    return date_range.start, date_range.end
+
+
 def build_watch_stats(offers: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute USD price statistics for a watch's active offers."""
+    from price_review import offer_effective_usd_price, offer_includes_price_in_market_calculations
+
     usd_prices = [
-        price for price in (offer.get("usd_price") for offer in offers) if price is not None
+        price
+        for offer in offers
+        if offer_includes_price_in_market_calculations(offer)
+        for price in [offer_effective_usd_price(offer)]
+        if price is not None
     ]
     average_usd = round(sum(usd_prices) / len(usd_prices)) if usd_prices else None
     dealer_ids = {offer.get("dealer_id") for offer in offers if offer.get("dealer_id")}
@@ -1321,11 +1396,14 @@ def build_offer_rows(
     sort_filter: str = "",
 ) -> list[dict[str, Any]]:
     """Format active offers for the watch detail table."""
+    from price_review import offer_price_review_payload
+
     rows: list[dict[str, Any]] = []
 
     for offer in sort_offers_for_watch_detail(offers, sort_filter):
         dealer = offer.get("dealer") or {}
         watch = offer.get("watch") or {}
+        review = offer_price_review_payload(offer)
         rows.append(
             {
                 "offer_id": offer.get("id"),
@@ -1342,6 +1420,11 @@ def build_offer_rows(
                 "condition": display_condition(offer.get("condition")),
                 "received_at": format_received_at(offer.get("received_at")),
                 "source_url": offer.get("source_url"),
+                **review,
+                "suggested_price_display": format_price(
+                    review.get("suggested_original_price"),
+                    review.get("suggested_currency"),
+                ),
             }
         )
 
@@ -1403,6 +1486,7 @@ def _render_watch_reference_detail(
     date_from_input: str,
     date_to_input: str,
     sort_filter_input: str = "",
+    currency_filter_input: str = "",
     page_input: str = "1",
 ) -> HTMLResponse:
     try:
@@ -1424,6 +1508,8 @@ def _render_watch_reference_detail(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     sort_filter = parse_watch_detail_sort_filter(sort_filter_input)
+    currency_filter = parse_search_currency_filter(currency_filter_input)
+    currency_filter_display = currency_filter or ""
     requested_page = parse_watch_detail_page(page_input)
     watch_detail_return_url = (
         build_watch_reference_url(
@@ -1434,6 +1520,7 @@ def _render_watch_reference_detail(
             date_from=date_from_input,
             date_to=date_to_input,
             sort=sort_filter,
+            currency=currency_filter_display,
             page=requested_page,
         )
         or "/"
@@ -1447,6 +1534,7 @@ def _render_watch_reference_detail(
         date_from=date_from_input,
         date_to=date_to_input,
         sort=sort_filter,
+        currency=currency_filter_display,
     )
     condition_urls = build_watch_reference_condition_urls(
         brand,
@@ -1456,6 +1544,7 @@ def _render_watch_reference_detail(
         date_from=date_from_input,
         date_to=date_to_input,
         sort=sort_filter,
+        currency=currency_filter_display,
     )
     template_context = {
         "watch": build_reference_detail_display(brand, reference, []),
@@ -1469,6 +1558,7 @@ def _render_watch_reference_detail(
             date_from=date_from_input,
             date_to=date_to_input,
             sort=sort_filter,
+            currency=currency_filter_display,
             page=1,
             total_pages=1,
             total_items=0,
@@ -1478,6 +1568,8 @@ def _render_watch_reference_detail(
         "date_from": date_from_input,
         "date_to": date_to_input,
         "sort_filter": sort_filter,
+        "currency_filter": currency_filter_display,
+        "currency_options": SEARCH_CURRENCY_FILTER_OPTIONS,
         "detail_base_url": detail_base_url,
         "condition_urls": condition_urls,
         "filter_urls": filter_urls,
@@ -1489,51 +1581,38 @@ def _render_watch_reference_detail(
         "offer_bulk_removed_count": _parse_positive_int(request.query_params.get("bulk_removed")),
         "offer_remove_error": request.query_params.get("remove_error"),
         "removed_offer_ids": _parse_removed_offer_ids(request.query_params),
+        "price_review_enabled": price_review_columns_supported(),
+        "price_review_updated": request.query_params.get("price_review") == "updated",
+        "price_review_error": request.query_params.get("price_review_error"),
         "database_unavailable": False,
         "database_unavailable_message": DATABASE_UNAVAILABLE_MESSAGE,
     }
 
     try:
+        date_from, date_to = _watch_detail_rpc_date_bounds(date_range)
         with record_profiler_phase("load_offers"):
-            offers = [
-                normalize_watch_detail_offer(offer)
-                for offer in get_active_offers_for_brand_reference(brand, reference)
-            ]
-        with record_profiler_phase("condition_filter"):
-            condition_filtered_offers = [
-                offer
-                for offer in offers
-                if offer_matches_watch_detail_condition(offer.get("condition"), condition_filter)
-            ]
-        if date_range is not None:
-            with record_profiler_phase("recency_enrichment"):
-                recency_targets = offers_missing_received_at(condition_filtered_offers)
-                if recency_targets:
-                    import_logs_by_message_id, import_logs_by_id, import_logs_by_offer_id = (
-                        load_offer_source_import_log_lookups(recency_targets)
-                    )
-                    condition_filtered_offers = enrich_watch_detail_offer_recency(
-                        condition_filtered_offers,
-                        import_logs_by_message_id=import_logs_by_message_id,
-                        import_logs_by_id=import_logs_by_id,
-                        import_logs_by_offer_id=import_logs_by_offer_id,
-                    )
-        with record_profiler_phase("date_filter"):
-            filtered_offers = [
-                offer
-                for offer in condition_filtered_offers
-                if offer_matches_watch_detail_date_filter(offer, date_range)
-            ]
-        with record_profiler_phase("statistics"):
-            template_context["watch"] = build_reference_detail_display(brand, reference, offers)
-            template_context["stats"] = build_watch_stats(filtered_offers)
-        with record_profiler_phase("sorting"):
-            sorted_offers = sort_offers_for_watch_detail(filtered_offers, sort_filter)
-        with record_profiler_phase("pagination"):
-            page_offers, page, total_pages, total_items = paginate_watch_detail_offers(
-                sorted_offers,
-                page_input=requested_page,
+            page_result = get_watch_reference_offers_page(
+                brand,
+                reference,
+                condition_filter=condition_filter,
+                date_from=date_from,
+                date_to=date_to,
+                sort_filter=sort_filter,
+                page=requested_page,
+                currency_filter=currency_filter,
             )
+        page_offers = [
+            normalize_watch_detail_offer(offer)
+            for offer in page_result.offers
+        ]
+        with record_profiler_phase("statistics"):
+            template_context["watch"] = build_reference_detail_display(
+                brand,
+                reference,
+                page_offers,
+            )
+            template_context["stats"] = build_watch_stats_from_rpc(page_result.statistics)
+        with record_profiler_phase("pagination"):
             template_context["pagination"] = build_watch_detail_pagination(
                 brand=brand,
                 reference=reference,
@@ -1542,9 +1621,10 @@ def _render_watch_reference_detail(
                 date_from=date_from_input,
                 date_to=date_to_input,
                 sort=sort_filter,
-                page=page,
-                total_pages=total_pages,
-                total_items=total_items,
+                currency=currency_filter_display,
+                page=page_result.page,
+                total_pages=page_result.total_pages,
+                total_items=page_result.total_count,
             )
             template_context["watch_detail_return_url"] = (
                 build_watch_reference_url(
@@ -1555,7 +1635,8 @@ def _render_watch_reference_detail(
                     date_from=date_from_input,
                     date_to=date_to_input,
                     sort=sort_filter,
-                    page=page,
+                    currency=currency_filter_display,
+                    page=page_result.page,
                 )
                 or "/"
             )
@@ -1573,7 +1654,8 @@ def _render_watch_reference_detail(
                 import_logs_by_id=import_logs_by_id,
                 import_logs_by_offer_id=import_logs_by_offer_id,
             )
-        template_context["offers"] = build_offer_rows(display_offers, sort_filter=sort_filter)
+        with record_profiler_phase("sorting"):
+            template_context["offers"] = build_offer_rows(display_offers, sort_filter=sort_filter)
     except DatabaseUnavailableError as exc:
         root_exc = exc.__cause__ or exc
         log_database_availability_error(
@@ -1835,14 +1917,16 @@ def _adjust_watch_detail_return_url_after_removal(
 
     current_page = parse_watch_detail_page(params.get("page"))
     sort_filter = parse_watch_detail_sort_filter(params.get("sort"))
+    currency_filter = parse_search_currency_filter(params.get("currency"))
 
-    filtered_offers = filter_watch_detail_offers_for_stats(
+    filtered_count = count_watch_detail_filtered_offers(
         brand,
         reference,
         condition_filter=condition_filter,
         date_range=date_range,
+        currency_filter=currency_filter,
     )
-    remaining_total = max(0, len(filtered_offers) - removed_count)
+    remaining_total = max(0, filtered_count - removed_count)
     adjusted_page, _total_pages = resolve_watch_detail_page(
         current_page,
         total_items=remaining_total,
@@ -1857,6 +1941,7 @@ def _adjust_watch_detail_return_url_after_removal(
             date_from=params.get("date_from") or "",
             date_to=params.get("date_to") or "",
             sort=sort_filter,
+            currency=parse_search_currency_filter(params.get("currency")) or "",
             page=adjusted_page,
         )
         or return_url
@@ -4060,6 +4145,7 @@ async def watch_reference_detail(
     date_from: str = "",
     date_to: str = "",
     sort: str | None = None,
+    currency: str = "",
     page: str = "1",
 ) -> HTMLResponse:
     brand_value = brand.strip()
@@ -4077,6 +4163,7 @@ async def watch_reference_detail(
         date_from_input=date_from.strip(),
         date_to_input=date_to.strip(),
         sort_filter_input=(sort or "").strip(),
+        currency_filter_input=currency.strip(),
         page_input=page.strip() or "1",
     )
 
@@ -4204,6 +4291,117 @@ async def remove_offer_from_market(
         )
 
 
+@app.post("/offers/{offer_id}/price-review/confirm-original")
+async def confirm_offer_price_review_original(
+    request: Request,
+    offer_id: str,
+    confirm: str = Form(...),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    return_url = _safe_return_url(return_to, fallback="/")
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", "Confirmation required"),
+            status_code=303,
+        )
+    user = get_current_user(request)
+    try:
+        from offer_price_review import confirm_offer_original_price
+
+        confirm_offer_original_price(offer_id, user_id=user["id"] if user else None)
+    except (ValueError, RuntimeError) as exc:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", str(exc)),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=_append_query_param(return_url, "price_review", "updated"),
+        status_code=303,
+    )
+
+
+@app.post("/offers/{offer_id}/price-review/accept-suggested")
+async def accept_offer_price_review_suggestion(
+    request: Request,
+    offer_id: str,
+    confirm: str = Form(...),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    return_url = _safe_return_url(return_to, fallback="/")
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", "Confirmation required"),
+            status_code=303,
+        )
+    user = get_current_user(request)
+    try:
+        from offer_price_review import accept_offer_suggested_price
+
+        accept_offer_suggested_price(offer_id, user_id=user["id"] if user else None)
+    except (ValueError, RuntimeError) as exc:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", str(exc)),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=_append_query_param(return_url, "price_review", "updated"),
+        status_code=303,
+    )
+
+
+@app.post("/offers/{offer_id}/price-review/manual-correct")
+async def manual_correct_offer_price_review(
+    request: Request,
+    offer_id: str,
+    confirm: str = Form(...),
+    corrected_original_price: str = Form(...),
+    corrected_original_currency: str = Form(...),
+    return_to: str = Form(""),
+) -> RedirectResponse:
+    _require_admin_workbench(request)
+    return_url = _safe_return_url(return_to, fallback="/")
+    if confirm.strip() != "1":
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", "Confirmation required"),
+            status_code=303,
+        )
+    try:
+        price_value = int(str(corrected_original_price).strip().replace(",", ""))
+    except ValueError:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", "Invalid corrected price"),
+            status_code=303,
+        )
+    currency = corrected_original_currency.strip().upper()
+    if not currency:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", "Currency is required"),
+            status_code=303,
+        )
+    user = get_current_user(request)
+    try:
+        from offer_price_review import apply_manual_offer_price_correction
+
+        apply_manual_offer_price_correction(
+            offer_id,
+            corrected_original_price=price_value,
+            corrected_original_currency=currency,
+            user_id=user["id"] if user else None,
+            reason="manual_admin_correction",
+        )
+    except (ValueError, RuntimeError) as exc:
+        return RedirectResponse(
+            url=_append_query_param(return_url, "price_review_error", str(exc)),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=_append_query_param(return_url, "price_review", "updated"),
+        status_code=303,
+    )
+
+
 @app.post("/offers/{offer_id}/restore")
 async def restore_offer_to_market(
     request: Request,
@@ -4250,12 +4448,15 @@ async def home(
     cheapest: str | None = None,
     max_price: str = "",
     condition: str = "all",
+    currency: str = "",
     page: str = "",
 ) -> HTMLResponse:
     search_text = q.strip()
     cheapest_only = _parse_cheapest_only(cheapest)
     max_price_input = max_price.strip()
     condition_filter_input = condition.strip().lower() or "all"
+    currency_filter = parse_search_currency_filter(currency)
+    currency_filter_input = currency_filter or ""
     search_page_number = normalize_search_page(page)
     searched = bool(request.query_params)
     error: str | None = None
@@ -4278,6 +4479,7 @@ async def home(
                 query,
                 page=search_page_number,
                 condition=condition_filter,
+                currency=currency_filter,
             )
             results = build_result_rows(search_page.groups)
             has_previous = search_page.page > 1
@@ -4289,6 +4491,7 @@ async def home(
                     cheapest_only=cheapest_only,
                     max_price=max_price_input,
                     condition_filter=condition_filter_input,
+                    currency_filter=currency_filter_input,
                 )
             if has_next:
                 next_page_url = build_search_page_url(
@@ -4297,6 +4500,7 @@ async def home(
                     cheapest_only=cheapest_only,
                     max_price=max_price_input,
                     condition_filter=condition_filter_input,
+                    currency_filter=currency_filter_input,
                 )
         except ValueError as exc:
             error = str(exc)
@@ -4309,6 +4513,8 @@ async def home(
             "cheapest_only": cheapest_only,
             "max_price": max_price_input,
             "condition_filter": condition_filter_input,
+            "currency_filter": currency_filter_input,
+            "currency_options": SEARCH_CURRENCY_FILTER_OPTIONS,
             "results": results,
             "searched": searched,
             "error": error,

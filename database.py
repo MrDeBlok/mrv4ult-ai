@@ -8,14 +8,15 @@ import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-
-from timezone_utils import ensure_utc_datetime
-from permissions import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, normalize_role, normalize_status
 from typing import Any
 
 from dotenv import load_dotenv
 from supabase import Client, create_client
+
+from permissions import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, normalize_role, normalize_status
+from timezone_utils import ensure_utc_datetime
 
 load_dotenv()
 
@@ -53,6 +54,8 @@ def _ensure_parser_training_row_writes_allowed(action: str) -> None:
 LOOKUP_IDS_CHUNK_SIZE = 50
 OFFERS_BY_IDS_CHUNK_SIZE = LOOKUP_IDS_CHUNK_SIZE
 WATCH_LOOKUP_PAGE_SIZE = 1000
+WATCH_REFERENCE_OFFERS_PAGE_RPC = "get_watch_reference_offers_page"
+WATCH_REFERENCE_OFFERS_PAGE_SIZE = 50
 PARSER_TRAINING_ROWS_PAGE_SIZE = 1000
 PARSER_TRAINING_REFERENCE_BATCH_SIZE = 50
 PARSER_TRAINING_REFERENCE_QUERY_MAX = 50
@@ -172,6 +175,8 @@ def get_client() -> Client:
 _contact_type_column_supported: bool | None = None
 _dealer_default_currency_columns_supported: bool | None = None
 _source_import_log_id_column_supported: bool | None = None
+_offer_removal_audit_columns_supported: bool | None = None
+_price_review_columns_supported: bool | None = None
 _users_table_supported: bool | None = None
 _user_ownership_columns_supported: bool | None = None
 _request_created_by_user_id_supported: bool | None = None
@@ -187,10 +192,13 @@ _parser_training_rows_supported: bool | None = None
 def reset_contact_type_column_cache() -> None:
     """Reset cached contact_type column detection (for tests)."""
     global _contact_type_column_supported, _source_import_log_id_column_supported
-    global _dealer_default_currency_columns_supported
+    global _dealer_default_currency_columns_supported, _offer_removal_audit_columns_supported
+    global _price_review_columns_supported
     _contact_type_column_supported = None
     _source_import_log_id_column_supported = None
     _dealer_default_currency_columns_supported = None
+    _offer_removal_audit_columns_supported = None
+    _price_review_columns_supported = None
 
 
 def reset_user_columns_cache() -> None:
@@ -299,6 +307,58 @@ def source_import_log_id_column_supported() -> bool:
         else:
             raise
     return _source_import_log_id_column_supported
+
+
+def offer_removal_audit_columns_supported() -> bool:
+    """Return True when offer removal audit columns exist."""
+    global _offer_removal_audit_columns_supported
+    if _offer_removal_audit_columns_supported is not None:
+        return _offer_removal_audit_columns_supported
+
+    try:
+        get_client().table("offers").select("removed_at").limit(1).execute()
+        _offer_removal_audit_columns_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "removed_at" in message:
+            _offer_removal_audit_columns_supported = False
+            logger.warning(
+                "Offer removal audit columns missing; apply "
+                "docs/migrations/sprint_51_4_offer_soft_delete.sql"
+            )
+        else:
+            raise
+    return _offer_removal_audit_columns_supported
+
+
+def _offer_removal_audit_select_suffix() -> str:
+    if offer_removal_audit_columns_supported():
+        return ", removed_at, removed_by_user_id, removal_reason, restored_at, restored_by_user_id"
+    return ""
+
+
+def price_review_columns_supported() -> bool:
+    """Return True when offer price review columns exist."""
+    global _price_review_columns_supported
+    if _price_review_columns_supported is not None:
+        return _price_review_columns_supported
+
+    try:
+        get_client().table("offers").select("price_review_status").limit(1).execute()
+        _price_review_columns_supported = True
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(exc).lower()
+        if code == "42703" or "price_review_status" in message:
+            _price_review_columns_supported = False
+            logger.warning(
+                "Offer price review columns missing; apply "
+                "docs/migrations/sprint_52_0_price_plausibility.sql"
+            )
+        else:
+            raise
+    return _price_review_columns_supported
 
 
 def users_table_supported() -> bool:
@@ -649,6 +709,7 @@ def get_offer_by_id(offer_id: str) -> Record | None:
     columns = (
         "id, message_id, dealer_id, watch_id, status, original_price, original_currency, "
         "condition, card_date, line_index, created_at, duplicate_of_id, is_duplicate"
+        f"{_offer_removal_audit_select_suffix()}"
     )
     if source_import_log_id_column_supported():
         columns += ", source_import_log_id"
@@ -663,6 +724,206 @@ def get_offer_by_id(offer_id: str) -> Record | None:
     )
     if not response.data:
         return None
+    return response.data[0]
+
+
+def get_offer_statuses_by_ids(offer_ids: list[str]) -> dict[str, Record]:
+    """Return live offer status rows keyed by offer id."""
+    cleaned_ids = [str(offer_id).strip() for offer_id in offer_ids if str(offer_id or "").strip()]
+    if not cleaned_ids:
+        return {}
+
+    columns = f"id, status{_offer_removal_audit_select_suffix()}"
+    rows = _query_table_in_id_chunks(
+        "offers",
+        columns,
+        cleaned_ids,
+        id_column="id",
+    )
+    return {str(row["id"]): row for row in rows if row.get("id")}
+
+
+def soft_remove_offer(
+    offer_id: str,
+    *,
+    removed_by_user_id: str | None,
+    removal_reason: str,
+) -> Record:
+    """Mark an offer as withdrawn from active market data without deleting it."""
+    from offer_removal import OFFER_STATUS_WITHDRAWN, is_manually_removed_offer
+
+    cleaned_id = str(offer_id or "").strip()
+    if not _is_valid_uuid(cleaned_id):
+        raise ValueError("Invalid offer id")
+
+    existing = get_offer_by_id(cleaned_id)
+    if existing is None:
+        raise ValueError("Offer not found")
+    if is_manually_removed_offer(existing):
+        return existing
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload: Record = {
+        "status": OFFER_STATUS_WITHDRAWN,
+        "updated_at": timestamp,
+    }
+    if offer_removal_audit_columns_supported():
+        payload.update(
+            {
+                "removed_at": timestamp,
+                "removed_by_user_id": removed_by_user_id,
+                "removal_reason": removal_reason,
+                "restored_at": None,
+                "restored_by_user_id": None,
+            }
+        )
+
+    response = (
+        get_client()
+        .table("offers")
+        .update(payload)
+        .eq("id", cleaned_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError(f"Failed to remove offer: {cleaned_id}")
+    return response.data[0]
+
+
+def bulk_soft_remove_offers(
+    offer_ids: list[str],
+    *,
+    removed_by_user_id: str | None,
+    removal_reason: str,
+) -> BulkRemoveResult:
+    """Mark multiple offers as withdrawn in one batched database update."""
+    from offer_removal import BulkRemoveResult, OFFER_STATUS_WITHDRAWN, is_manually_removed_offer
+
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    duplicate_skips = 0
+    for offer_id in offer_ids:
+        cleaned_id = str(offer_id or "").strip()
+        if not _is_valid_uuid(cleaned_id):
+            continue
+        if cleaned_id in seen:
+            duplicate_skips += 1
+            continue
+        seen.add(cleaned_id)
+        unique_ids.append(cleaned_id)
+
+    if not unique_ids:
+        return BulkRemoveResult(
+            success_count=0,
+            skipped_count=duplicate_skips,
+            removed_ids=(),
+            skipped_ids=(),
+        )
+
+    existing_rows = _query_table_in_id_chunks(
+        "offers",
+        f"id, status{_offer_removal_audit_select_suffix()}",
+        unique_ids,
+        id_column="id",
+    )
+    existing_by_id = {str(row["id"]): row for row in existing_rows if row.get("id")}
+
+    removable_ids: list[str] = []
+    skipped_ids: list[str] = []
+    for offer_id in unique_ids:
+        row = existing_by_id.get(offer_id)
+        if row is None or is_manually_removed_offer(row):
+            skipped_ids.append(offer_id)
+            continue
+        removable_ids.append(offer_id)
+
+    if not removable_ids:
+        return BulkRemoveResult(
+            success_count=0,
+            skipped_count=len(skipped_ids) + duplicate_skips,
+            removed_ids=(),
+            skipped_ids=tuple(skipped_ids),
+        )
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload: Record = {
+        "status": OFFER_STATUS_WITHDRAWN,
+        "updated_at": timestamp,
+    }
+    if offer_removal_audit_columns_supported():
+        payload.update(
+            {
+                "removed_at": timestamp,
+                "removed_by_user_id": removed_by_user_id,
+                "removal_reason": removal_reason,
+                "restored_at": None,
+                "restored_by_user_id": None,
+            }
+        )
+
+    response = (
+        get_client()
+        .table("offers")
+        .update(payload)
+        .in_("id", removable_ids)
+        .execute()
+    )
+    updated_rows = response.data or []
+    if len(updated_rows) != len(removable_ids):
+        raise RuntimeError(
+            f"Bulk remove updated {len(updated_rows)} of {len(removable_ids)} offers"
+        )
+
+    return BulkRemoveResult(
+        success_count=len(removable_ids),
+        skipped_count=len(skipped_ids) + duplicate_skips,
+        removed_ids=tuple(removable_ids),
+        skipped_ids=tuple(skipped_ids),
+    )
+
+
+def restore_offer(
+    offer_id: str,
+    *,
+    restored_by_user_id: str | None,
+) -> Record:
+    """Restore a previously manually removed offer to active market data."""
+    from offer_removal import OFFER_STATUS_ACTIVE, is_manually_removed_offer
+
+    cleaned_id = str(offer_id or "").strip()
+    if not _is_valid_uuid(cleaned_id):
+        raise ValueError("Invalid offer id")
+
+    existing = get_offer_by_id(cleaned_id)
+    if existing is None:
+        raise ValueError("Offer not found")
+    if existing.get("status") == OFFER_STATUS_ACTIVE:
+        return existing
+    if not is_manually_removed_offer(existing):
+        raise ValueError("Only manually removed offers can be restored")
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload: Record = {
+        "status": OFFER_STATUS_ACTIVE,
+        "updated_at": timestamp,
+    }
+    if offer_removal_audit_columns_supported():
+        payload.update(
+            {
+                "restored_at": timestamp,
+                "restored_by_user_id": restored_by_user_id,
+            }
+        )
+
+    response = (
+        get_client()
+        .table("offers")
+        .update(payload)
+        .eq("id", cleaned_id)
+        .execute()
+    )
+    if not response.data:
+        raise RuntimeError(f"Failed to restore offer: {cleaned_id}")
     return response.data[0]
 
 
@@ -1244,6 +1505,109 @@ def get_active_offers_for_brand_reference(
         apply_filters=lambda request: request.eq("status", "active"),
     )
     return [offer for offer in rows if _offer_from_business_dealer(offer)]
+
+
+@dataclass(frozen=True)
+class WatchReferenceOffersPageResult:
+    """One server-side page of watch reference detail offers."""
+
+    offers: tuple[Record, ...]
+    total_count: int
+    has_more: bool
+    page: int
+    total_pages: int
+    page_limit: int
+    page_offset: int
+    statistics: Record
+
+
+def _rpc_watch_reference_page_result(data: Any) -> Record:
+    if isinstance(data, list):
+        if not data:
+            return {}
+        first = data[0]
+        return first if isinstance(first, dict) else {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def get_watch_reference_offers_page(
+    brand: str,
+    reference: str,
+    *,
+    condition_filter: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    sort_filter: str = "",
+    page: int = 1,
+    page_limit: int = WATCH_REFERENCE_OFFERS_PAGE_SIZE,
+    currency_filter: str | None = None,
+) -> WatchReferenceOffersPageResult:
+    """Load one paginated watch-detail page with full-set statistics via RPC."""
+    payload = {
+        "p_brand": brand.strip(),
+        "p_reference": reference.strip(),
+        "p_condition_filter": condition_filter,
+        "p_date_from": ensure_utc_datetime(date_from).isoformat() if date_from else None,
+        "p_date_to": ensure_utc_datetime(date_to).isoformat() if date_to else None,
+        "p_sort_filter": (sort_filter or "").strip().lower(),
+        "p_page": max(int(page or 1), 1),
+        "p_page_limit": page_limit,
+        "p_filter_business_dealers": contact_type_column_supported(),
+        "p_currency_filter": currency_filter,
+    }
+
+    def _read():
+        return get_client().rpc(WATCH_REFERENCE_OFFERS_PAGE_RPC, payload).execute()
+
+    response = execute_postgrest_read(
+        "get_watch_reference_offers_page",
+        _read,
+    )
+    result = _rpc_watch_reference_page_result(response.data)
+    offers = tuple(result.get("offers") or [])
+    statistics = result.get("statistics") or {}
+    total_count = int(result.get("total_count") or 0)
+    resolved_page = int(result.get("page") or payload["p_page"])
+    total_pages = int(result.get("total_pages") or 1)
+    page_limit_value = int(result.get("page_limit") or page_limit)
+    page_offset = int(result.get("page_offset") or 0)
+    has_more = bool(result.get("has_more"))
+    return WatchReferenceOffersPageResult(
+        offers=offers,
+        total_count=total_count,
+        has_more=has_more,
+        page=resolved_page,
+        total_pages=total_pages,
+        page_limit=page_limit_value,
+        page_offset=page_offset,
+        statistics=statistics if isinstance(statistics, dict) else {},
+    )
+
+
+def count_watch_reference_filtered_offers(
+    brand: str,
+    reference: str,
+    *,
+    condition_filter: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    currency_filter: str | None = None,
+) -> int:
+    """Return filtered offer count for watch-detail redirects without loading all rows."""
+    result = get_watch_reference_offers_page(
+        brand,
+        reference,
+        condition_filter=condition_filter,
+        date_from=date_from,
+        date_to=date_to,
+        currency_filter=currency_filter,
+        sort_filter="",
+        page=1,
+        page_limit=1,
+    )
+    return result.total_count
 
 
 def get_active_offers_for_watch(watch_id: str) -> list[Record]:
@@ -2513,6 +2877,11 @@ def insert_offer(
     duplicate_of_id: str | None = None,
     status: str = "active",
     skip_duplicate_check: bool = False,
+    price_review_status: str | None = None,
+    price_review_reason: str | None = None,
+    suggested_original_price: int | None = None,
+    suggested_currency: str | None = None,
+    price_confidence: str | None = None,
 ) -> tuple[Record, bool]:
     """Insert an offer unless an identical active offer already exists."""
     normalized_currency = _storage_value(original_currency)
@@ -2551,6 +2920,17 @@ def insert_offer(
         "duplicate_of_id": duplicate_of_id,
         "status": status,
     }
+    if price_review_columns_supported():
+        if price_review_status is not None:
+            payload["price_review_status"] = price_review_status
+        if price_review_reason is not None:
+            payload["price_review_reason"] = price_review_reason
+        if suggested_original_price is not None:
+            payload["suggested_original_price"] = suggested_original_price
+        if suggested_currency is not None:
+            payload["suggested_currency"] = suggested_currency
+        if price_confidence is not None:
+            payload["price_confidence"] = price_confidence
 
     response = get_client().table("offers").insert(payload).execute()
     created = _first_row(response.data, "offers")
